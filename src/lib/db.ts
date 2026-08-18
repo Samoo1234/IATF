@@ -253,13 +253,14 @@ export async function insertManagementEvent(event: {
 
 export async function deleteManagementEvent(eventId: string): Promise<boolean> {
   const supabase = createClient();
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('management_events')
     .delete()
-    .eq('id', eventId);
+    .eq('id', eventId)
+    .select();
 
   if (error) { console.error('deleteManagementEvent error:', error); return false; }
-  return true;
+  return !!(data && data.length > 0);
 }
 
 export async function updateManagementEventDate(

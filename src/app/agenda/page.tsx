@@ -196,9 +196,12 @@ export default function AgendaPage() {
     if (!confirm('Deseja realmente remover este manejo agendado?')) return;
     const ok = await deleteManagementEvent(id);
     if (ok) {
-      showToast('Manejo removido.');
+      showToast('Manejo removido com sucesso!');
       setSelectedEvent(null);
+      setEvents(prev => prev.filter(e => e.id !== id));
       await loadData();
+    } else {
+      showToast('Erro ao remover manejo no banco de dados.');
     }
   };
 
