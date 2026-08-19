@@ -79,18 +79,23 @@ export default function Navigation() {
     { name: 'Importar', href: '/import', icon: Upload },
   ];
 
-  const farmName = metadata?.farm?.name || 'Fazenda Boi Gordo';
-  const orgName = metadata?.name || 'AgroPecuária Oliveira';
-  const techResponsible = metadata?.farm?.technical_responsible || 'MV. Dr. Samoel Duarte';
+  const userDisplayName = metadata?.farm?.technical_responsible || 'Usuário';
+  const farmName = metadata?.farm?.name || 'Fazenda Principal';
+  const orgName = metadata?.name || 'Organização';
+  const techResponsible = userDisplayName;
 
   // Iniciais para avatar
-  const initials = techResponsible
-    .replace('MV. DR. ', '')
+  const initials = userDisplayName
+    .replace('MV. ', '')
     .replace('DR. ', '')
+    .replace('Dr. ', '')
+    .replace('MV ', '')
+    .trim()
     .split(' ')
+    .filter(Boolean)
     .slice(0, 2)
-    .map((n) => n[0])
-    .join('');
+    .map((n) => n[0]?.toUpperCase() || '')
+    .join('') || 'US';
 
   return (
     <header className="sticky top-0 z-50 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-xl transition-all">

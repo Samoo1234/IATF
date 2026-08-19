@@ -136,17 +136,24 @@ export default function Sidebar({
     router.push('/login');
   };
 
+  const userDisplayName = userEmail 
+    ? (metadata?.farm?.technical_responsible || userEmail.split('@')[0].toUpperCase())
+    : 'Usuário';
   const farmName = activeFarmName || metadata?.farm?.name || 'Fazenda Principal';
-  const orgName = metadata?.name || 'AgroPecuária Oliveira';
-  const techResponsible = metadata?.farm?.technical_responsible || 'MV. Dr. Samoel Duarte';
+  const orgName = metadata?.name || (userEmail ? `Agropecuária ${userEmail.split('@')[0]}` : 'Organização');
+  const techResponsible = userDisplayName;
 
-  const initials = techResponsible
-    .replace('MV. DR. ', '')
+  const initials = userDisplayName
+    .replace('MV. ', '')
     .replace('DR. ', '')
+    .replace('Dr. ', '')
+    .replace('MV ', '')
+    .trim()
     .split(' ')
+    .filter(Boolean)
     .slice(0, 2)
-    .map((n) => n[0])
-    .join('');
+    .map((n) => n[0]?.toUpperCase() || '')
+    .join('') || 'US';
 
   const sidebarContent = (
     <div className="flex flex-col h-full bg-slate-900/95 border-r border-slate-800 text-slate-200 select-none backdrop-blur-xl">

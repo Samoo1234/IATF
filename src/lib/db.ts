@@ -1,6 +1,37 @@
 import { createClient } from './supabase/client';
 
-const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID!;
+// ============================================================
+// DYNAMIC MULTI-TENANT RESOLVER
+// ============================================================
+
+export async function getCurrentOrgId(): Promise<string | null> {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { data: member } = await supabase
+    .from('organization_members')
+    .select('organization_id')
+    .eq('user_id', user.id)
+    .limit(1)
+    .maybeSingle();
+
+  if (member?.organization_id) {
+    return member.organization_id;
+  }
+
+  // Fallback: Check if user owns an organization directly
+  const { data: orgs } = await supabase
+    .from('organizations')
+    .select('id')
+    .limit(1);
+
+  if (orgs && orgs.length > 0) {
+    return orgs[0].id;
+  }
+
+  return null;
+}
 
 // ============================================================
 // SYSTEM & TENANT INFO
@@ -21,12 +52,15 @@ export interface OrgMetadata {
 }
 
 export async function getOrgMetadata(): Promise<OrgMetadata | null> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return null;
+
   const supabase = createClient();
   const { data: org, error: orgErr } = await supabase
     .from('organizations')
     .select('id, name, code, document_number')
-    .eq('id', ORG_ID)
-    .single();
+    .eq('id', orgId)
+    .maybeSingle();
 
   if (orgErr || !org) {
     console.error('getOrgMetadata error:', orgErr);
@@ -36,9 +70,9 @@ export async function getOrgMetadata(): Promise<OrgMetadata | null> {
   const { data: farm } = await supabase
     .from('farms')
     .select('id, name, technical_responsible, city, state')
-    .eq('organization_id', ORG_ID)
+    .eq('organization_id', orgId)
     .limit(1)
-    .single();
+    .maybeSingle();
 
   return {
     ...org,
@@ -66,11 +100,14 @@ export interface LotStat {
 }
 
 export async function getLots(): Promise<LotStat[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('lot_stats')
     .select('*')
-    .eq('organization_id', ORG_ID)
+    .eq('organization_id', orgId)
     .order('start_date', { ascending: true });
 
   if (error) { console.error('getLots error:', error); return []; }
@@ -78,12 +115,15 @@ export async function getLots(): Promise<LotStat[]> {
 }
 
 export async function getLotById(id: string): Promise<LotStat | null> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return null;
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('lot_stats')
     .select('*')
     .eq('id', id)
-    .eq('organization_id', ORG_ID)
+    .eq('organization_id', orgId)
     .single();
 
   if (error) { console.error('getLotById error:', error); return null; }
@@ -144,7 +184,6 @@ export async function updateAnimalDG(
   };
   if (pregnancyStatus === 'prenha' && eccDg !== undefined) {
     updateData.ecc_dg = eccDg;
-    // Calculate expected parturition (ia_date + 295 days handled at insert)
   }
   if (pregnancyStatus !== 'prenha') {
     updateData.expected_parturition_date = null;
@@ -185,6 +224,9 @@ export interface ManagementEvent {
 }
 
 export async function getManagementEvents(): Promise<ManagementEvent[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('management_events')
@@ -192,7 +234,7 @@ export async function getManagementEvents(): Promise<ManagementEvent[]> {
       *,
       iatf_lots (code, properties(name))
     `)
-    .eq('organization_id', ORG_ID)
+    .eq('organization_id', orgId)
     .order('planned_date', { ascending: true });
 
   if (error) { console.error('getManagementEvents error:', error); return []; }
@@ -230,11 +272,14 @@ export async function insertManagementEvent(event: {
   notes?: string | null;
   status?: string;
 }): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+
   const supabase = createClient();
   const { error } = await supabase
     .from('management_events')
     .insert({
-      organization_id: ORG_ID,
+      organization_id: orgId,
       lot_id: event.lot_id,
       step_code: event.step_code,
       planned_date: event.planned_date,
@@ -301,11 +346,14 @@ export interface SemenBatch {
 }
 
 export async function getSemenBatches(): Promise<SemenBatch[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('semen_batches')
     .select('*, bulls(name, code)')
-    .eq('organization_id', ORG_ID)
+    .eq('organization_id', orgId)
     .order('created_at', { ascending: false });
 
   if (error) { console.error('getSemenBatches error:', error); return []; }
@@ -318,10 +366,13 @@ export async function insertSemenBatch(batch: {
   supplier_central?: string;
   initial_quantity: number;
 }): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+
   const supabase = createClient();
   const { error } = await supabase.from('semen_batches').insert({
     ...batch,
-    organization_id: ORG_ID,
+    organization_id: orgId,
   });
   if (error) { console.error('insertSemenBatch error:', error); return false; }
   return true;
@@ -344,11 +395,14 @@ export interface Animal {
 }
 
 export async function getAnimals(limit = 50): Promise<Animal[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('animals')
     .select('*, breeds(name), animal_categories(name), properties(name), farms(name)')
-    .eq('organization_id', ORG_ID)
+    .eq('organization_id', orgId)
     .eq('status', 'active')
     .order('created_at', { ascending: false })
     .limit(limit);
@@ -358,11 +412,14 @@ export async function getAnimals(limit = 50): Promise<Animal[]> {
 }
 
 export async function searchAnimals(query: string): Promise<Animal[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('animals')
     .select('*, breeds(name), animal_categories(name), properties(name), farms(name)')
-    .eq('organization_id', ORG_ID)
+    .eq('organization_id', orgId)
     .eq('status', 'active')
     .ilike('tag_number', `%${query}%`)
     .limit(20);
@@ -381,9 +438,12 @@ export async function createAnimal(animal: {
   reproductive_status?: string;
   birth_date?: string;
 }): Promise<{ success: boolean; error?: string }> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return { success: false, error: 'Organização não identificada.' };
+
   const supabase = createClient();
   const { error } = await supabase.from('animals').insert({
-    organization_id: ORG_ID,
+    organization_id: orgId,
     farm_id: animal.farm_id,
     property_id: animal.property_id || null,
     tag_number: animal.tag_number.trim(),
@@ -440,12 +500,15 @@ export interface OrgMetrics {
 }
 
 export async function getOrgMetrics(): Promise<OrgMetrics | null> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return null;
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('organization_metrics')
     .select('*')
-    .eq('organization_id', ORG_ID)
-    .single();
+    .eq('organization_id', orgId)
+    .maybeSingle();
 
   if (error) { console.error('getOrgMetrics error:', error); return null; }
   return data as OrgMetrics;
@@ -472,11 +535,14 @@ export interface Protocol {
 }
 
 export async function getProtocols(): Promise<Protocol[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('protocols')
     .select('*, protocol_steps(*)')
-    .eq('organization_id', ORG_ID)
+    .eq('organization_id', orgId)
     .eq('status', 'active')
     .order('name');
 
@@ -495,11 +561,14 @@ export async function createProtocol(protocol: {
     dosage_instruction?: string;
   }[];
 }): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+
   const supabase = createClient();
   const { data: created, error: protoErr } = await supabase
     .from('protocols')
     .insert({
-      organization_id: ORG_ID,
+      organization_id: orgId,
       name: protocol.name,
       description: protocol.description,
       number_of_managements: protocol.number_of_managements,
@@ -547,11 +616,14 @@ export interface Bull {
 }
 
 export async function getBulls(): Promise<Bull[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('bulls')
     .select('*')
-    .eq('organization_id', ORG_ID)
+    .eq('organization_id', orgId)
     .order('name');
 
   if (error) { console.error('getBulls error:', error); return []; }
@@ -565,10 +637,13 @@ export async function createBull(bull: {
   registration_number?: string;
   breed_id?: string;
 }): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+
   const supabase = createClient();
   const { error } = await supabase.from('bulls').insert({
     ...bull,
-    organization_id: ORG_ID,
+    organization_id: orgId,
     status: 'active',
   });
   if (error) { console.error('createBull error:', error); return false; }
@@ -586,15 +661,19 @@ export async function createLot(lot: {
   start_date: string;
   responsible_name: string;
 }): Promise<string | null> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return null;
+
   const supabase = createClient();
 
   // Fetch active season
   const { data: season } = await supabase
     .from('reproductive_seasons')
     .select('id')
-    .eq('organization_id', ORG_ID)
+    .eq('organization_id', orgId)
     .eq('status', 'active')
-    .single();
+    .limit(1)
+    .maybeSingle();
 
   if (!season) return null;
 
@@ -626,7 +705,7 @@ export async function createLot(lot: {
   const { data: inserted, error } = await supabase
     .from('iatf_lots')
     .insert({
-      organization_id: ORG_ID,
+      organization_id: orgId,
       season_id: season.id,
       farm_id: prop?.farm_id,
       property_id: lot.property_id,
@@ -646,7 +725,7 @@ export async function createLot(lot: {
   // Auto-generate management events
   for (const step of steps) {
     await supabase.from('management_events').insert({
-      organization_id: ORG_ID,
+      organization_id: orgId,
       lot_id: inserted.id,
       step_code: step.code,
       step_name: step.name ?? step.code,
@@ -674,11 +753,14 @@ export interface Farm {
 }
 
 export async function getFarms(): Promise<Farm[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('farms')
     .select('*, properties(*)')
-    .eq('organization_id', ORG_ID)
+    .eq('organization_id', orgId)
     .order('name');
 
   if (error) { console.error('getFarms error:', error); return []; }
@@ -692,10 +774,13 @@ export async function createFarm(farm: {
   city?: string;
   state?: string;
 }): Promise<string | null> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return null;
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('farms')
-    .insert({ ...farm, organization_id: ORG_ID })
+    .insert({ ...farm, organization_id: orgId })
     .select('id')
     .single();
 
@@ -711,11 +796,14 @@ export interface Property {
 }
 
 export async function getProperties(): Promise<Property[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('properties')
     .select('*')
-    .eq('organization_id', ORG_ID)
+    .eq('organization_id', orgId)
     .order('name');
 
   if (error) { console.error('getProperties error:', error); return []; }
@@ -727,10 +815,13 @@ export async function createProperty(prop: {
   name: string;
   code?: string;
 }): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+
   const supabase = createClient();
   const { error } = await supabase.from('properties').insert({
     ...prop,
-    organization_id: ORG_ID,
+    organization_id: orgId,
   });
   if (error) { console.error('createProperty error:', error); return false; }
   return true;
@@ -746,11 +837,14 @@ export interface Breed {
 }
 
 export async function getBreeds(): Promise<Breed[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('breeds')
     .select('*')
-    .eq('organization_id', ORG_ID)
+    .eq('organization_id', orgId)
     .order('name');
 
   if (error) { console.error('getBreeds error:', error); return []; }
@@ -758,10 +852,13 @@ export async function getBreeds(): Promise<Breed[]> {
 }
 
 export async function createBreed(name: string): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+
   const supabase = createClient();
   const { error } = await supabase.from('breeds').insert({
     name,
-    organization_id: ORG_ID,
+    organization_id: orgId,
   });
   if (error) { console.error('createBreed error:', error); return false; }
   return true;
@@ -773,11 +870,14 @@ export interface AnimalCategory {
 }
 
 export async function getAnimalCategories(): Promise<AnimalCategory[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('animal_categories')
     .select('*')
-    .eq('organization_id', ORG_ID)
+    .eq('organization_id', orgId)
     .order('name');
 
   if (error) { console.error('getAnimalCategories error:', error); return []; }
@@ -785,10 +885,13 @@ export async function getAnimalCategories(): Promise<AnimalCategory[]> {
 }
 
 export async function createAnimalCategory(name: string): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+
   const supabase = createClient();
   const { error } = await supabase.from('animal_categories').insert({
     name,
-    organization_id: ORG_ID,
+    organization_id: orgId,
   });
   if (error) { console.error('createAnimalCategory error:', error); return false; }
   return true;
