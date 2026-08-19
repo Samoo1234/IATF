@@ -126,6 +126,9 @@ export default function Sidebar({
   }, [pathname, farms]);
 
   const handleLogout = async () => {
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('iatf_tab_session');
+    }
     const supabase = createClient();
     await supabase.auth.signOut();
     setUserEmail(null);

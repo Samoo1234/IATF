@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Lock, Mail, ArrowRight, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react';
-import Link from 'next/link';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -30,6 +29,9 @@ export default function LoginPage() {
           password,
         });
         if (error) throw error;
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('iatf_tab_session', 'active');
+        }
         setSuccessMsg('Cadastro realizado com sucesso! Verifique seu e-mail ou faça login.');
         setIsSignUp(false);
       } else {
@@ -38,6 +40,9 @@ export default function LoginPage() {
           password,
         });
         if (error) throw error;
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('iatf_tab_session', 'active');
+        }
         router.push('/');
         router.refresh();
       }
@@ -158,13 +163,6 @@ export default function LoginPage() {
               </p>
             )}
           </div>
-        </div>
-
-        {/* Quick Dev Access / Return */}
-        <div className="text-center">
-          <Link href="/" className="text-xs text-slate-500 hover:text-slate-300 transition-colors">
-            ← Voltar para o Dashboard como Convidado
-          </Link>
         </div>
       </div>
     </div>

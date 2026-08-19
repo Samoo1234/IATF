@@ -1,14 +1,17 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
+import { createClient } from '@/lib/supabase/client';
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
 
   // Load saved collapse preference from localStorage
   useEffect(() => {
@@ -17,6 +20,32 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       setCollapsed(saved === 'true');
     }
   }, []);
+
+  // Client-side authentication & tab session verification
+  useEffect(() => {
+    async function verifyAuth() {
+      if (pathname === '/login') {
+        setCheckingAuth(false);
+        return;
+      }
+
+      const hasTabSession = sessionStorage.getItem('iatf_tab_session');
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (!session || !hasTabSession) {
+        // Sem sessão ativa na aba ou nova aba aberta após fechar a anterior
+        sessionStorage.removeItem('iatf_tab_session');
+        await supabase.auth.signOut();
+        router.push('/login');
+        return;
+      }
+
+      setCheckingAuth(false);
+    }
+
+    verifyAuth();
+  }, [pathname, router]);
 
   const handleToggleCollapse = () => {
     setCollapsed(prev => {
@@ -29,6 +58,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   // If on login page, don't show sidebar/header
   if (pathname === '/login') {
     return <>{children}</>;
+  }
+
+  // While checking auth on initial render of protected pages
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-12 h-12 rounded-2xl bg-linear-to-tr from-emerald-600 to-teal-400 flex items-center justify-center text-slate-950 font-black text-xl shadow-xl glow-emerald animate-pulse">
+            IATF
+          </div>
+          <p className="text-xs text-slate-400 font-medium">Validando sessão...</p>
+        </div>
+      </div>
+    );
   }
 
   return (
