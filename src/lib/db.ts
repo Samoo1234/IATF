@@ -343,6 +343,20 @@ export interface Animal {
   farms: { name: string } | null;
 }
 
+export async function getAnimals(limit = 50): Promise<Animal[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('animals')
+    .select('*, breeds(name), animal_categories(name), properties(name), farms(name)')
+    .eq('organization_id', ORG_ID)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) { console.error('getAnimals error:', error); return []; }
+  return (data ?? []) as unknown as Animal[];
+}
+
 export async function searchAnimals(query: string): Promise<Animal[]> {
   const supabase = createClient();
   const { data, error } = await supabase
@@ -355,6 +369,38 @@ export async function searchAnimals(query: string): Promise<Animal[]> {
 
   if (error) { console.error('searchAnimals error:', error); return []; }
   return (data ?? []) as unknown as Animal[];
+}
+
+export async function createAnimal(animal: {
+  farm_id: string;
+  property_id?: string;
+  tag_number: string;
+  rfid_number?: string;
+  breed_id?: string;
+  category_id?: string;
+  reproductive_status?: string;
+  birth_date?: string;
+}): Promise<{ success: boolean; error?: string }> {
+  const supabase = createClient();
+  const { error } = await supabase.from('animals').insert({
+    organization_id: ORG_ID,
+    farm_id: animal.farm_id,
+    property_id: animal.property_id || null,
+    tag_number: animal.tag_number.trim(),
+    rfid_number: animal.rfid_number ? animal.rfid_number.trim() : null,
+    breed_id: animal.breed_id || null,
+    category_id: animal.category_id || null,
+    reproductive_status: animal.reproductive_status || 'vazia',
+    birth_date: animal.birth_date || null,
+    sex: 'F',
+    status: 'active',
+  });
+
+  if (error) {
+    console.error('createAnimal error:', error);
+    return { success: false, error: error.message };
+  }
+  return { success: true };
 }
 
 export async function getAnimalHistory(animalId: string) {

@@ -1,37 +1,53 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { 
   getBulls, createBull, 
   getFarms, createFarm, createProperty, 
   getBreeds, createBreed, 
   getAnimalCategories, createAnimalCategory,
-  type Bull, type Farm, type Breed, type AnimalCategory 
+  getAnimals, createAnimal,
+  type Bull, type Farm, type Breed, type AnimalCategory, type Animal
 } from '@/lib/db';
 import { 
   FolderTree, Plus, RefreshCw, X,
-  Dna, MapPin, Tag, Building2, Award
+  Dna, MapPin, Tag, Building2, Award, Syringe, CheckCircle2, AlertCircle
 } from 'lucide-react';
+import Link from 'next/link';
 
-type TabType = 'bulls' | 'farms' | 'breeds';
+type TabType = 'matrizes' | 'bulls' | 'farms' | 'breeds';
 
 export default function RegistriesPage() {
-  const [activeTab, setActiveTab] = useState<TabType>('bulls');
+  const [activeTab, setActiveTab] = useState<TabType>('matrizes');
   const [loading, setLoading] = useState(true);
 
   // Data states
+  const [animals, setAnimals] = useState<Animal[]>([]);
   const [bulls, setBulls] = useState<Bull[]>([]);
   const [farms, setFarms] = useState<Farm[]>([]);
   const [breeds, setBreeds] = useState<Breed[]>([]);
   const [categories, setCategories] = useState<AnimalCategory[]>([]);
 
   // Modal states
+  const [showAnimalModal, setShowAnimalModal] = useState(false);
   const [showBullModal, setShowBullModal] = useState(false);
   const [showFarmModal, setShowFarmModal] = useState(false);
   const [showPropertyModal, setShowPropertyModal] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Form states
+  const [animalForm, setAnimalForm] = useState({
+    tag_number: '',
+    rfid_number: '',
+    farm_id: '',
+    property_id: '',
+    breed_id: '',
+    category_id: '',
+    reproductive_status: 'vazia',
+    birth_date: '',
+  });
+
   const [bullForm, setBullForm] = useState({
     name: '',
     code: '',
@@ -57,26 +73,76 @@ export default function RegistriesPage() {
   const [newBreedName, setNewBreedName] = useState('');
   const [newCategoryName, setNewCategoryName] = useState('');
 
-  useEffect(() => {
-    loadAllData();
-  }, []);
-
-  async function loadAllData() {
+  const loadAllData = useCallback(async () => {
     setLoading(true);
-    const [b, f, br, c] = await Promise.all([
+    const [a, b, f, br, c] = await Promise.all([
+      getAnimals(100),
       getBulls(),
       getFarms(),
       getBreeds(),
       getAnimalCategories(),
     ]);
+    setAnimals(a);
     setBulls(b);
     setFarms(f);
     setBreeds(br);
     setCategories(c);
+
+    if (f.length > 0 && !animalForm.farm_id) {
+      setAnimalForm((prev) => ({
+        ...prev,
+        farm_id: f[0].id,
+        property_id: f[0].properties?.[0]?.id || '',
+      }));
+    }
     setLoading(false);
-  }
+  }, [animalForm.farm_id]);
+
+  useEffect(() => {
+    loadAllData();
+  }, [loadAllData]);
 
   // Handlers
+  const handleCreateAnimal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!animalForm.tag_number.trim() || !animalForm.farm_id) {
+      setFeedbackMsg({ type: 'error', text: 'Preencha o número do brinco e selecione a fazenda.' });
+      return;
+    }
+
+    setSaving(true);
+    const res = await createAnimal({
+      tag_number: animalForm.tag_number,
+      rfid_number: animalForm.rfid_number || undefined,
+      farm_id: animalForm.farm_id,
+      property_id: animalForm.property_id || undefined,
+      breed_id: animalForm.breed_id || undefined,
+      category_id: animalForm.category_id || undefined,
+      reproductive_status: animalForm.reproductive_status,
+      birth_date: animalForm.birth_date || undefined,
+    });
+    setSaving(false);
+
+    if (res.success) {
+      setFeedbackMsg({ type: 'success', text: `Matriz Brinco ${animalForm.tag_number} cadastrada com sucesso!` });
+      setShowAnimalModal(false);
+      setAnimalForm({
+        tag_number: '',
+        rfid_number: '',
+        farm_id: farms[0]?.id || '',
+        property_id: farms[0]?.properties?.[0]?.id || '',
+        breed_id: '',
+        category_id: '',
+        reproductive_status: 'vazia',
+        birth_date: '',
+      });
+      await loadAllData();
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao cadastrar matriz.' });
+    }
+  };
+
   const handleCreateBull = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!bullForm.name) return;
@@ -100,9 +166,15 @@ export default function RegistriesPage() {
     e.preventDefault();
     if (!farmForm.name) return;
     setSaving(true);
-    const farmId = await createFarm(farmForm);
+    const newId = await createFarm({
+      name: farmForm.name,
+      owner_name: farmForm.owner_name || undefined,
+      technical_responsible: farmForm.technical_responsible || undefined,
+      city: farmForm.city || undefined,
+      state: farmForm.state || undefined,
+    });
     setSaving(false);
-    if (farmId) {
+    if (newId) {
       setShowFarmModal(false);
       setFarmForm({ name: '', owner_name: '', technical_responsible: 'MV. DR. SAMOEL DUARTE', city: '', state: 'MT' });
       await loadAllData();
@@ -111,9 +183,13 @@ export default function RegistriesPage() {
 
   const handleCreateProperty = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!propertyForm.farm_id || !propertyForm.name) return;
+    if (!propertyForm.name || !propertyForm.farm_id) return;
     setSaving(true);
-    const ok = await createProperty(propertyForm);
+    const ok = await createProperty({
+      farm_id: propertyForm.farm_id,
+      name: propertyForm.name,
+      code: propertyForm.code || undefined,
+    });
     setSaving(false);
     if (ok) {
       setShowPropertyModal(false);
@@ -142,8 +218,29 @@ export default function RegistriesPage() {
     }
   };
 
+  const selectedFarmObj = farms.find((f) => f.id === animalForm.farm_id);
+  const availableProperties = selectedFarmObj?.properties || [];
+
   return (
     <div className="space-y-6">
+      {/* Toast Feedback */}
+      {feedbackMsg && (
+        <div
+          className={`p-4 rounded-2xl border flex items-center gap-3 animate-in fade-in slide-in-from-top-2 ${
+            feedbackMsg.type === 'success'
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+              : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+          }`}
+        >
+          {feedbackMsg.type === 'success' ? (
+            <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+          ) : (
+            <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+          )}
+          <span className="text-sm font-medium">{feedbackMsg.text}</span>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/80 p-6 rounded-2xl border border-slate-800">
         <div>
@@ -152,15 +249,23 @@ export default function RegistriesPage() {
             Cadastros Gerais do Sistema
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Gerenciamento de touros reprodutores, fazendas, retiros, raças e categorias bovinas.
+            Gerenciamento de matrizes (vacas), touros reprodutores, fazendas, retiros, raças e categorias bovinas.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
+          {activeTab === 'matrizes' && (
+            <button
+              onClick={() => setShowAnimalModal(true)}
+              className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
+            >
+              <Plus className="w-4 h-4" /> Nova Matriz (Vaca)
+            </button>
+          )}
           {activeTab === 'bulls' && (
             <button
               onClick={() => setShowBullModal(true)}
-              className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md"
+              className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
             >
               <Plus className="w-4 h-4" /> Novo Touro
             </button>
@@ -169,7 +274,7 @@ export default function RegistriesPage() {
             <div className="flex gap-2">
               <button
                 onClick={() => setShowFarmModal(true)}
-                className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md"
+                className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
               >
                 <Plus className="w-4 h-4" /> Nova Fazenda
               </button>
@@ -190,7 +295,17 @@ export default function RegistriesPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex space-x-2 border-b border-slate-800 pb-2">
+      <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-2">
+        <button
+          onClick={() => setActiveTab('matrizes')}
+          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
+            activeTab === 'matrizes'
+              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Syringe className="w-4 h-4" /> Matrizes & Fêmeas ({animals.length})
+        </button>
         <button
           onClick={() => setActiveTab('bulls')}
           className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
@@ -229,11 +344,77 @@ export default function RegistriesPage() {
           <RefreshCw className="w-5 h-5 animate-spin text-emerald-400" />
           Carregando cadastros do Supabase...
         </div>
+      ) : activeTab === 'matrizes' ? (
+        /* ===== TAB: MATRIZES ===== */
+        <div className="glass-card p-6 rounded-2xl border border-slate-800 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <Syringe className="w-4 h-4 text-emerald-400" /> Rebanho de Fêmeas & Matrizes Cadastradas
+            </h2>
+            <Link
+              href="/animals"
+              className="text-xs text-emerald-400 hover:underline font-semibold"
+            >
+              Abrir busca com ficha reprodutiva detalhada →
+            </Link>
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-slate-800">
+            <table className="w-full text-left text-xs text-slate-300">
+              <thead className="bg-slate-950 text-slate-400 uppercase tracking-wider text-[10px]">
+                <tr>
+                  <th className="p-3">Brinco</th>
+                  <th className="p-3">RFID / Eletrônico</th>
+                  <th className="p-3">Fazenda</th>
+                  <th className="p-3">Retiro</th>
+                  <th className="p-3">Raça</th>
+                  <th className="p-3">Categoria</th>
+                  <th className="p-3">Status Reprodutivo</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/80 bg-slate-900/60">
+                {animals.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="p-8 text-center text-slate-500">
+                      Nenhuma matriz cadastrada. Clique em &quot;Nova Matriz (Vaca)&quot; para começar.
+                    </td>
+                  </tr>
+                ) : (
+                  animals.map((a) => (
+                    <tr key={a.id} className="hover:bg-slate-800/50 transition-colors">
+                      <td className="p-3 font-bold text-white">
+                        <Link href={`/animals/${a.id}`} className="hover:text-emerald-400 hover:underline">
+                          {a.tag_number}
+                        </Link>
+                      </td>
+                      <td className="p-3 font-mono text-slate-400">{a.rfid_number || '-'}</td>
+                      <td className="p-3 text-slate-300">{a.farms?.name || '-'}</td>
+                      <td className="p-3 text-slate-400">{a.properties?.name || '-'}</td>
+                      <td className="p-3 text-slate-400">{a.breeds?.name || '-'}</td>
+                      <td className="p-3 text-slate-400">{a.animal_categories?.name || '-'}</td>
+                      <td className="p-3">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                          a.reproductive_status === 'prenha'
+                            ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                            : a.reproductive_status === 'inseminada'
+                            ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+                            : 'bg-slate-800 text-slate-400 border-slate-700'
+                        }`}>
+                          {a.reproductive_status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       ) : activeTab === 'bulls' ? (
         /* ===== TAB: TOUROS ===== */
         <div className="glass-card p-6 rounded-2xl border border-slate-800 space-y-4">
           <h2 className="text-base font-bold text-white flex items-center gap-2">
-            <Award className="w-5 h-5 text-emerald-400" /> Touros Cadastrados no Plantel
+            <Award className="w-4 h-4 text-emerald-400" /> Reprodutores & Touros Cadastrados
           </h2>
 
           <div className="overflow-x-auto rounded-xl border border-slate-800">
@@ -243,24 +424,30 @@ export default function RegistriesPage() {
                   <th className="p-3">Nome do Touro</th>
                   <th className="p-3">Código</th>
                   <th className="p-3">Central de Inseminação</th>
-                  <th className="p-3">Registro Genealógico</th>
                   <th className="p-3">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/80 bg-slate-900/60">
-                {bulls.map((bull) => (
-                  <tr key={bull.id} className="hover:bg-slate-800/50 transition-colors">
-                    <td className="p-3 font-bold text-white">{bull.name}</td>
-                    <td className="p-3 font-mono text-amber-400">{bull.code ?? '—'}</td>
-                    <td className="p-3">{bull.owner_central ?? '—'}</td>
-                    <td className="p-3 font-mono">{bull.code ?? '—'}</td>
-                    <td className="p-3">
-                      <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded text-[10px] font-semibold">
-                        Ativo
-                      </span>
+                {bulls.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="p-8 text-center text-slate-500">
+                      Nenhum touro cadastrado no banco de dados.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  bulls.map((b) => (
+                    <tr key={b.id} className="hover:bg-slate-800/50 transition-colors">
+                      <td className="p-3 font-bold text-white">{b.name}</td>
+                      <td className="p-3 font-mono text-emerald-400">{b.code || '-'}</td>
+                      <td className="p-3 text-slate-400">{b.owner_central || '-'}</td>
+                      <td className="p-3">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          {b.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -268,56 +455,38 @@ export default function RegistriesPage() {
       ) : activeTab === 'farms' ? (
         /* ===== TAB: FAZENDAS & RETIROS ===== */
         <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {farms.map((farm) => (
-              <div key={farm.id} className="glass-card p-6 rounded-2xl border border-slate-800 bg-slate-900/80 space-y-4">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                      Fazenda Ativa
-                    </span>
-                    <h2 className="text-xl font-bold text-white mt-2 flex items-center gap-2">
-                      <Building2 className="w-5 h-5 text-emerald-400" />
-                      {farm.name}
-                    </h2>
-                    <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
-                      <MapPin className="w-3.5 h-3.5 text-slate-500" />
-                      {farm.city ? `${farm.city} - ${farm.state}` : 'Localização não informada'}
-                    </p>
-                  </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {farms.map((f) => (
+              <div key={f.id} className="glass-card p-5 rounded-2xl border border-slate-800 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <Building2 className="w-5 h-5 text-emerald-400" /> {f.name}
+                  </h3>
+                  <span className="text-[10px] font-bold text-slate-400 bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-700">
+                    {f.properties?.length || 0} retiros
+                  </span>
                 </div>
 
-                <div className="text-xs text-slate-300 space-y-1 pt-2 border-t border-slate-800">
-                  <p><strong className="text-slate-400">Proprietário:</strong> {farm.owner_name ?? '—'}</p>
-                  <p><strong className="text-slate-400">Responsável Técnico:</strong> {farm.technical_responsible ?? '—'}</p>
+                <div className="text-xs text-slate-400 space-y-1 bg-slate-950/60 p-3 rounded-xl border border-slate-800/60">
+                  <p><strong>Proprietário:</strong> {f.owner_name || '-'}</p>
+                  <p><strong>Responsável Técnico:</strong> {f.technical_responsible || '-'}</p>
+                  <p><strong>Localização:</strong> {f.city ? `${f.city}/${f.state}` : '-'}</p>
                 </div>
 
-                {/* Properties / Retiros */}
-                <div className="pt-2 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                      Retiros / Piquetes ({farm.properties?.length ?? 0})
-                    </span>
-                    <button
-                      onClick={() => {
-                        setPropertyForm((f) => ({ ...f, farm_id: farm.id }));
-                        setShowPropertyModal(true);
-                      }}
-                      className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1"
-                    >
-                      <Plus className="w-3 h-3" /> Adicionar Retiro
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    {(farm.properties ?? []).map((prop) => (
-                      <div key={prop.id} className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 flex items-center justify-between text-xs">
-                        <span className="font-bold text-slate-200">{prop.name}</span>
-                        {prop.code && <span className="font-mono text-[10px] text-slate-400 bg-slate-900 px-1.5 py-0.5 rounded">{prop.code}</span>}
-                      </div>
-                    ))}
-                    {(farm.properties?.length ?? 0) === 0 && (
-                      <p className="text-xs text-slate-500 col-span-2 py-2">Nenhum retiro cadastrado nesta fazenda.</p>
+                <div>
+                  <h4 className="text-xs font-bold text-slate-300 mb-2 flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-emerald-400" /> Retiros / Piquetes Cadastrados
+                  </h4>
+                  <div className="space-y-1.5">
+                    {!f.properties || f.properties.length === 0 ? (
+                      <p className="text-slate-500 text-xs italic">Nenhum retiro cadastrado para esta fazenda.</p>
+                    ) : (
+                      f.properties.map((p) => (
+                        <div key={p.id} className="flex items-center justify-between p-2 rounded-lg bg-slate-900 border border-slate-800 text-xs">
+                          <span className="font-medium text-slate-200">{p.name}</span>
+                          {p.code && <span className="font-mono text-emerald-400 text-[10px]">{p.code}</span>}
+                        </div>
+                      ))
                     )}
                   </div>
                 </div>
@@ -328,18 +497,16 @@ export default function RegistriesPage() {
       ) : (
         /* ===== TAB: RAÇAS & CATEGORIAS ===== */
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Breeds */}
+          {/* Breeds Card */}
           <div className="glass-card p-6 rounded-2xl border border-slate-800 space-y-4">
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Dna className="w-5 h-5 text-emerald-400" />
-              Raças Bovinas Cadastradas
-            </h2>
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <Dna className="w-5 h-5 text-emerald-400" /> Raças Bovinas Cadastradas
+            </h3>
 
             <form onSubmit={handleCreateBreed} className="flex gap-2">
               <input
                 type="text"
-                required
-                placeholder="Ex: Senepol, Guzerá..."
+                placeholder="Ex: SENEPOL, BRANGUS"
                 value={newBreedName}
                 onChange={(e) => setNewBreedName(e.target.value)}
                 className="flex-1 bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
@@ -348,34 +515,29 @@ export default function RegistriesPage() {
                 type="submit"
                 className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-3 py-2 rounded-xl text-xs flex items-center gap-1"
               >
-                <Plus className="w-4 h-4" /> Adicionar
+                <Plus className="w-3.5 h-3.5" /> Adicionar
               </button>
             </form>
 
-            <div className="space-y-2">
-              {breeds.map((breed) => (
-                <div key={breed.id} className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 flex items-center justify-between text-xs">
-                  <span className="font-bold text-white">{breed.name}</span>
-                  <span className="text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
-                    Ativa
-                  </span>
-                </div>
+            <div className="flex flex-wrap gap-2 pt-2">
+              {breeds.map((b) => (
+                <span key={b.id} className="px-3 py-1 rounded-xl bg-slate-900 border border-slate-800 text-xs font-semibold text-slate-200">
+                  {b.name}
+                </span>
               ))}
             </div>
           </div>
 
-          {/* Categories */}
+          {/* Categories Card */}
           <div className="glass-card p-6 rounded-2xl border border-slate-800 space-y-4">
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Tag className="w-5 h-5 text-emerald-400" />
-              Categorias Reprodutivas de Fêmeas (RN-03)
-            </h2>
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <Tag className="w-5 h-5 text-emerald-400" /> Categorias de Fêmeas
+            </h3>
 
             <form onSubmit={handleCreateCategory} className="flex gap-2">
               <input
                 type="text"
-                required
-                placeholder="Ex: Doadora, Receptora..."
+                placeholder="Ex: NOVILHA PRECOCE"
                 value={newCategoryName}
                 onChange={(e) => setNewCategoryName(e.target.value)}
                 className="flex-1 bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
@@ -384,20 +546,136 @@ export default function RegistriesPage() {
                 type="submit"
                 className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-3 py-2 rounded-xl text-xs flex items-center gap-1"
               >
-                <Plus className="w-4 h-4" /> Adicionar
+                <Plus className="w-3.5 h-3.5" /> Adicionar
               </button>
             </form>
 
-            <div className="space-y-2">
-              {categories.map((cat) => (
-                <div key={cat.id} className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 flex items-center justify-between text-xs">
-                  <span className="font-bold text-white">{cat.name}</span>
-                  <span className="text-[10px] text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded-full">
-                    Categoria
-                  </span>
-                </div>
+            <div className="flex flex-wrap gap-2 pt-2">
+              {categories.map((c) => (
+                <span key={c.id} className="px-3 py-1 rounded-xl bg-slate-900 border border-slate-800 text-xs font-semibold text-slate-200">
+                  {c.name}
+                </span>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== MODAL CADASTRO DE MATRIZ ===== */}
+      {showAnimalModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="glass-card w-full max-w-xl rounded-3xl border border-slate-700 bg-slate-900 p-6 sm:p-8 space-y-6">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <Syringe className="w-5 h-5 text-emerald-400" /> Cadastrar Nova Matriz (Vaca)
+              </h3>
+              <button onClick={() => setShowAnimalModal(false)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateAnimal} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Número do Brinco *</label>
+                  <input
+                    required
+                    type="text"
+                    placeholder="Ex: 1001, 2045A"
+                    value={animalForm.tag_number}
+                    onChange={(e) => setAnimalForm((f) => ({ ...f, tag_number: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white font-bold text-sm px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">RFID / Eletrônico</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: 982 000 123 456"
+                    value={animalForm.rfid_number}
+                    onChange={(e) => setAnimalForm((f) => ({ ...f, rfid_number: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Fazenda *</label>
+                  <select
+                    required
+                    value={animalForm.farm_id}
+                    onChange={(e) => setAnimalForm((f) => ({ ...f, farm_id: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="">Selecione a fazenda...</option>
+                    {farms.map((f) => (
+                      <option key={f.id} value={f.id}>{f.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Retiro / Piquete</label>
+                  <select
+                    value={animalForm.property_id}
+                    onChange={(e) => setAnimalForm((f) => ({ ...f, property_id: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="">Sem retiro específico</option>
+                    {availableProperties.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Raça</label>
+                  <select
+                    value={animalForm.breed_id}
+                    onChange={(e) => setAnimalForm((f) => ({ ...f, breed_id: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="">Selecione a raça...</option>
+                    {breeds.map((b) => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Categoria</label>
+                  <select
+                    value={animalForm.category_id}
+                    onChange={(e) => setAnimalForm((f) => ({ ...f, category_id: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="">Selecione a categoria...</option>
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm shadow-md"
+                >
+                  {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  {saving ? 'Cadastrando...' : 'Cadastrar Matriz'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAnimalModal(false)}
+                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -417,11 +695,11 @@ export default function RegistriesPage() {
 
             <form onSubmit={handleCreateBull} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1.5">Nome do Touro *</label>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">Nome do Touro / Reprodutor *</label>
                 <input
                   required
                   type="text"
-                  placeholder="Ex: NELORE BARRANCO 4501"
+                  placeholder="Ex: REM ARMADOR, LANDAU DA DI GENIO"
                   value={bullForm.name}
                   onChange={(e) => setBullForm((f) => ({ ...f, name: e.target.value }))}
                   className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
@@ -430,20 +708,20 @@ export default function RegistriesPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Código / Apelido</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Código / Sigla</label>
                   <input
                     type="text"
-                    placeholder="Ex: NEL-4501"
+                    placeholder="Ex: REM 1234"
                     value={bullForm.code}
                     onChange={(e) => setBullForm((f) => ({ ...f, code: e.target.value }))}
                     className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Central de Sêmen</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Central / Fornecedor</label>
                   <input
                     type="text"
-                    placeholder="Ex: CRV Lagoa, ABS"
+                    placeholder="Ex: ALTA GENETICS, ABS"
                     value={bullForm.owner_central}
                     onChange={(e) => setBullForm((f) => ({ ...f, owner_central: e.target.value }))}
                     className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
@@ -525,17 +803,18 @@ export default function RegistriesPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1.5">Responsável Técnico (Veterinário)</label>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">Responsável Técnico</label>
                 <input
                   type="text"
+                  placeholder="Ex: MV. DR. SAMOEL DUARTE"
                   value={farmForm.technical_responsible}
                   onChange={(e) => setFarmForm((f) => ({ ...f, technical_responsible: e.target.value }))}
                   className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
                 />
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
-                <div className="col-span-2">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
                   <label className="block text-xs font-semibold text-slate-400 mb-1.5">Cidade</label>
                   <input
                     type="text"
@@ -546,14 +825,14 @@ export default function RegistriesPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">UF</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Estado</label>
                   <input
                     type="text"
                     maxLength={2}
                     placeholder="MT"
                     value={farmForm.state}
                     onChange={(e) => setFarmForm((f) => ({ ...f, state: e.target.value.toUpperCase() }))}
-                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 text-center uppercase"
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
                   />
                 </div>
               </div>
@@ -565,7 +844,7 @@ export default function RegistriesPage() {
                   className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm"
                 >
                   {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                  {saving ? 'Cadastrando...' : 'Salvar Fazenda'}
+                  {saving ? 'Cadastrando...' : 'Cadastrar Fazenda'}
                 </button>
                 <button
                   type="button"
