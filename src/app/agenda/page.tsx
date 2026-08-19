@@ -325,7 +325,7 @@ export default function AgendaPage() {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-6rem)] text-slate-100 -m-4 sm:-m-6 lg:-m-8 bg-slate-950 select-none overflow-hidden rounded-2xl border border-slate-800/80 shadow-2xl">
+    <div className="flex flex-col min-h-[calc(100vh-8rem)] text-slate-100 bg-slate-950 select-none rounded-2xl border border-slate-800/80 shadow-2xl overflow-hidden">
       
       {/* ========================================================================= */}
       {/* 1. TOP HEADER (Google Calendar style) */}
@@ -435,11 +435,11 @@ export default function AgendaPage() {
       {/* ========================================================================= */}
       {/* 2. BODY: SIDEBAR + CALENDAR MAIN GRID */}
       {/* ========================================================================= */}
-      <div className="flex flex-1 overflow-hidden relative">
+      <div className="flex flex-1 relative flex-col lg:flex-row">
 
         {/* --- LEFT SIDEBAR --- */}
         {showSidebar && (
-          <aside className="w-72 shrink-0 border-r border-slate-800 bg-slate-900/50 p-4 flex flex-col gap-6 overflow-y-auto custom-scrollbar">
+          <aside className="w-full lg:w-72 shrink-0 border-b lg:border-b-0 lg:border-r border-slate-800 bg-slate-900/50 p-4 flex flex-col gap-6">
             
             {/* Create Button */}
             <button
@@ -576,13 +576,13 @@ export default function AgendaPage() {
         )}
 
         {/* --- MAIN CALENDAR VIEW --- */}
-        <main className="flex-1 flex flex-col overflow-hidden bg-slate-950">
+        <main className="flex-1 flex flex-col bg-slate-950 min-w-0">
 
           {/* ========================================================================= */}
           {/* VIEW: MONTH */}
           {/* ========================================================================= */}
           {view === 'month' && (
-            <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="flex-1 flex flex-col">
               
               {/* Day Headers (DOM, SEG, TER...) */}
               <div className="grid grid-cols-7 border-b border-slate-800 bg-slate-900/60 text-center text-xs font-bold text-slate-400 py-2.5">
@@ -594,7 +594,7 @@ export default function AgendaPage() {
               </div>
 
               {/* Month Grid Cells */}
-              <div className="flex-1 grid grid-cols-7 auto-rows-fr overflow-y-auto border-collapse">
+              <div className="flex-1 grid grid-cols-7 auto-rows-fr border-collapse">
                 {monthGridDays.map((d, idx) => {
                   const dayEvents = eventsByDate[d.dateStr] || [];
                   const isToday = d.dateStr === todayStr;
@@ -603,20 +603,18 @@ export default function AgendaPage() {
                     <div
                       key={idx}
                       onClick={() => openCreateForDate(d.dateStr, '08:00')}
-                      className={`min-h-27.5 border-b border-r border-slate-800/80 p-2 transition-all flex flex-col group cursor-pointer relative ${
-                        !d.isCurrentMonth 
-                          ? 'bg-slate-950/40 text-slate-600' 
-                          : 'bg-slate-900/20 hover:bg-slate-900/50 text-slate-300'
+                      className={`min-h-[110px] p-1.5 border-b border-r border-slate-800/60 transition-colors flex flex-col justify-between group relative cursor-pointer ${
+                        d.isCurrentMonth ? 'bg-slate-950/40 hover:bg-slate-900/50' : 'bg-slate-950/90 opacity-40 hover:opacity-60'
                       }`}
                     >
-                      {/* Cell Header: Date Number + Quick Add indicator */}
-                      <div className="flex items-center justify-between mb-1.5">
+                      {/* Top Day Number */}
+                      <div className="flex items-center justify-between mb-1">
                         <span
-                          className={`text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center transition-all ${
+                          className={`text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center ${
                             isToday
-                              ? 'bg-emerald-500 text-slate-950 shadow-md font-extrabold ring-2 ring-emerald-400/40'
+                              ? 'bg-emerald-500 text-slate-950 font-black shadow-sm'
                               : d.isCurrentMonth
-                              ? 'text-slate-300 group-hover:text-white'
+                              ? 'text-slate-300'
                               : 'text-slate-600'
                           }`}
                         >
@@ -629,7 +627,7 @@ export default function AgendaPage() {
                       </div>
 
                       {/* Event Cards inside Day Cell */}
-                      <div className="space-y-1 overflow-y-auto max-h-21.25 custom-scrollbar" onClick={(e) => e.stopPropagation()}>
+                      <div className="space-y-1" onClick={(e) => e.stopPropagation()}>
                         {dayEvents.slice(0, 3).map((ev) => {
                           const style = STEP_COLORS[ev.step_code] || STEP_COLORS['OUTRO'];
                           const isConcluido = ev.status === 'concluido';
@@ -701,7 +699,7 @@ export default function AgendaPage() {
           {/* VIEW: WEEK */}
           {/* ========================================================================= */}
           {view === 'week' && (
-            <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="flex-1 flex flex-col">
               {/* Header Days of the Week */}
               <div className="grid grid-cols-[60px_repeat(7,1fr)] border-b border-slate-800 bg-slate-900/80">
                 <div className="p-3 text-center text-xs font-bold text-slate-500 border-r border-slate-800">
@@ -787,7 +785,7 @@ export default function AgendaPage() {
           {/* VIEW: DAY */}
           {/* ========================================================================= */}
           {view === 'day' && (
-            <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="flex-1 flex flex-col">
               {/* Day Header */}
               <div className="p-4 border-b border-slate-800 bg-slate-900/80 flex items-center justify-between">
                 <div>
@@ -811,7 +809,7 @@ export default function AgendaPage() {
               </div>
 
               {/* Day Time Slots */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              <div className="flex-1 p-4 space-y-2">
                 {HOURS.map((hour) => {
                   const hourStr = `${String(hour).padStart(2, '0')}:00`;
                   const d = currentDate;
@@ -829,17 +827,17 @@ export default function AgendaPage() {
                     <div
                       key={hour}
                       onClick={() => openCreateForDate(dayStr, hourStr)}
-                      className="flex items-start gap-4 p-3 rounded-2xl border border-slate-800/80 bg-slate-900/40 hover:bg-slate-900/80 transition-all cursor-pointer group min-h-17.5"
+                      className="group flex items-start gap-4 p-3 rounded-xl border border-slate-800/80 bg-slate-900/30 hover:bg-slate-900/70 hover:border-slate-700 transition-all cursor-pointer"
                     >
-                      <span className="w-14 text-xs font-mono font-bold text-slate-500 pt-0.5">
+                      <div className="w-16 font-mono text-xs text-slate-500 font-bold pt-1">
                         {hourStr}
-                      </span>
+                      </div>
 
-                      <div className="flex-1 space-y-2">
+                      <div className="flex-1 flex flex-wrap gap-2">
                         {slotEvents.length === 0 ? (
-                          <div className="text-xs text-slate-600 italic flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Plus className="w-3.5 h-3.5 text-emerald-400" /> Clique para agendar manejo neste horário
-                          </div>
+                          <span className="text-xs text-slate-600 italic group-hover:text-slate-500 pt-1">
+                            Disponível (clique para agendar)
+                          </span>
                         ) : (
                           slotEvents.map(ev => {
                             const style = STEP_COLORS[ev.step_code] || STEP_COLORS['OUTRO'];
@@ -852,28 +850,18 @@ export default function AgendaPage() {
                                   setAnimalsWorked(ev.animals_worked_count?.toString() || '');
                                   setLossesCount(ev.losses_count?.toString() || '0');
                                 }}
-                                className={`p-4 rounded-xl border flex items-center justify-between gap-4 transition-all shadow-md ${style.bg} ${style.border}`}
+                                className={`p-3 rounded-xl border flex-1 min-w-[280px] shadow-md transition-all ${style.bg} ${style.border}`}
                               >
-                                <div className="flex items-center gap-3">
-                                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm ${style.badge}`}>
+                                <div className="flex items-center justify-between">
+                                  <span className={`px-2 py-0.5 rounded-lg text-xs font-bold ${style.badge}`}>
                                     {ev.step_code}
-                                  </div>
-                                  <div>
-                                    <div className="flex items-center gap-2">
-                                      <h4 className="font-bold text-white text-sm">{ev.iatf_lots?.code}</h4>
-                                      {ev.iatf_lots?.properties?.name && (
-                                        <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
-                                          {ev.iatf_lots.properties.name}
-                                        </span>
-                                      )}
-                                    </div>
-                                    <p className="text-xs text-slate-300 mt-0.5">
-                                      {ev.step_name || style.label} — Resp: <strong>{ev.responsible_name}</strong>
-                                    </p>
-                                  </div>
+                                  </span>
+                                  <p className="text-xs text-slate-300">
+                                    {ev.step_name || style.label} — Resp: <strong>{ev.responsible_name}</strong>
+                                  </p>
                                 </div>
 
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 mt-2">
                                   {ev.status === 'concluido' ? (
                                     <span className="text-xs font-bold text-emerald-400 flex items-center gap-1 bg-emerald-500/10 px-3 py-1.5 rounded-lg border border-emerald-500/20">
                                       <CheckCircle2 className="w-4 h-4" /> Concluído ({ev.animals_worked_count} animais)
@@ -906,7 +894,7 @@ export default function AgendaPage() {
           {/* VIEW: LIST */}
           {/* ========================================================================= */}
           {view === 'list' && (
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            <div className="flex-1 p-6 space-y-4">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-lg font-bold text-white">Todos os Manejos Agendados</h3>
                 <span className="text-xs text-slate-400">{filteredEvents.length} registros encontrados</span>

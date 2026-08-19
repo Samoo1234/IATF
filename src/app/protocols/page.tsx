@@ -248,7 +248,7 @@ export default function ProtocolsPage() {
                   </button>
                 </div>
 
-                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                <div className="space-y-2.5">
                   {form.steps.map((step, idx) => (
                     <div key={idx} className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2 text-xs">
                       <div className="grid grid-cols-6 gap-2 items-center">
