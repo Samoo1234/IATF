@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { ShieldCheck, Lock, Mail, ArrowRight, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Lock, Mail, ArrowRight, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react';
 import Link from 'next/link';
 
 export default function LoginPage() {
@@ -41,8 +41,9 @@ export default function LoginPage() {
         router.push('/');
         router.refresh();
       }
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Falha na autenticação. Verifique suas credenciais.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha na autenticação. Verifique suas credenciais.';
+      setErrorMsg(message);
     } finally {
       setLoading(false);
     }

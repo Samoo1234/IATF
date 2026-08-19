@@ -2,7 +2,7 @@
 
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { searchAnimals, getAnimalHistory, type Animal } from '@/lib/db';
+import { getAnimalHistory, type Animal } from '@/lib/db';
 import { Syringe, ArrowLeft, Calendar, MapPin, RefreshCw } from 'lucide-react';
 
 export default function AnimalDetailPage({ params }: { params: Promise<{ id: string }> }) {

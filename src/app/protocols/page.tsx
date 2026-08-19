@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { getProtocols, createProtocol, type Protocol } from '@/lib/db';
-import { ClipboardList, Plus, RefreshCw, X, CheckCircle2, Clock, Pill, Trash2 } from 'lucide-react';
+import { ClipboardList, Plus, RefreshCw, X, Pill, Trash2 } from 'lucide-react';
 
 export default function ProtocolsPage() {
   const [protocols, setProtocols] = useState<Protocol[]>([]);
@@ -51,7 +51,7 @@ export default function ProtocolsPage() {
     }));
   };
 
-  const handleStepChange = (index: number, field: string, value: any) => {
+  const handleStepChange = (index: number, field: string, value: string | number) => {
     setForm((f) => {
       const nextSteps = [...f.steps];
       nextSteps[index] = { ...nextSteps[index], [field]: value };

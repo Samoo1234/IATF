@@ -81,7 +81,7 @@ export default function AnimalsPage() {
           )}
 
           {!loading && query.length > 0 && animals.length === 0 && (
-            <p className="text-slate-400 text-sm py-4">Nenhuma matriz encontrada para "{query}".</p>
+            <p className="text-slate-400 text-sm py-4">Nenhuma matriz encontrada para &quot;{query}&quot;.</p>
           )}
 
           {!loading && animals.length === 0 && query.length === 0 && (

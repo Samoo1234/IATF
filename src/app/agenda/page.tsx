@@ -1,20 +1,17 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { 
   getManagementEvents, 
   completeManagementEvent, 
   insertManagementEvent, 
   deleteManagementEvent, 
-  updateManagementEventDate,
   getLots, 
   type ManagementEvent, 
   type LotStat 
 } from '@/lib/db';
 import { 
-  CalendarDays, 
   CheckCircle2, 
-  Clock, 
   AlertCircle, 
   Check, 
   RefreshCw, 
@@ -22,18 +19,9 @@ import {
   ChevronLeft, 
   ChevronRight, 
   Plus, 
-  Calendar as CalendarIcon, 
   SlidersHorizontal, 
   Trash2, 
-  Layers, 
-  User, 
-  FileText,
-  Search,
-  Filter,
-  CheckSquare,
-  Square,
-  MapPin,
-  ChevronDown
+  Search
 } from 'lucide-react';
 
 type CalendarView = 'month' | 'week' | 'day' | 'list';
@@ -101,11 +89,7 @@ export default function AgendaPage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  async function loadData() {
+  const loadData = useCallback(async () => {
     setLoading(true);
     const [eventsData, lotsData] = await Promise.all([
       getManagementEvents(),
@@ -117,7 +101,11 @@ export default function AgendaPage() {
       setCreateLotId(lotsData[0].id);
     }
     setLoading(false);
-  }
+  }, [createLotId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   // Quick navigation
   const goToday = () => setCurrentDate(new Date());

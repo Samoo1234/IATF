@@ -1,10 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, ArrowRight, ShieldCheck, Database, RefreshCw } from 'lucide-react';
+import { Upload, FileSpreadsheet, CheckCircle2, ArrowRight, Database, RefreshCw } from 'lucide-react';
 
 export default function ImportPage() {
-  const [fileName, setFileName] = useState<string>('MODELO CONTROLE GERAL IATF 2025.xlsx');
+  const [fileName] = useState<string>('MODELO CONTROLE GERAL IATF 2025.xlsx');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [importStatus, setImportStatus] = useState<'idle' | 'analyzed' | 'success'>('idle');
 

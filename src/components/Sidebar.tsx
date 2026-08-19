@@ -19,10 +19,8 @@ import {
   LogIn, 
   ShieldCheck, 
   Building2, 
-  Sparkles,
   ChevronDown,
-  X,
-  Compass
+  X
 } from 'lucide-react';
 import { getOrgMetadata, getFarms, type OrgMetadata, type Farm } from '@/lib/db';
 import { createClient } from '@/lib/supabase/client';

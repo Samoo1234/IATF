@@ -5,21 +5,18 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { 
   Menu, 
-  Search, 
   Building2, 
   Plus,
   CalendarDays,
   ChevronDown,
   Check,
-  MapPin,
-  Sparkles,
-  Layers
+  Sparkles
 } from 'lucide-react';
 import { getOrgMetadata, getFarms, type OrgMetadata, type Farm } from '@/lib/db';
 
 interface HeaderProps {
   onOpenMobileMenu: () => void;
-  collapsed: boolean;
+  collapsed?: boolean;
 }
 
 const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
@@ -34,7 +31,7 @@ const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   '/registries': { title: 'Cadastros Gerais', subtitle: 'Fazendas, Retiros, Raças e Categorias' },
 };
 
-export default function Header({ onOpenMobileMenu, collapsed }: HeaderProps) {
+export default function Header({ onOpenMobileMenu }: HeaderProps) {
   const pathname = usePathname();
   const [metadata, setMetadata] = useState<OrgMetadata | null>(null);
   const [farms, setFarms] = useState<Farm[]>([]);

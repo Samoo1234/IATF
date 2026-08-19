@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { getLots, getSemenBatches, type LotStat, type SemenBatch } from '@/lib/db';
-import { FileText, Download, Printer, Layers, Syringe, RefreshCw } from 'lucide-react';
+import { FileText, Printer, Layers, Syringe, RefreshCw } from 'lucide-react';
 
 export default function ReportsPage() {
   const [activeTab, setActiveTab] = useState<'lotes' | 'matrizes' | 'semen'>('lotes');

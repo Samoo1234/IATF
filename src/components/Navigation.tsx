@@ -12,15 +12,12 @@ import {
   Upload, 
   FileText, 
   ShieldCheck, 
-  UserCheck, 
   ClipboardList,
   FolderTree,
   LogOut,
   LogIn,
   ChevronDown,
-  Building2,
-  Sparkles,
-  MapPin
+  Building2
 } from 'lucide-react';
 import { getOrgMetadata, type OrgMetadata } from '@/lib/db';
 import { createClient } from '@/lib/supabase/client';

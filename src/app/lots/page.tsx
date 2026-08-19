@@ -5,7 +5,7 @@ import {
   getLots, getLotAnimals, getProtocols, getProperties, createLot,
   type LotStat, type LotAnimal, type Protocol, type Property
 } from '@/lib/db';
-import { Layers, Plus, Calendar, Search, RefreshCw, X, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
+import { Layers, Plus, Search, RefreshCw, X, CheckCircle2, Clock } from 'lucide-react';
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   concluido: { label: 'Concluído', color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' },

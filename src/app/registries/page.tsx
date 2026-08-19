@@ -9,8 +9,8 @@ import {
   type Bull, type Farm, type Breed, type AnimalCategory 
 } from '@/lib/db';
 import { 
-  FolderTree, Plus, RefreshCw, X, CheckCircle2, 
-  Dna, MapPin, Tag, Building2, UserCheck, Award, Layers
+  FolderTree, Plus, RefreshCw, X,
+  Dna, MapPin, Tag, Building2, Award
 } from 'lucide-react';
 
 type TabType = 'bulls' | 'farms' | 'breeds';
@@ -29,7 +29,6 @@ export default function RegistriesPage() {
   const [showBullModal, setShowBullModal] = useState(false);
   const [showFarmModal, setShowFarmModal] = useState(false);
   const [showPropertyModal, setShowPropertyModal] = useState(false);
-  const [selectedFarmId, setSelectedFarmId] = useState<string>('');
   const [saving, setSaving] = useState(false);
 
   // Form states
