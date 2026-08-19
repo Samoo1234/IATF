@@ -603,7 +603,7 @@ export default function AgendaPage() {
                     <div
                       key={idx}
                       onClick={() => openCreateForDate(d.dateStr, '08:00')}
-                      className={`min-h-[110px] p-1.5 border-b border-r border-slate-800/60 transition-colors flex flex-col justify-between group relative cursor-pointer ${
+                      className={`min-h-27.5 p-1.5 border-b border-r border-slate-800/60 transition-colors flex flex-col justify-between group relative cursor-pointer ${
                         d.isCurrentMonth ? 'bg-slate-950/40 hover:bg-slate-900/50' : 'bg-slate-950/90 opacity-40 hover:opacity-60'
                       }`}
                     >
@@ -850,7 +850,7 @@ export default function AgendaPage() {
                                   setAnimalsWorked(ev.animals_worked_count?.toString() || '');
                                   setLossesCount(ev.losses_count?.toString() || '0');
                                 }}
-                                className={`p-3 rounded-xl border flex-1 min-w-[280px] shadow-md transition-all ${style.bg} ${style.border}`}
+                                className={`p-3 rounded-xl border flex-1 min-w-70 shadow-md transition-all ${style.bg} ${style.border}`}
                               >
                                 <div className="flex items-center justify-between">
                                   <span className={`px-2 py-0.5 rounded-lg text-xs font-bold ${style.badge}`}>
