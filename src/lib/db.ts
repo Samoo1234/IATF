@@ -199,6 +199,150 @@ export async function updateAnimalDG(
   return true;
 }
 
+export async function addAnimalsToLot(
+  lotId: string,
+  animalIds: string[]
+): Promise<{ success: boolean; count: number; error?: string }> {
+  if (!animalIds.length) return { success: true, count: 0 };
+  const supabase = createClient();
+  const records = animalIds.map((animalId) => ({
+    lot_id: lotId,
+    animal_id: animalId,
+    pregnancy_status: 'pendente',
+  }));
+
+  const { data, error } = await supabase
+    .from('iatf_lot_animals')
+    .upsert(records, { onConflict: 'lot_id,animal_id', ignoreDuplicates: true })
+    .select();
+
+  if (error) {
+    console.error('addAnimalsToLot error:', error);
+    return { success: false, count: 0, error: error.message };
+  }
+  return { success: true, count: data?.length ?? records.length };
+}
+
+export async function removeAnimalFromLot(lotAnimalId: string): Promise<boolean> {
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('iatf_lot_animals')
+    .delete()
+    .eq('id', lotAnimalId);
+
+  if (error) {
+    console.error('removeAnimalFromLot error:', error);
+    return false;
+  }
+  return true;
+}
+
+export async function getAvailableAnimalsForLot(lotId: string, search?: string): Promise<Animal[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+
+  const supabase = createClient();
+
+  // 1. Obter IDs já presentes neste lote
+  const { data: existing } = await supabase
+    .from('iatf_lot_animals')
+    .select('animal_id')
+    .eq('lot_id', lotId);
+
+  const existingIds = new Set((existing ?? []).map((e) => e.animal_id));
+
+  // 2. Buscar animais ativos da organização
+  let query = supabase
+    .from('animals')
+    .select('*, breeds(name), animal_categories(name), properties(name), farms(name)')
+    .eq('organization_id', orgId)
+    .eq('status', 'active');
+
+  if (search && search.trim()) {
+    query = query.ilike('tag_number', `%${search.trim()}%`);
+  }
+
+  const { data, error } = await query.order('tag_number').limit(100);
+  if (error) {
+    console.error('getAvailableAnimalsForLot error:', error);
+    return [];
+  }
+
+  const available = (data ?? []).filter((a) => !existingIds.has(a.id));
+  return available as unknown as Animal[];
+}
+
+export async function createAndAddAnimalToLot(
+  lotId: string,
+  animal: {
+    farm_id: string;
+    property_id?: string;
+    tag_number: string;
+    rfid_number?: string;
+    breed_id?: string;
+    category_id?: string;
+    reproductive_status?: string;
+    birth_date?: string;
+  }
+): Promise<{ success: boolean; error?: string }> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return { success: false, error: 'Organização não identificada.' };
+
+  const supabase = createClient();
+
+  // Verificar se o brinco já existe na organização
+  const { data: existingAnimal } = await supabase
+    .from('animals')
+    .select('id')
+    .eq('organization_id', orgId)
+    .eq('tag_number', animal.tag_number.trim())
+    .limit(1)
+    .maybeSingle();
+
+  let animalId = existingAnimal?.id;
+
+  if (!animalId) {
+    const { data: newAnimal, error: createErr } = await supabase
+      .from('animals')
+      .insert({
+        organization_id: orgId,
+        farm_id: animal.farm_id,
+        property_id: animal.property_id || null,
+        tag_number: animal.tag_number.trim(),
+        rfid_number: animal.rfid_number ? animal.rfid_number.trim() : null,
+        breed_id: animal.breed_id || null,
+        category_id: animal.category_id || null,
+        reproductive_status: animal.reproductive_status || 'vazia',
+        birth_date: animal.birth_date || null,
+        sex: 'F',
+        status: 'active',
+      })
+      .select('id')
+      .single();
+
+    if (createErr || !newAnimal) {
+      console.error('createAndAddAnimalToLot error:', createErr);
+      return { success: false, error: createErr?.message || 'Erro ao cadastrar matriz.' };
+    }
+    animalId = newAnimal.id;
+  }
+
+  // Vincular ao lote
+  const { error: linkErr } = await supabase
+    .from('iatf_lot_animals')
+    .upsert(
+      { lot_id: lotId, animal_id: animalId, pregnancy_status: 'pendente' },
+      { onConflict: 'lot_id,animal_id' }
+    );
+
+  if (linkErr) {
+    console.error('createAndAddAnimalToLot link error:', linkErr);
+    return { success: false, error: linkErr.message };
+  }
+
+  return { success: true };
+}
+
 // ============================================================
 // MANAGEMENT EVENTS (AGENDA)
 // ============================================================
