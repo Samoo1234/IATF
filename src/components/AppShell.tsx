@@ -12,6 +12,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
+  const [isNavigating, setIsNavigating] = useState(false);
 
   // Load saved collapse preference from localStorage
   useEffect(() => {
@@ -21,31 +22,44 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Client-side authentication & tab session verification
+  // Client-side authentication check - executado apenas no carregamento inicial da aplicação
   useEffect(() => {
+    let mounted = true;
+
     async function verifyAuth() {
       if (pathname === '/login') {
-        setCheckingAuth(false);
+        if (mounted) setCheckingAuth(false);
         return;
       }
 
-      const hasTabSession = sessionStorage.getItem('iatf_tab_session');
+      const hasTabSession = typeof window !== 'undefined' ? sessionStorage.getItem('iatf_tab_session') : null;
       const supabase = createClient();
       const { data: { session } } = await supabase.auth.getSession();
 
       if (!session || !hasTabSession) {
-        // Sem sessão ativa na aba ou nova aba aberta após fechar a anterior
-        sessionStorage.removeItem('iatf_tab_session');
+        if (typeof window !== 'undefined') {
+          sessionStorage.removeItem('iatf_tab_session');
+        }
         await supabase.auth.signOut();
         router.push('/login');
         return;
       }
 
-      setCheckingAuth(false);
+      if (mounted) setCheckingAuth(false);
     }
 
     verifyAuth();
-  }, [pathname, router]);
+    return () => {
+      mounted = false;
+    };
+  }, []); // Montagem única para não bloquear navegação entre abas
+
+  // Efeito de transição rápida visual ao mudar de rota
+  useEffect(() => {
+    setIsNavigating(true);
+    const t = setTimeout(() => setIsNavigating(false), 200);
+    return () => clearTimeout(t);
+  }, [pathname]);
 
   const handleToggleCollapse = () => {
     setCollapsed(prev => {
@@ -75,7 +89,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex relative">
+      {/* Top Navigation Progress Bar */}
+      {isNavigating && (
+        <div className="fixed top-0 left-0 right-0 z-50 h-0.75 bg-linear-to-r from-emerald-500 via-teal-400 to-emerald-300 animate-pulse shadow-sm shadow-emerald-400/50" />
+      )}
+
       {/* Sidebar Component */}
       <Sidebar
         collapsed={collapsed}

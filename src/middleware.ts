@@ -2,6 +2,27 @@ import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
 export async function middleware(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+  const isLoginPage = pathname === '/login' || pathname.startsWith('/login/');
+  const isAuthCallback = pathname.startsWith('/auth');
+
+  const allCookies = request.cookies.getAll();
+  const hasAuthCookie = allCookies.some(
+    (c) => c.name.startsWith('sb-') && c.name.includes('-auth-token')
+  );
+
+  // Se não tem cookie do Supabase e tenta acessar rota protegida, redireciona instantaneamente (0ms)
+  if (!hasAuthCookie && !isLoginPage && !isAuthCallback) {
+    const url = request.nextUrl.clone();
+    url.pathname = '/login';
+    return NextResponse.redirect(url);
+  }
+
+  // Se está na tela de login sem cookie, deixa passar imediatamente (0ms)
+  if (!hasAuthCookie && isLoginPage) {
+    return NextResponse.next();
+  }
+
   let supabaseResponse = NextResponse.next({
     request,
   });
@@ -33,10 +54,6 @@ export async function middleware(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
-  const pathname = request.nextUrl.pathname;
-  const isLoginPage = pathname === '/login' || pathname.startsWith('/login/');
-  const isAuthCallback = pathname.startsWith('/auth');
 
   // Redirecionar usuário não autenticado para /login
   if (!user && !isLoginPage && !isAuthCallback) {

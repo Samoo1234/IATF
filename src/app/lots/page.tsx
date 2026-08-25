@@ -654,7 +654,7 @@ export default function LotsPage() {
                                   : 'border-slate-700 bg-slate-900'
                               }`}
                             >
-                              {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                              {isSelected && <Check className="w-3.5 h-3.5 stroke-3" />}
                             </div>
 
                             <div>

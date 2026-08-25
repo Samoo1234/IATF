@@ -1,12 +1,78 @@
 import { createClient } from './supabase/client';
 
 // ============================================================
-// DYNAMIC MULTI-TENANT RESOLVER
+// DYNAMIC MULTI-TENANT RESOLVER & GLOBAL IN-MEMORY CACHE
 // ============================================================
 
+let cachedOrgId: string | null = null;
+let cachedOrgIdTimestamp = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos de cache de sessão
+
+let cachedMetadata: OrgMetadata | null = null;
+let cachedMetadataTimestamp = 0;
+
+let cachedFarms: Farm[] | null = null;
+let cachedFarmsTimestamp = 0;
+
+// Universal SWR / Query In-Memory Cache
+const queryCache = new Map<string, { data: unknown; timestamp: number }>();
+const QUERY_CACHE_TTL = 3 * 60 * 1000; // 3 minutos
+
+export function getCached<T>(key: string, ttl = QUERY_CACHE_TTL): T | null {
+  const entry = queryCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > ttl) return null;
+  return entry.data as T;
+}
+
+export function setCached<T>(key: string, data: T): void {
+  queryCache.set(key, { data, timestamp: Date.now() });
+}
+
+export function invalidateCache(keyPrefix?: string): void {
+  if (!keyPrefix) {
+    queryCache.clear();
+    cachedOrgId = null;
+    cachedOrgIdTimestamp = 0;
+    cachedMetadata = null;
+    cachedMetadataTimestamp = 0;
+    cachedFarms = null;
+    cachedFarmsTimestamp = 0;
+    return;
+  }
+  for (const key of queryCache.keys()) {
+    if (key.startsWith(keyPrefix)) {
+      queryCache.delete(key);
+    }
+  }
+}
+
+export function clearTenantCache() {
+  invalidateCache();
+}
+
+export function clearFarmsCache() {
+  cachedFarms = null;
+  cachedFarmsTimestamp = 0;
+  invalidateCache('farms');
+}
+
 export async function getCurrentOrgId(): Promise<string | null> {
+  const now = Date.now();
+  if (cachedOrgId && now - cachedOrgIdTimestamp < CACHE_TTL_MS) {
+    return cachedOrgId;
+  }
+
   const supabase = createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  // getSession() lê a sessão localmente em milissegundos sem fazer chamada remota à API de auth
+  const { data: { session } } = await supabase.auth.getSession();
+  let user = session?.user ?? null;
+
+  if (!user) {
+    const { data: userData } = await supabase.auth.getUser();
+    user = userData.user;
+  }
+
   if (!user) return null;
 
   const { data: member } = await supabase
@@ -17,7 +83,9 @@ export async function getCurrentOrgId(): Promise<string | null> {
     .maybeSingle();
 
   if (member?.organization_id) {
-    return member.organization_id;
+    cachedOrgId = member.organization_id;
+    cachedOrgIdTimestamp = now;
+    return cachedOrgId;
   }
 
   // Fallback: Check if user owns an organization directly
@@ -27,7 +95,9 @@ export async function getCurrentOrgId(): Promise<string | null> {
     .limit(1);
 
   if (orgs && orgs.length > 0) {
-    return orgs[0].id;
+    cachedOrgId = orgs[0].id;
+    cachedOrgIdTimestamp = now;
+    return cachedOrgId;
   }
 
   return null;
@@ -52,6 +122,11 @@ export interface OrgMetadata {
 }
 
 export async function getOrgMetadata(): Promise<OrgMetadata | null> {
+  const now = Date.now();
+  if (cachedMetadata && now - cachedMetadataTimestamp < CACHE_TTL_MS) {
+    return cachedMetadata;
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return null;
 
@@ -74,10 +149,14 @@ export async function getOrgMetadata(): Promise<OrgMetadata | null> {
     .limit(1)
     .maybeSingle();
 
-  return {
+  const result: OrgMetadata = {
     ...org,
     farm: farm || null,
   };
+
+  cachedMetadata = result;
+  cachedMetadataTimestamp = now;
+  return result;
 }
 
 export interface LotStat {
@@ -99,9 +178,15 @@ export interface LotStat {
   pending_dg: number;
 }
 
-export async function getLots(): Promise<LotStat[]> {
+export async function getLots(forceRefresh = false): Promise<LotStat[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
+
+  const cacheKey = `lots_${orgId}`;
+  if (!forceRefresh) {
+    const cached = getCached<LotStat[]>(cacheKey);
+    if (cached) return cached;
+  }
 
   const supabase = createClient();
   const { data, error } = await supabase
@@ -110,13 +195,24 @@ export async function getLots(): Promise<LotStat[]> {
     .eq('organization_id', orgId)
     .order('start_date', { ascending: true });
 
-  if (error) { console.error('getLots error:', error); return []; }
-  return (data ?? []) as LotStat[];
+  if (error) {
+    console.error('getLots error:', error);
+    return getCached<LotStat[]>(cacheKey) ?? [];
+  }
+  const result = (data ?? []) as LotStat[];
+  setCached(cacheKey, result);
+  return result;
 }
 
-export async function getLotById(id: string): Promise<LotStat | null> {
+export async function getLotById(id: string, forceRefresh = false): Promise<LotStat | null> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return null;
+
+  const cacheKey = `lot_${id}`;
+  if (!forceRefresh) {
+    const cached = getCached<LotStat>(cacheKey);
+    if (cached) return cached;
+  }
 
   const supabase = createClient();
   const { data, error } = await supabase
@@ -126,8 +222,13 @@ export async function getLotById(id: string): Promise<LotStat | null> {
     .eq('organization_id', orgId)
     .single();
 
-  if (error) { console.error('getLotById error:', error); return null; }
-  return data as LotStat;
+  if (error) {
+    console.error('getLotById error:', error);
+    return getCached<LotStat>(cacheKey);
+  }
+  const result = data as LotStat;
+  if (result) setCached(cacheKey, result);
+  return result;
 }
 
 // ============================================================
@@ -155,7 +256,13 @@ export interface LotAnimal {
   semen_batches: { batch_number: string } | null;
 }
 
-export async function getLotAnimals(lotId: string): Promise<LotAnimal[]> {
+export async function getLotAnimals(lotId: string, forceRefresh = false): Promise<LotAnimal[]> {
+  const cacheKey = `lot_animals_${lotId}`;
+  if (!forceRefresh) {
+    const cached = getCached<LotAnimal[]>(cacheKey);
+    if (cached) return cached;
+  }
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('iatf_lot_animals')
@@ -168,8 +275,13 @@ export async function getLotAnimals(lotId: string): Promise<LotAnimal[]> {
     .eq('lot_id', lotId)
     .order('created_at', { ascending: true });
 
-  if (error) { console.error('getLotAnimals error:', error); return []; }
-  return (data ?? []) as unknown as LotAnimal[];
+  if (error) {
+    console.error('getLotAnimals error:', error);
+    return getCached<LotAnimal[]>(cacheKey) ?? [];
+  }
+  const result = (data ?? []) as unknown as LotAnimal[];
+  setCached(cacheKey, result);
+  return result;
 }
 
 export async function updateAnimalDG(
@@ -195,7 +307,14 @@ export async function updateAnimalDG(
     .update(updateData)
     .eq('id', lotAnimalId);
 
-  if (error) { console.error('updateAnimalDG error:', error); return false; }
+  if (error) {
+    console.error('updateAnimalDG error:', error);
+    return false;
+  }
+
+  invalidateCache('lot_animals');
+  invalidateCache('lots');
+  invalidateCache('metrics');
   return true;
 }
 
@@ -220,6 +339,10 @@ export async function addAnimalsToLot(
     console.error('addAnimalsToLot error:', error);
     return { success: false, count: 0, error: error.message };
   }
+
+  invalidateCache('lot_animals');
+  invalidateCache('lots');
+  invalidateCache('metrics');
   return { success: true, count: data?.length ?? records.length };
 }
 
@@ -234,6 +357,10 @@ export async function removeAnimalFromLot(lotAnimalId: string): Promise<boolean>
     console.error('removeAnimalFromLot error:', error);
     return false;
   }
+
+  invalidateCache('lot_animals');
+  invalidateCache('lots');
+  invalidateCache('metrics');
   return true;
 }
 
@@ -340,6 +467,10 @@ export async function createAndAddAnimalToLot(
     return { success: false, error: linkErr.message };
   }
 
+  invalidateCache('lot_animals');
+  invalidateCache('lots');
+  invalidateCache('animals');
+  invalidateCache('metrics');
   return { success: true };
 }
 
@@ -367,9 +498,15 @@ export interface ManagementEvent {
   } | null;
 }
 
-export async function getManagementEvents(): Promise<ManagementEvent[]> {
+export async function getManagementEvents(forceRefresh = false): Promise<ManagementEvent[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
+
+  const cacheKey = `events_${orgId}`;
+  if (!forceRefresh) {
+    const cached = getCached<ManagementEvent[]>(cacheKey);
+    if (cached) return cached;
+  }
 
   const supabase = createClient();
   const { data, error } = await supabase
@@ -381,8 +518,13 @@ export async function getManagementEvents(): Promise<ManagementEvent[]> {
     .eq('organization_id', orgId)
     .order('planned_date', { ascending: true });
 
-  if (error) { console.error('getManagementEvents error:', error); return []; }
-  return (data ?? []) as unknown as ManagementEvent[];
+  if (error) {
+    console.error('getManagementEvents error:', error);
+    return getCached<ManagementEvent[]>(cacheKey) ?? [];
+  }
+  const result = (data ?? []) as unknown as ManagementEvent[];
+  setCached(cacheKey, result);
+  return result;
 }
 
 export async function completeManagementEvent(
@@ -402,7 +544,14 @@ export async function completeManagementEvent(
     })
     .eq('id', eventId);
 
-  if (error) { console.error('completeManagementEvent error:', error); return false; }
+  if (error) {
+    console.error('completeManagementEvent error:', error);
+    return false;
+  }
+
+  invalidateCache('events');
+  invalidateCache('lots');
+  invalidateCache('metrics');
   return true;
 }
 
@@ -436,7 +585,12 @@ export async function insertManagementEvent(event: {
       losses_count: 0,
     });
 
-  if (error) { console.error('insertManagementEvent error:', error); return false; }
+  if (error) {
+    console.error('insertManagementEvent error:', error);
+    return false;
+  }
+
+  invalidateCache('events');
   return true;
 }
 
@@ -448,7 +602,12 @@ export async function deleteManagementEvent(eventId: string): Promise<boolean> {
     .eq('id', eventId)
     .select();
 
-  if (error) { console.error('deleteManagementEvent error:', error); return false; }
+  if (error) {
+    console.error('deleteManagementEvent error:', error);
+    return false;
+  }
+
+  invalidateCache('events');
   return !!(data && data.length > 0);
 }
 
@@ -471,7 +630,12 @@ export async function updateManagementEventDate(
     .update(updateData)
     .eq('id', eventId);
 
-  if (error) { console.error('updateManagementEventDate error:', error); return false; }
+  if (error) {
+    console.error('updateManagementEventDate error:', error);
+    return false;
+  }
+
+  invalidateCache('events');
   return true;
 }
 
@@ -489,9 +653,15 @@ export interface SemenBatch {
   bulls: { name: string; code: string | null } | null;
 }
 
-export async function getSemenBatches(): Promise<SemenBatch[]> {
+export async function getSemenBatches(forceRefresh = false): Promise<SemenBatch[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
+
+  const cacheKey = `semen_${orgId}`;
+  if (!forceRefresh) {
+    const cached = getCached<SemenBatch[]>(cacheKey);
+    if (cached) return cached;
+  }
 
   const supabase = createClient();
   const { data, error } = await supabase
@@ -500,8 +670,13 @@ export async function getSemenBatches(): Promise<SemenBatch[]> {
     .eq('organization_id', orgId)
     .order('created_at', { ascending: false });
 
-  if (error) { console.error('getSemenBatches error:', error); return []; }
-  return (data ?? []) as unknown as SemenBatch[];
+  if (error) {
+    console.error('getSemenBatches error:', error);
+    return getCached<SemenBatch[]>(cacheKey) ?? [];
+  }
+  const result = (data ?? []) as unknown as SemenBatch[];
+  setCached(cacheKey, result);
+  return result;
 }
 
 export async function insertSemenBatch(batch: {
@@ -518,7 +693,12 @@ export async function insertSemenBatch(batch: {
     ...batch,
     organization_id: orgId,
   });
-  if (error) { console.error('insertSemenBatch error:', error); return false; }
+  if (error) {
+    console.error('insertSemenBatch error:', error);
+    return false;
+  }
+
+  invalidateCache('semen');
   return true;
 }
 
@@ -538,9 +718,15 @@ export interface Animal {
   farms: { name: string } | null;
 }
 
-export async function getAnimals(limit = 50): Promise<Animal[]> {
+export async function getAnimals(limit = 50, forceRefresh = false): Promise<Animal[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
+
+  const cacheKey = `animals_${orgId}_${limit}`;
+  if (!forceRefresh) {
+    const cached = getCached<Animal[]>(cacheKey);
+    if (cached) return cached;
+  }
 
   const supabase = createClient();
   const { data, error } = await supabase
@@ -551,8 +737,13 @@ export async function getAnimals(limit = 50): Promise<Animal[]> {
     .order('created_at', { ascending: false })
     .limit(limit);
 
-  if (error) { console.error('getAnimals error:', error); return []; }
-  return (data ?? []) as unknown as Animal[];
+  if (error) {
+    console.error('getAnimals error:', error);
+    return getCached<Animal[]>(cacheKey) ?? [];
+  }
+  const result = (data ?? []) as unknown as Animal[];
+  setCached(cacheKey, result);
+  return result;
 }
 
 export async function searchAnimals(query: string): Promise<Animal[]> {
@@ -568,7 +759,10 @@ export async function searchAnimals(query: string): Promise<Animal[]> {
     .ilike('tag_number', `%${query}%`)
     .limit(20);
 
-  if (error) { console.error('searchAnimals error:', error); return []; }
+  if (error) {
+    console.error('searchAnimals error:', error);
+    return [];
+  }
   return (data ?? []) as unknown as Animal[];
 }
 
@@ -604,6 +798,9 @@ export async function createAnimal(animal: {
     console.error('createAnimal error:', error);
     return { success: false, error: error.message };
   }
+
+  invalidateCache('animals');
+  invalidateCache('metrics');
   return { success: true };
 }
 
@@ -623,7 +820,10 @@ export async function getAnimalHistory(animalId: string) {
     .eq('animal_id', animalId)
     .order('created_at', { ascending: false });
 
-  if (error) { console.error('getAnimalHistory error:', error); return []; }
+  if (error) {
+    console.error('getAnimalHistory error:', error);
+    return [];
+  }
   return data ?? [];
 }
 
@@ -643,9 +843,15 @@ export interface OrgMetrics {
   overall_pregnancy_rate: number;
 }
 
-export async function getOrgMetrics(): Promise<OrgMetrics | null> {
+export async function getOrgMetrics(forceRefresh = false): Promise<OrgMetrics | null> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return null;
+
+  const cacheKey = `metrics_${orgId}`;
+  if (!forceRefresh) {
+    const cached = getCached<OrgMetrics>(cacheKey);
+    if (cached) return cached;
+  }
 
   const supabase = createClient();
   const { data, error } = await supabase
@@ -654,8 +860,13 @@ export async function getOrgMetrics(): Promise<OrgMetrics | null> {
     .eq('organization_id', orgId)
     .maybeSingle();
 
-  if (error) { console.error('getOrgMetrics error:', error); return null; }
-  return data as OrgMetrics;
+  if (error) {
+    console.error('getOrgMetrics error:', error);
+    return getCached<OrgMetrics>(cacheKey);
+  }
+  const result = data as OrgMetrics;
+  if (result) setCached(cacheKey, result);
+  return result;
 }
 
 // ============================================================
@@ -678,9 +889,15 @@ export interface Protocol {
   }[];
 }
 
-export async function getProtocols(): Promise<Protocol[]> {
+export async function getProtocols(forceRefresh = false): Promise<Protocol[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
+
+  const cacheKey = `protocols_${orgId}`;
+  if (!forceRefresh) {
+    const cached = getCached<Protocol[]>(cacheKey);
+    if (cached) return cached;
+  }
 
   const supabase = createClient();
   const { data, error } = await supabase
@@ -690,8 +907,13 @@ export async function getProtocols(): Promise<Protocol[]> {
     .eq('status', 'active')
     .order('name');
 
-  if (error) { console.error('getProtocols error:', error); return []; }
-  return (data ?? []) as unknown as Protocol[];
+  if (error) {
+    console.error('getProtocols error:', error);
+    return getCached<Protocol[]>(cacheKey) ?? [];
+  }
+  const result = (data ?? []) as unknown as Protocol[];
+  setCached(cacheKey, result);
+  return result;
 }
 
 export async function createProtocol(protocol: {
@@ -744,6 +966,7 @@ export async function createProtocol(protocol: {
     return false;
   }
 
+  invalidateCache('protocols');
   return true;
 }
 
@@ -759,9 +982,15 @@ export interface Bull {
   status: string;
 }
 
-export async function getBulls(): Promise<Bull[]> {
+export async function getBulls(forceRefresh = false): Promise<Bull[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
+
+  const cacheKey = `bulls_${orgId}`;
+  if (!forceRefresh) {
+    const cached = getCached<Bull[]>(cacheKey);
+    if (cached) return cached;
+  }
 
   const supabase = createClient();
   const { data, error } = await supabase
@@ -770,8 +999,13 @@ export async function getBulls(): Promise<Bull[]> {
     .eq('organization_id', orgId)
     .order('name');
 
-  if (error) { console.error('getBulls error:', error); return []; }
-  return (data ?? []) as Bull[];
+  if (error) {
+    console.error('getBulls error:', error);
+    return getCached<Bull[]>(cacheKey) ?? [];
+  }
+  const result = (data ?? []) as Bull[];
+  setCached(cacheKey, result);
+  return result;
 }
 
 export async function createBull(bull: {
@@ -790,7 +1024,12 @@ export async function createBull(bull: {
     organization_id: orgId,
     status: 'active',
   });
-  if (error) { console.error('createBull error:', error); return false; }
+  if (error) {
+    console.error('createBull error:', error);
+    return false;
+  }
+
+  invalidateCache('bulls');
   return true;
 }
 
@@ -864,7 +1103,10 @@ export async function createLot(lot: {
     .select('id')
     .single();
 
-  if (error) { console.error('createLot error:', error); return null; }
+  if (error) {
+    console.error('createLot error:', error);
+    return null;
+  }
 
   // Auto-generate management events
   for (const step of steps) {
@@ -879,6 +1121,9 @@ export async function createLot(lot: {
     });
   }
 
+  invalidateCache('lots');
+  invalidateCache('events');
+  invalidateCache('metrics');
   return inserted.id;
 }
 
@@ -896,7 +1141,12 @@ export interface Farm {
   properties?: Property[];
 }
 
-export async function getFarms(): Promise<Farm[]> {
+export async function getFarms(forceRefresh = false): Promise<Farm[]> {
+  const now = Date.now();
+  if (!forceRefresh && cachedFarms && now - cachedFarmsTimestamp < CACHE_TTL_MS) {
+    return cachedFarms;
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
 
@@ -907,8 +1157,14 @@ export async function getFarms(): Promise<Farm[]> {
     .eq('organization_id', orgId)
     .order('name');
 
-  if (error) { console.error('getFarms error:', error); return []; }
-  return (data ?? []) as Farm[];
+  if (error) {
+    console.error('getFarms error:', error);
+    return cachedFarms ?? [];
+  }
+
+  cachedFarms = (data ?? []) as Farm[];
+  cachedFarmsTimestamp = now;
+  return cachedFarms;
 }
 
 export async function createFarm(farm: {
@@ -928,7 +1184,12 @@ export async function createFarm(farm: {
     .select('id')
     .single();
 
-  if (error) { console.error('createFarm error:', error); return null; }
+  if (error) {
+    console.error('createFarm error:', error);
+    return null;
+  }
+
+  clearFarmsCache();
   return data?.id ?? null;
 }
 
@@ -939,9 +1200,15 @@ export interface Property {
   farm_id: string;
 }
 
-export async function getProperties(): Promise<Property[]> {
+export async function getProperties(forceRefresh = false): Promise<Property[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
+
+  const cacheKey = `properties_${orgId}`;
+  if (!forceRefresh) {
+    const cached = getCached<Property[]>(cacheKey);
+    if (cached) return cached;
+  }
 
   const supabase = createClient();
   const { data, error } = await supabase
@@ -950,8 +1217,13 @@ export async function getProperties(): Promise<Property[]> {
     .eq('organization_id', orgId)
     .order('name');
 
-  if (error) { console.error('getProperties error:', error); return []; }
-  return (data ?? []) as Property[];
+  if (error) {
+    console.error('getProperties error:', error);
+    return getCached<Property[]>(cacheKey) ?? [];
+  }
+  const result = (data ?? []) as Property[];
+  setCached(cacheKey, result);
+  return result;
 }
 
 export async function createProperty(prop: {
@@ -967,7 +1239,13 @@ export async function createProperty(prop: {
     ...prop,
     organization_id: orgId,
   });
-  if (error) { console.error('createProperty error:', error); return false; }
+  if (error) {
+    console.error('createProperty error:', error);
+    return false;
+  }
+
+  invalidateCache('properties');
+  clearFarmsCache();
   return true;
 }
 
@@ -980,9 +1258,15 @@ export interface Breed {
   name: string;
 }
 
-export async function getBreeds(): Promise<Breed[]> {
+export async function getBreeds(forceRefresh = false): Promise<Breed[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
+
+  const cacheKey = `breeds_${orgId}`;
+  if (!forceRefresh) {
+    const cached = getCached<Breed[]>(cacheKey);
+    if (cached) return cached;
+  }
 
   const supabase = createClient();
   const { data, error } = await supabase
@@ -991,8 +1275,13 @@ export async function getBreeds(): Promise<Breed[]> {
     .eq('organization_id', orgId)
     .order('name');
 
-  if (error) { console.error('getBreeds error:', error); return []; }
-  return (data ?? []) as Breed[];
+  if (error) {
+    console.error('getBreeds error:', error);
+    return getCached<Breed[]>(cacheKey) ?? [];
+  }
+  const result = (data ?? []) as Breed[];
+  setCached(cacheKey, result);
+  return result;
 }
 
 export async function createBreed(name: string): Promise<boolean> {
@@ -1004,7 +1293,12 @@ export async function createBreed(name: string): Promise<boolean> {
     name,
     organization_id: orgId,
   });
-  if (error) { console.error('createBreed error:', error); return false; }
+  if (error) {
+    console.error('createBreed error:', error);
+    return false;
+  }
+
+  invalidateCache('breeds');
   return true;
 }
 
@@ -1013,9 +1307,15 @@ export interface AnimalCategory {
   name: string;
 }
 
-export async function getAnimalCategories(): Promise<AnimalCategory[]> {
+export async function getAnimalCategories(forceRefresh = false): Promise<AnimalCategory[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
+
+  const cacheKey = `categories_${orgId}`;
+  if (!forceRefresh) {
+    const cached = getCached<AnimalCategory[]>(cacheKey);
+    if (cached) return cached;
+  }
 
   const supabase = createClient();
   const { data, error } = await supabase
@@ -1024,8 +1324,13 @@ export async function getAnimalCategories(): Promise<AnimalCategory[]> {
     .eq('organization_id', orgId)
     .order('name');
 
-  if (error) { console.error('getAnimalCategories error:', error); return []; }
-  return (data ?? []) as AnimalCategory[];
+  if (error) {
+    console.error('getAnimalCategories error:', error);
+    return getCached<AnimalCategory[]>(cacheKey) ?? [];
+  }
+  const result = (data ?? []) as AnimalCategory[];
+  setCached(cacheKey, result);
+  return result;
 }
 
 export async function createAnimalCategory(name: string): Promise<boolean> {
@@ -1037,6 +1342,11 @@ export async function createAnimalCategory(name: string): Promise<boolean> {
     name,
     organization_id: orgId,
   });
-  if (error) { console.error('createAnimalCategory error:', error); return false; }
+  if (error) {
+    console.error('createAnimalCategory error:', error);
+    return false;
+  }
+
+  invalidateCache('categories');
   return true;
 }

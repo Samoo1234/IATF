@@ -40,16 +40,19 @@ export default function Header({ onOpenMobileMenu }: HeaderProps) {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    let mounted = true;
+
     async function load() {
       const [meta, farmsList] = await Promise.all([
         getOrgMetadata(),
         getFarms()
       ]);
+      if (!mounted) return;
       setMetadata(meta);
       setFarms(farmsList);
 
       // Load saved active farm from localStorage
-      const savedFarm = localStorage.getItem('iatf_active_farm_id');
+      const savedFarm = typeof window !== 'undefined' ? localStorage.getItem('iatf_active_farm_id') : null;
       if (savedFarm) {
         setActiveFarmId(savedFarm);
       } else if (farmsList.length > 0) {
@@ -65,8 +68,11 @@ export default function Header({ onOpenMobileMenu }: HeaderProps) {
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [pathname]);
+    return () => {
+      mounted = false;
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   if (pathname === '/login') {
     return null;

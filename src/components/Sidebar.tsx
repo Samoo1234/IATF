@@ -85,15 +85,18 @@ export default function Sidebar({
   const [activeFarmName, setActiveFarmName] = useState<string>('Fazenda Principal');
 
   useEffect(() => {
+    let mounted = true;
+
     async function loadData() {
       const [meta, farmsList] = await Promise.all([
         getOrgMetadata(),
         getFarms()
       ]);
+      if (!mounted) return;
       setMetadata(meta);
       setFarms(farmsList);
 
-      const savedFarmId = localStorage.getItem('iatf_active_farm_id');
+      const savedFarmId = typeof window !== 'undefined' ? localStorage.getItem('iatf_active_farm_id') : null;
       const found = farmsList.find(f => f.id === savedFarmId);
       if (found) {
         setActiveFarmName(found.name);
@@ -104,11 +107,12 @@ export default function Sidebar({
       }
 
       const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setUserEmail(user.email ?? null);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (mounted && session?.user) {
+        setUserEmail(session.user.email ?? null);
       }
     }
+
     loadData();
 
     const handleFarmChange = (e: Event) => {
@@ -117,13 +121,20 @@ export default function Sidebar({
       if (farmId === 'all') {
         setActiveFarmName('Todas as Fazendas');
       } else {
-        const found = farms.find(f => f.id === farmId);
-        if (found) setActiveFarmName(found.name);
+        const savedFarm = localStorage.getItem('iatf_active_farm_id');
+        getFarms().then((list) => {
+          const found = list.find(f => f.id === (farmId || savedFarm));
+          if (found) setActiveFarmName(found.name);
+        });
       }
     };
+
     window.addEventListener('iatf_farm_changed', handleFarmChange);
-    return () => window.removeEventListener('iatf_farm_changed', handleFarmChange);
-  }, [pathname, farms]);
+    return () => {
+      mounted = false;
+      window.removeEventListener('iatf_farm_changed', handleFarmChange);
+    };
+  }, []);
 
   const handleLogout = async () => {
     if (typeof window !== 'undefined') {
@@ -217,6 +228,7 @@ export default function Sidebar({
                   <Link
                     key={item.href}
                     href={item.href}
+                    prefetch={true}
                     onClick={onCloseMobile}
                     title={collapsed ? item.name : undefined}
                     className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all relative group ${
