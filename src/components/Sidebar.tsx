@@ -22,7 +22,7 @@ import {
   ChevronDown,
   X
 } from 'lucide-react';
-import { getOrgMetadata, getFarms, type OrgMetadata, type Farm } from '@/lib/db';
+import { getOrgMetadata, getFarms, type OrgMetadata } from '@/lib/db';
 import { createClient } from '@/lib/supabase/client';
 
 interface NavSection {
@@ -40,6 +40,7 @@ const NAV_SECTIONS: NavSection[] = [
     title: 'Operacional',
     items: [
       { name: 'Dashboard', href: '/', icon: LayoutDashboard },
+      { name: 'Cadastros Gerais', href: '/registries', icon: FolderTree },
       { name: 'Agenda de Campo', href: '/agenda', icon: CalendarDays },
       { name: 'Lotes de IATF', href: '/lots', icon: Layers },
       { name: 'Matrizes & Rebanho', href: '/animals', icon: Syringe },
@@ -57,7 +58,6 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { name: 'Relatórios & Gráficos', href: '/reports', icon: FileText },
       { name: 'Importação de Dados', href: '/import', icon: Upload },
-      { name: 'Cadastros Gerais', href: '/registries', icon: FolderTree },
     ],
   },
 ];
@@ -81,7 +81,6 @@ export default function Sidebar({
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
 
-  const [farms, setFarms] = useState<Farm[]>([]);
   const [activeFarmName, setActiveFarmName] = useState<string>('Fazenda Principal');
 
   useEffect(() => {
@@ -94,7 +93,6 @@ export default function Sidebar({
       ]);
       if (!mounted) return;
       setMetadata(meta);
-      setFarms(farmsList);
 
       const savedFarmId = typeof window !== 'undefined' ? localStorage.getItem('iatf_active_farm_id') : null;
       const found = farmsList.find(f => f.id === savedFarmId);

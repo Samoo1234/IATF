@@ -69,12 +69,12 @@ export default function Navigation() {
 
   const navItems = [
     { name: 'Dashboard', href: '/', icon: LayoutDashboard },
+    { name: 'Cadastros', href: '/registries', icon: FolderTree },
     { name: 'Agenda', href: '/agenda', icon: CalendarDays },
     { name: 'Lotes', href: '/lots', icon: Layers },
     { name: 'Protocolos', href: '/protocols', icon: ClipboardList },
     { name: 'Matrizes', href: '/animals', icon: Syringe },
     { name: 'Estoque', href: '/inputs', icon: Package },
-    { name: 'Cadastros', href: '/registries', icon: FolderTree },
     { name: 'Relatórios', href: '/reports', icon: FileText },
     { name: 'Importar', href: '/import', icon: Upload },
   ];

@@ -70,7 +70,7 @@ export async function getCurrentOrgId(): Promise<string | null> {
 
   if (!user) {
     const { data: userData } = await supabase.auth.getUser();
-    user = userData.user;
+    user = userData?.user ?? null;
   }
 
   if (!user) return null;

@@ -52,7 +52,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     return () => {
       mounted = false;
     };
-  }, []); // Montagem única para não bloquear navegação entre abas
+  }, [pathname, router]);
 
   // Efeito de transição rápida visual ao mudar de rota
   useEffect(() => {

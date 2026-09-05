@@ -8,10 +8,6 @@ export function createClient() {
       cookieOptions: {
         maxAge: undefined,
       },
-      auth: {
-        persistSession: true,
-        storage: typeof window !== 'undefined' ? window.sessionStorage : undefined,
-      },
     }
   );
 }

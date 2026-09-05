@@ -40,12 +40,13 @@ export async function middleware(request: NextRequest) {
           supabaseResponse = NextResponse.next({
             request,
           });
-          cookiesToSet.forEach(({ name, value, options }) =>
+          cookiesToSet.forEach(({ name, value, options }) => {
+            const isDeleting = options?.maxAge === 0 || (options?.maxAge !== undefined && options.maxAge <= 0) || !value;
             supabaseResponse.cookies.set(name, value, {
               ...options,
-              maxAge: undefined,
-            })
-          );
+              ...(isDeleting ? { maxAge: 0 } : { maxAge: undefined }),
+            });
+          });
         },
       },
     }
@@ -59,14 +60,22 @@ export async function middleware(request: NextRequest) {
   if (!user && !isLoginPage && !isAuthCallback) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
-    return NextResponse.redirect(url);
+    const redirectResponse = NextResponse.redirect(url);
+    supabaseResponse.cookies.getAll().forEach((cookie) => {
+      redirectResponse.cookies.set(cookie.name, cookie.value, cookie);
+    });
+    return redirectResponse;
   }
 
   // Redirecionar usuário já autenticado tentando acessar /login para a página inicial
   if (user && isLoginPage) {
     const url = request.nextUrl.clone();
     url.pathname = '/';
-    return NextResponse.redirect(url);
+    const redirectResponse = NextResponse.redirect(url);
+    supabaseResponse.cookies.getAll().forEach((cookie) => {
+      redirectResponse.cookies.set(cookie.name, cookie.value, cookie);
+    });
+    return redirectResponse;
   }
 
   return supabaseResponse;

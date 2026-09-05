@@ -14,12 +14,13 @@ export async function createClient() {
         },
         setAll(cookiesToSet: Array<{ name: string; value: string; options?: Parameters<typeof cookieStore.set>[2] }>) {
           try {
-            cookiesToSet.forEach(({ name, value, options }) =>
+            cookiesToSet.forEach(({ name, value, options }) => {
+              const isDeleting = options?.maxAge === 0 || (options?.maxAge !== undefined && options.maxAge <= 0) || !value;
               cookieStore.set(name, value, {
                 ...options,
-                maxAge: undefined,
-              })
-            );
+                ...(isDeleting ? { maxAge: 0 } : { maxAge: undefined }),
+              });
+            });
           } catch {
             // Invocado em Server Components onde cookies não podem ser modificados
           }

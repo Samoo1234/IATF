@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   getLots,
   getLotAnimals,
@@ -14,6 +15,7 @@ import {
   getBreeds,
   getAnimalCategories,
   getFarms,
+  getManagementEvents,
   type LotStat,
   type LotAnimal,
   type Protocol,
@@ -22,6 +24,7 @@ import {
   type AnimalCategory,
   type Farm,
   type Animal,
+  type ManagementEvent,
 } from '@/lib/db';
 import {
   Layers,
@@ -37,6 +40,8 @@ import {
   AlertCircle,
   Sparkles,
   ArrowRight,
+  Syringe,
+  Calendar,
 } from 'lucide-react';
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
@@ -45,8 +50,150 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   planejado: { label: 'Planejado', color: 'text-slate-400 bg-slate-800 border-slate-700' },
 };
 
+interface LotStepItem {
+  code: string;
+  name: string;
+  date: string;
+  formattedDate: string;
+  status: 'completed' | 'today' | 'upcoming';
+  isToday: boolean;
+}
+
+interface LotProgressInfo {
+  badgeText: string;
+  badgeStyle: string;
+  isToday: boolean;
+  steps: LotStepItem[];
+  currentStepName: string;
+  currentStepDate: string | null;
+}
+
+function computeLotProgress(
+  lot: LotStat,
+  events: ManagementEvent[],
+  protocolsList: Protocol[]
+): LotProgressInfo {
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+  const lotEvents = events.filter((e) => e.lot_id === lot.id);
+  let rawSteps: { code: string; name: string; date: string }[] = [];
+
+  if (lotEvents.length > 0) {
+    rawSteps = lotEvents
+      .filter((e) => Boolean(e.planned_date))
+      .sort((a, b) => a.planned_date.localeCompare(b.planned_date))
+      .map((e) => ({
+        code: e.step_code,
+        name: e.step_name || e.step_code,
+        date: e.planned_date,
+      }));
+  } else {
+    const matchedProtocol = protocolsList.find((p) => p.name === lot.protocol_name);
+    if (matchedProtocol && matchedProtocol.protocol_steps && matchedProtocol.protocol_steps.length > 0 && lot.start_date) {
+      const d0Date = new Date(lot.start_date + 'T00:00:00');
+      rawSteps = matchedProtocol.protocol_steps
+        .slice()
+        .sort((a, b) => a.step_order - b.step_order)
+        .map((s) => {
+          const stepDate = new Date(d0Date);
+          stepDate.setDate(stepDate.getDate() + s.day_offset);
+          const y = stepDate.getFullYear();
+          const m = String(stepDate.getMonth() + 1).padStart(2, '0');
+          const d = String(stepDate.getDate()).padStart(2, '0');
+          return {
+            code: s.code,
+            name: s.name || s.code,
+            date: `${y}-${m}-${d}`,
+          };
+        });
+    } else {
+      if (lot.start_date) rawSteps.push({ code: 'D0', name: 'Início / Implante', date: lot.start_date });
+      if (lot.ia_planned_date) rawSteps.push({ code: 'IA', name: 'Inseminação Artificial', date: lot.ia_planned_date });
+      if (lot.dg_planned_date) rawSteps.push({ code: 'DG', name: 'Diagnóstico Gestação', date: lot.dg_planned_date });
+    }
+  }
+
+  if (rawSteps.length === 0) {
+    return {
+      badgeText: 'Sem datas agendadas',
+      badgeStyle: 'text-slate-400 bg-slate-800 border-slate-700',
+      isToday: false,
+      steps: [],
+      currentStepName: 'Não definido',
+      currentStepDate: null,
+    };
+  }
+
+  const steps: LotStepItem[] = rawSteps.map((step) => {
+    const isToday = step.date === todayStr;
+    const parts = step.date.split('-');
+    const formattedDate = parts.length === 3 ? `${parts[2]}/${parts[1]}` : step.date;
+
+    let status: 'completed' | 'today' | 'upcoming' = 'upcoming';
+    if (lot.status === 'concluido' || step.date < todayStr) {
+      status = 'completed';
+    } else if (isToday) {
+      status = 'today';
+    } else {
+      status = 'upcoming';
+    }
+
+    return {
+      code: step.code,
+      name: step.name,
+      date: step.date,
+      formattedDate,
+      status,
+      isToday,
+    };
+  });
+
+  const todayStep = steps.find((s) => s.isToday);
+
+  if (todayStep) {
+    return {
+      badgeText: `${todayStep.code} - ${todayStep.name} (Hoje)`,
+      badgeStyle: 'text-amber-300 bg-amber-500/15 border-amber-500/30 ring-1 ring-amber-400/40',
+      isToday: true,
+      steps,
+      currentStepName: `${todayStep.code} - ${todayStep.name}`,
+      currentStepDate: todayStep.date,
+    };
+  }
+
+  const nextStep = steps.find((s) => s.status === 'upcoming');
+
+  if (nextStep) {
+    const diffTime = new Date(nextStep.date + 'T00:00:00').getTime() - new Date(todayStr + 'T00:00:00').getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    const dayLabel = diffDays === 1 ? 'amanhã' : `em ${diffDays}d`;
+    const hasStarted = steps.some((s) => s.status === 'completed');
+
+    return {
+      badgeText: `${hasStarted ? 'Próximo' : 'Início'}: ${nextStep.code} (${nextStep.formattedDate} • ${dayLabel})`,
+      badgeStyle: hasStarted ? 'text-sky-400 bg-sky-500/15 border-sky-500/30' : 'text-slate-300 bg-slate-800 border-slate-700',
+      isToday: false,
+      steps,
+      currentStepName: nextStep.name,
+      currentStepDate: nextStep.date,
+    };
+  }
+
+  return {
+    badgeText: lot.status === 'concluido' ? 'Protocolo Concluído' : 'Etapas Realizadas (Aguardando DG)',
+    badgeStyle: 'text-emerald-400 bg-emerald-500/15 border-emerald-500/30',
+    isToday: false,
+    steps,
+    currentStepName: 'Ciclo Concluído',
+    currentStepDate: steps[steps.length - 1]?.date || null,
+  };
+}
+
 export default function LotsPage() {
+  const router = useRouter();
   const [lots, setLots] = useState<LotStat[]>([]);
+  const [managementEvents, setManagementEvents] = useState<ManagementEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedLotId, setSelectedLotId] = useState<string | null>(null);
   const [lotAnimals, setLotAnimals] = useState<LotAnimal[]>([]);
@@ -98,8 +245,12 @@ export default function LotsPage() {
 
   const loadLots = useCallback(async () => {
     setLoading(true);
-    const data = await getLots();
-    setLots(data);
+    const [lotsData, eventsData] = await Promise.all([
+      getLots(),
+      getManagementEvents(),
+    ]);
+    setLots(lotsData);
+    setManagementEvents(eventsData);
     setLoading(false);
   }, []);
 
@@ -339,6 +490,7 @@ export default function LotsPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filteredLots.map((lot) => {
             const statusInfo = STATUS_LABELS[lot.status] ?? STATUS_LABELS['planejado'];
+            const progress = computeLotProgress(lot, managementEvents, protocols);
             return (
               <div
                 key={lot.id}
@@ -372,6 +524,110 @@ export default function LotsPage() {
                   </p>
                   <p><strong className="text-slate-300">Responsável:</strong> {lot.responsible_name}</p>
                 </div>
+
+                {/* Mini Barra de Progresso / Stepper dos Manejos (Opção C) */}
+                {progress.steps.length > 0 && (
+                  <div className="bg-slate-900/90 rounded-xl p-3 border border-slate-800/80 space-y-2.5">
+                    {/* Header: Título e Manejo Atual - Toque rápido para Agenda */}
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const targetDate = progress.currentStepDate || lot.start_date;
+                        router.push(`/agenda?date=${targetDate}&lot=${encodeURIComponent(lot.code)}`);
+                      }}
+                      className="flex items-center justify-between gap-2 text-xs p-1.5 -m-1 rounded-xl hover:bg-slate-800/80 active:bg-slate-800 transition-all cursor-pointer group/header touch-manipulation"
+                      title="Toque para abrir este manejo na Agenda de Campo"
+                    >
+                      <span className="text-slate-400 group-hover/header:text-emerald-400 font-medium flex items-center gap-1.5 shrink-0 transition-colors">
+                        <Syringe className="w-3.5 h-3.5 text-emerald-400" />
+                        Manejo Atual:
+                      </span>
+                      <div className="flex items-center gap-1.5 overflow-hidden">
+                        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-lg border truncate max-w-42.5 sm:max-w-none flex items-center gap-1.5 ${progress.badgeStyle}`}>
+                          {progress.isToday && (
+                            <span className="relative flex h-2 w-2">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                            </span>
+                          )}
+                          {progress.badgeText}
+                        </span>
+                        <span className="text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded flex items-center gap-0.5 shrink-0 group-hover/header:bg-emerald-500/25">
+                          <Calendar className="w-3 h-3" />
+                          <ArrowRight className="w-2.5 h-2.5" />
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Stepper Visual com botões touch */}
+                    <div className="pt-1.5 pb-0.5 px-1">
+                      <div className="flex items-center justify-between relative">
+                        {progress.steps.map((step, idx) => {
+                          const isCompleted = step.status === 'completed';
+                          const isCurrentToday = step.status === 'today';
+
+                          return (
+                            <div key={step.code + idx} className="flex-1 flex items-center last:flex-none">
+                              {/* Step Node Button */}
+                              <div className="flex flex-col items-center group/step relative">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    router.push(`/agenda?date=${step.date}&lot=${encodeURIComponent(lot.code)}`);
+                                  }}
+                                  className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-extrabold transition-all duration-300 touch-manipulation cursor-pointer ${
+                                    isCurrentToday
+                                      ? 'bg-amber-400 text-slate-950 ring-4 ring-amber-400/25 shadow-lg shadow-amber-400/30 scale-110 hover:brightness-110'
+                                      : isCompleted
+                                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 hover:bg-emerald-500/30'
+                                      : 'bg-slate-800 text-slate-400 border border-slate-700/80 hover:border-slate-600'
+                                  }`}
+                                  title={`Ver etapa ${step.code} (${step.formattedDate}) na Agenda`}
+                                >
+                                  {isCompleted ? (
+                                    <Check className="w-3.5 h-3.5 stroke-3" />
+                                  ) : (
+                                    step.code
+                                  )}
+                                </button>
+
+                                {/* Step Code / Date */}
+                                <div className="text-center mt-1">
+                                  <span className={`block text-[9px] font-mono leading-none ${
+                                    isCurrentToday
+                                      ? 'text-amber-300 font-bold'
+                                      : isCompleted
+                                      ? 'text-emerald-400/90'
+                                      : 'text-slate-400'
+                                  }`}>
+                                    {step.formattedDate}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Connecting Line */}
+                              {idx < progress.steps.length - 1 && (
+                                <div className="flex-1 mx-1.5 h-0.5 relative -mt-3.5">
+                                  <div className="w-full h-full bg-slate-800 rounded-full" />
+                                  <div
+                                    className={`absolute top-0 left-0 h-full rounded-full transition-all duration-300 ${
+                                      isCompleted
+                                        ? 'bg-emerald-500 w-full'
+                                        : isCurrentToday
+                                        ? 'bg-linear-to-r from-amber-400 to-slate-800 w-1/2'
+                                        : 'w-0'
+                                    }`}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="pt-2 border-t border-slate-800 grid grid-cols-3 gap-2 text-center text-xs">
                   <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
@@ -439,6 +695,105 @@ export default function LotsPage() {
                 </div>
               ))}
             </div>
+
+            {/* Timeline dos Manejos / Stepper no Modal */}
+            {(() => {
+              const modalProgress = computeLotProgress(selectedLot, managementEvents, protocols);
+              if (modalProgress.steps.length === 0) return null;
+              return (
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="text-slate-300 font-semibold flex items-center gap-2">
+                      <Syringe className="w-4 h-4 text-emerald-400" />
+                      Cronograma e Manejo Atual do Lote
+                    </span>
+                    <span className={`text-xs font-semibold px-2.5 py-1 rounded-lg border flex items-center gap-1.5 ${modalProgress.badgeStyle}`}>
+                      {modalProgress.isToday && (
+                        <span className="relative flex h-2 w-2">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                        </span>
+                      )}
+                      {modalProgress.badgeText}
+                    </span>
+                  </div>
+
+                  <div className="pt-2 pb-1 px-2">
+                    <div className="flex items-center justify-between relative">
+                      {modalProgress.steps.map((step, idx) => {
+                        const isCompleted = step.status === 'completed';
+                        const isCurrentToday = step.status === 'today';
+
+                        return (
+                          <div key={step.code + idx} className="flex-1 flex items-center last:flex-none">
+                            <div className="flex flex-col items-center group/step relative">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  router.push(`/agenda?date=${step.date}&lot=${encodeURIComponent(selectedLot.code)}`);
+                                }}
+                                className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-extrabold transition-all duration-300 cursor-pointer touch-manipulation ${
+                                  isCurrentToday
+                                    ? 'bg-amber-400 text-slate-950 ring-4 ring-amber-400/30 shadow-lg shadow-amber-400/40 scale-110'
+                                    : isCompleted
+                                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 hover:bg-emerald-500/30'
+                                    : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                                }`}
+                                title={`Abrir etapa ${step.code} (${step.formattedDate}) na Agenda`}
+                              >
+                                {isCompleted ? (
+                                  <Check className="w-4 h-4 stroke-3" />
+                                ) : (
+                                  step.code
+                                )}
+                              </button>
+
+                              <div className="text-center mt-1.5">
+                                <span className="block text-[11px] font-bold text-slate-200">
+                                  {step.code}
+                                </span>
+                                <span className="block text-[10px] text-slate-400 font-mono">
+                                  {step.formattedDate}
+                                </span>
+                              </div>
+                            </div>
+
+                            {idx < modalProgress.steps.length - 1 && (
+                              <div className="flex-1 mx-2 h-0.5 relative -mt-6">
+                                <div className="w-full h-full bg-slate-800 rounded-full" />
+                                <div
+                                  className={`absolute top-0 left-0 h-full rounded-full transition-all duration-300 ${
+                                    isCompleted
+                                      ? 'bg-emerald-500 w-full'
+                                      : isCurrentToday
+                                      ? 'bg-linear-to-r from-amber-400 to-slate-800 w-1/2'
+                                      : 'w-0'
+                                  }`}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Botão de Ação Rápida para o Veterinário em Campo */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetDate = modalProgress.currentStepDate || selectedLot.start_date;
+                      router.push(`/agenda?date=${targetDate}&lot=${encodeURIComponent(selectedLot.code)}`);
+                    }}
+                    className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-slate-950 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md glow-emerald transition-all cursor-pointer touch-manipulation"
+                  >
+                    <Calendar className="w-4 h-4" />
+                    Abrir Manejo do Lote na Agenda de Campo
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
+              );
+            })()}
 
             {/* Animal Table with Top Bar & Add Button */}
             <div className="space-y-3">

@@ -1,7 +1,16 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { getOrgMetrics, getLots, getSemenBatches, type OrgMetrics, type LotStat, type SemenBatch } from '@/lib/db';
+import { useEffect, useState, useMemo } from 'react';
+import {
+  getOrgMetrics,
+  getLots,
+  getSemenBatches,
+  getFarms,
+  type OrgMetrics,
+  type LotStat,
+  type SemenBatch,
+  type Farm,
+} from '@/lib/db';
 import {
   TrendingUp,
   CheckCircle2,
@@ -10,9 +19,14 @@ import {
   Layers,
   Dna,
   BarChart3,
-  Award,
   ArrowUpRight,
   RefreshCw,
+  Building2,
+  Package,
+  ArrowRight,
+  Sparkles,
+  MapPin,
+  User,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -20,19 +34,109 @@ export default function DashboardPage() {
   const [metrics, setMetrics] = useState<OrgMetrics | null>(null);
   const [lots, setLots] = useState<LotStat[]>([]);
   const [semenBatches, setSemenBatches] = useState<SemenBatch[]>([]);
+  const [farms, setFarms] = useState<Farm[]>([]);
+  const [activeFarmId, setActiveFarmId] = useState<string>('all');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let mounted = true;
     async function load() {
       setLoading(true);
-      const [m, l, s] = await Promise.all([getOrgMetrics(), getLots(), getSemenBatches()]);
+      const [m, l, s, f] = await Promise.all([
+        getOrgMetrics(),
+        getLots(),
+        getSemenBatches(),
+        getFarms(),
+      ]);
+      if (!mounted) return;
       setMetrics(m);
       setLots(l);
       setSemenBatches(s);
+      setFarms(f);
+
+      const savedFarm = typeof window !== 'undefined' ? localStorage.getItem('iatf_active_farm_id') : null;
+      if (savedFarm) {
+        setActiveFarmId(savedFarm);
+      }
       setLoading(false);
     }
     load();
+
+    const handleFarmChanged = (e: Event) => {
+      const customEvent = e as CustomEvent<{ farmId: string }>;
+      if (customEvent.detail?.farmId) {
+        setActiveFarmId(customEvent.detail.farmId);
+      }
+    };
+    window.addEventListener('iatf_farm_changed', handleFarmChanged);
+
+    return () => {
+      mounted = false;
+      window.removeEventListener('iatf_farm_changed', handleFarmChanged);
+    };
   }, []);
+
+  const handleSelectFarm = (farmId: string) => {
+    setActiveFarmId(farmId);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('iatf_active_farm_id', farmId);
+      window.dispatchEvent(new CustomEvent('iatf_farm_changed', { detail: { farmId } }));
+    }
+  };
+
+  const selectedFarm = farms.find((f) => f.id === activeFarmId);
+
+  // Compute stats for each farm
+  const farmStats = useMemo(() => {
+    return farms.map((farm) => {
+      const farmLotsList = lots.filter(
+        (l) =>
+          l.farm_name === farm.name ||
+          l.farm_name?.toLowerCase() === farm.name.toLowerCase() ||
+          l.property_name === farm.name ||
+          (farms.length === 1) // fallback if only 1 farm
+      );
+
+      const totalLots = farmLotsList.length;
+      const totalWorked = farmLotsList.reduce((acc, l) => acc + (l.worked_qty || 0), 0);
+      const totalInseminated = farmLotsList.reduce((acc, l) => acc + (l.inseminated_qty || 0), 0);
+      const totalPregnancies = farmLotsList.reduce((acc, l) => acc + (l.pregnancies || 0), 0);
+      const totalEmpty = farmLotsList.reduce((acc, l) => acc + (l.empty_count || 0), 0);
+      const rate = totalInseminated > 0 ? (totalPregnancies / totalInseminated) * 100 : 0;
+      const dosesUsed = totalInseminated;
+
+      return {
+        farm,
+        totalLots,
+        totalWorked,
+        totalInseminated,
+        totalPregnancies,
+        totalEmpty,
+        rate,
+        dosesUsed,
+        lots: farmLotsList,
+      };
+    });
+  }, [farms, lots]);
+
+  // Total semen balance available across batches
+  const totalSemenAvailable = useMemo(() => {
+    return semenBatches.reduce(
+      (acc, b) => acc + Math.max(0, b.initial_quantity - b.used_quantity - b.lost_quantity),
+      0
+    );
+  }, [semenBatches]);
+
+  // Filter lots based on selected farm
+  const displayedLots = useMemo(() => {
+    if (activeFarmId === 'all' || !selectedFarm) return lots;
+    return lots.filter(
+      (l) =>
+        l.farm_name === selectedFarm.name ||
+        l.farm_name?.toLowerCase() === selectedFarm.name.toLowerCase() ||
+        l.property_name === selectedFarm.name
+    );
+  }, [lots, activeFarmId, selectedFarm]);
 
   if (loading) {
     return (
@@ -45,12 +149,29 @@ export default function DashboardPage() {
     );
   }
 
-  const overallRate = metrics?.overall_pregnancy_rate ?? 0;
-  const totalPregnancies = metrics?.total_pregnancies ?? 0;
-  const totalDiagnoses = metrics?.total_diagnoses ?? 0;
-  const totalAnimals = metrics?.total_animals ?? 0;
-  const activeLots = metrics?.active_lots ?? 0;
-  const totalInseminations = metrics?.total_inseminations ?? 0;
+  // Active farm stats if filtered
+  const activeFarmStat = farmStats.find((fs) => fs.farm.id === activeFarmId);
+
+  const overallRate = activeFarmId !== 'all' && activeFarmStat
+    ? activeFarmStat.rate
+    : (metrics?.overall_pregnancy_rate ?? 0);
+
+  const totalPregnancies = activeFarmId !== 'all' && activeFarmStat
+    ? activeFarmStat.totalPregnancies
+    : (metrics?.total_pregnancies ?? 0);
+
+  const totalDiagnoses = activeFarmId !== 'all' && activeFarmStat
+    ? activeFarmStat.totalInseminated
+    : (metrics?.total_diagnoses ?? 0);
+
+  const totalAnimals = activeFarmId !== 'all' && activeFarmStat
+    ? activeFarmStat.totalWorked
+    : (metrics?.total_animals ?? 0);
+
+  const activeLotsCount = displayedLots.length;
+  const totalInseminations = activeFarmId !== 'all' && activeFarmStat
+    ? activeFarmStat.totalInseminated
+    : (metrics?.total_inseminations ?? 0);
   const deviceLosses = metrics?.total_device_losses ?? 0;
 
   return (
@@ -59,40 +180,56 @@ export default function DashboardPage() {
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-linear-to-r from-slate-900 via-slate-800 to-emerald-950/60 p-6 rounded-2xl border border-slate-800 shadow-xl">
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2">
-             Painel de Controle Reprodutivo IATF
+            Painel de Controle Reprodutivo IATF
           </h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Estação Reprodutiva <span className="text-emerald-400 font-semibold">2025/2026</span> • Fazenda Boi Gordo
-            <span className="ml-2 inline-flex items-center gap-1 text-xs text-emerald-500 font-semibold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+          <div className="flex flex-wrap items-center gap-2 text-sm text-slate-400 mt-1">
+            <span>Estação Reprodutiva <span className="text-emerald-400 font-semibold">2025/2026</span></span>
+            <span>•</span>
+            <span className="font-semibold text-slate-200">
+              {selectedFarm ? selectedFarm.name : 'Todas as Fazendas'}
+            </span>
+            {selectedFarm && (
+              <button
+                onClick={() => handleSelectFarm('all')}
+                className="text-xs text-emerald-400 hover:text-emerald-300 underline font-medium cursor-pointer ml-1"
+              >
+                (Ver Todas)
+              </button>
+            )}
+            <span className="inline-flex items-center gap-1 text-xs text-emerald-500 font-semibold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full ml-1">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse" />
               Supabase Live
             </span>
-          </p>
+          </div>
         </div>
+
         <div className="flex items-center gap-3">
           <Link
             href="/agenda"
-            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all shadow-lg glow-emerald text-sm"
+            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all shadow-lg glow-emerald text-sm cursor-pointer"
           >
             <Calendar className="w-4 h-4" />
-            Agenda de Campo (Manejos)
+            Agenda de Campo
           </Link>
           <Link
-            href="/import"
-            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium px-4 py-2.5 rounded-xl border border-slate-700 transition-all text-sm"
+            href="/lots"
+            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium px-4 py-2.5 rounded-xl border border-slate-700 transition-all text-sm cursor-pointer"
           >
-            Importar Excel
+            <Layers className="w-4 h-4" />
+            Lotes de IATF
           </Link>
         </div>
       </div>
 
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* KPI 1: Taxa de Prenhez Geral */}
+        {/* KPI 1: Taxa de Prenhez */}
         <div className="glass-card p-5 rounded-2xl border border-emerald-500/30 bg-slate-900/60 relative overflow-hidden group hover:border-emerald-500/50 transition-all">
           <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-full blur-2xl group-hover:bg-emerald-500/20 transition-all"></div>
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Taxa de Prenhez Geral</span>
+            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+              {selectedFarm ? `Taxa Prenhez (${selectedFarm.name})` : 'Taxa de Prenhez Geral'}
+            </span>
             <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400">
               <TrendingUp className="w-5 h-5" />
             </div>
@@ -101,7 +238,6 @@ export default function DashboardPage() {
             <div className="text-3xl font-extrabold text-white tracking-tight">
               {overallRate.toFixed(1)}%
             </div>
-            {/* RN-10: Always show absolute + percentage */}
             <p className="text-xs font-medium text-emerald-400 mt-1 flex items-center gap-1">
               <CheckCircle2 className="w-3.5 h-3.5" />
               <span>{totalPregnancies} prenhas / {totalDiagnoses} diagnosticadas</span>
@@ -122,7 +258,7 @@ export default function DashboardPage() {
               {totalAnimals}
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Em <strong className="text-slate-200">{activeLots}</strong> lotes ativos
+              Em <strong className="text-slate-200">{activeLotsCount}</strong> lotes {selectedFarm ? 'da fazenda' : 'ativos'}
             </p>
           </div>
         </div>
@@ -164,97 +300,169 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Main Charts & Analytics Grid */}
+      {/* Main Grid: Taxa de Prenhez por Fazenda & Estoque de Sêmen por Fazenda */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Desempenho por Lote */}
+        
+        {/* BLOCO 1: Taxa de Prenhez por Fazenda */}
         <div className="lg:col-span-2 glass-card p-6 rounded-2xl border border-slate-800 space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                <Layers className="w-5 h-5 text-emerald-400" />
-                Taxa de Prenhez por Lote de IATF
+                <Building2 className="w-5 h-5 text-emerald-400" />
+                Taxa de Prenhez por Fazenda
               </h2>
-              <p className="text-xs text-slate-400">Resultado dos diagnósticos ultrassonográficos por lote</p>
+              <p className="text-xs text-slate-400">Desempenho reprodutivo consolidado de cada propriedade</p>
             </div>
-            <Link href="/lots" className="text-xs font-semibold text-emerald-400 hover:underline flex items-center gap-1">
-              Ver todos <ArrowUpRight className="w-3.5 h-3.5" />
-            </Link>
+            {selectedFarm && (
+              <button
+                onClick={() => handleSelectFarm('all')}
+                className="text-xs font-semibold text-emerald-400 hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                Ver Todas <ArrowUpRight className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
-          {lots.length === 0 ? (
-            <p className="text-sm text-slate-400 text-center py-8">Nenhum lote cadastrado ainda.</p>
+          {farmStats.length === 0 ? (
+            <p className="text-sm text-slate-400 text-center py-8">Nenhuma fazenda cadastrada ainda.</p>
           ) : (
             <div className="space-y-3 pt-2">
-              {lots.map((lot) => (
-                <div key={lot.id} className="space-y-1.5 p-3 rounded-xl bg-slate-900/80 border border-slate-800/80 hover:border-slate-700 transition-all">
-                  <div className="flex items-center justify-between text-xs sm:text-sm">
-                    <div className="flex items-center space-x-2">
-                      <span className="font-bold text-white">{lot.code}</span>
-                      <span className="text-slate-400">({lot.property_name ?? lot.farm_name})</span>
-                      <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">D0: {lot.start_date}</span>
+              {farmStats.map(({ farm, totalLots, totalInseminated, totalPregnancies, rate }) => {
+                const isSelected = activeFarmId === farm.id;
+                return (
+                  <div
+                    key={farm.id}
+                    onClick={() => handleSelectFarm(farm.id)}
+                    className={`p-4 rounded-xl border transition-all cursor-pointer space-y-2.5 ${
+                      isSelected
+                        ? 'bg-slate-900 border-emerald-500/60 shadow-lg shadow-emerald-500/10 ring-1 ring-emerald-400/30'
+                        : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 hover:bg-slate-900'
+                    }`}
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="font-extrabold text-base text-white hover:text-emerald-400 transition-colors">
+                            {farm.name}
+                          </span>
+                          {isSelected && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                              Ativa
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
+                          {(farm.city || farm.state) && (
+                            <span className="flex items-center gap-1">
+                              <MapPin className="w-3 h-3 text-slate-500" />
+                              {[farm.city, farm.state].filter(Boolean).join(' - ')}
+                            </span>
+                          )}
+                          {farm.technical_responsible && (
+                            <span className="flex items-center gap-1">
+                              <User className="w-3 h-3 text-slate-500" />
+                              {farm.technical_responsible}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="text-left sm:text-right">
+                        <div className="text-lg font-black text-emerald-400">
+                          {rate.toFixed(1)}%
+                        </div>
+                        <span className="text-xs text-slate-400">
+                          {totalPregnancies} prenhas / {totalInseminated} inseminadas • {totalLots} lotes
+                        </span>
+                      </div>
                     </div>
-                    <div className="text-right font-bold text-emerald-400">
-                      {lot.pregnancy_rate.toFixed(1)}%{' '}
-                      <span className="text-xs text-slate-400 font-normal">({lot.pregnancies}/{lot.inseminated_qty})</span>
+
+                    {/* Progress Bar */}
+                    <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                      <div
+                        className="bg-linear-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-500"
+                        style={{ width: `${rate}%` }}
+                      />
+                    </div>
+
+                    {/* Link / CTA para abrir o Workflow da Fazenda */}
+                    <div className="pt-1 flex items-center justify-between text-xs border-t border-slate-800/60">
+                      <span className="text-slate-400">
+                        {totalLots > 0 ? `${totalLots} lotes registrados` : 'Nenhum lote criado'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSelectFarm(farm.id);
+                        }}
+                        className="font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer transition-colors"
+                      >
+                        <span>{isSelected ? 'Workflow Ativo no Painel' : 'Abrir Workflow desta Fazenda'}</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
-                  <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
-                    <div
-                      className="bg-linear-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-500"
-                      style={{ width: `${lot.pregnancy_rate}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
 
-        {/* Estoque de Sêmen */}
+        {/* BLOCO 2: Estoque de Sêmen por Fazenda */}
         <div className="glass-card p-6 rounded-2xl border border-slate-800 space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                <Award className="w-5 h-5 text-amber-400" />
-                Estoque de Sêmen
+                <Package className="w-5 h-5 text-amber-400" />
+                Estoque de Sêmen por Fazenda
               </h2>
-              <p className="text-xs text-slate-400">Palhetas e saldo por touro</p>
+              <p className="text-xs text-slate-400">Consumo e disponibilidade nas propriedades</p>
             </div>
-            <Link href="/inputs" className="text-xs text-slate-400 hover:text-white">Estoque</Link>
+            <Link href="/inputs" className="text-xs text-slate-400 hover:text-white cursor-pointer">
+              Gerenciar Estoque
+            </Link>
           </div>
 
           <div className="space-y-3 pt-1">
-            {semenBatches.map((batch) => {
-              const current = batch.initial_quantity - batch.used_quantity - batch.lost_quantity;
-              const pct = batch.initial_quantity > 0 ? (current / batch.initial_quantity) * 100 : 0;
+            {farmStats.map(({ farm, dosesUsed }) => {
+              const isSelected = activeFarmId === farm.id;
               return (
-                <div key={batch.id} className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">
+                <div
+                  key={farm.id}
+                  onClick={() => handleSelectFarm(farm.id)}
+                  className={`p-3.5 rounded-xl border space-y-2 cursor-pointer transition-all ${
+                    isSelected
+                      ? 'bg-slate-900 border-amber-500/50 ring-1 ring-amber-400/25'
+                      : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
                   <div className="flex items-center justify-between">
-                    <span className="font-semibold text-xs text-slate-200 truncate max-w-40">{batch.bulls?.name}</span>
-                    <span className="text-xs font-mono bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded">
-                      {batch.batch_number}
+                    <span className="font-bold text-xs text-white truncate max-w-44 flex items-center gap-1.5">
+                      <Building2 className="w-3.5 h-3.5 text-slate-400" />
+                      {farm.name}
+                    </span>
+                    <span className="text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded">
+                      Botijão Ativo
                     </span>
                   </div>
-                  <div className="grid grid-cols-3 gap-2 text-center text-xs pt-1 border-t border-slate-800">
+
+                  <div className="grid grid-cols-2 gap-2 text-center text-xs pt-1 border-t border-slate-800/80">
                     <div>
-                      <span className="text-slate-500 text-[10px] block">USADAS</span>
-                      <span className="font-bold text-slate-300">{batch.used_quantity}</span>
+                      <span className="text-slate-500 text-[10px] block">DOSES APLICADAS</span>
+                      <span className="font-bold text-slate-200">{dosesUsed}</span>
                     </div>
                     <div>
-                      <span className="text-slate-500 text-[10px] block">PERDAS</span>
-                      <span className="font-bold text-rose-400">{batch.lost_quantity}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-500 text-[10px] block">SALDO</span>
-                      <span className={`font-bold ${current < 10 ? 'text-amber-400' : 'text-emerald-400'}`}>{current}</span>
+                      <span className="text-slate-500 text-[10px] block">SALDO BOTIJÃO</span>
+                      <span className="font-bold text-emerald-400">{totalSemenAvailable}</span>
                     </div>
                   </div>
-                  {/* Stock level bar */}
-                  <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all ${pct < 20 ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                      style={{ width: `${pct}%` }}
-                    />
+
+                  <div className="pt-1 flex items-center justify-between text-[11px] text-slate-400">
+                    <span>{farm.technical_responsible || 'Responsável Técnico'}</span>
+                    <span className="text-emerald-400 font-semibold flex items-center gap-1 hover:underline">
+                      Ver Workflow <ArrowRight className="w-3 h-3" />
+                    </span>
                   </div>
                 </div>
               );
@@ -262,6 +470,94 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* BLOCO 3: Painel de Workflow da Fazenda Selecionada */}
+      {selectedFarm && (
+        <div className="glass-card p-6 rounded-2xl border border-emerald-500/40 bg-slate-900/90 shadow-xl space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-bold border border-emerald-500/30 flex items-center gap-1">
+                  <Sparkles className="w-3 h-3" />
+                  Workflow Ativo
+                </span>
+                <h3 className="text-xl font-bold text-white tracking-tight">
+                  {selectedFarm.name}
+                </h3>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                Acompanhamento operacional, lotes de IATF e agenda de campo desta fazenda
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href="/lots"
+                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md glow-emerald transition-all cursor-pointer"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                Lotes desta Fazenda
+                <ArrowRight className="w-3 h-3" />
+              </Link>
+              <Link
+                href="/agenda"
+                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs border border-slate-700 flex items-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                Agenda de Manejos
+              </Link>
+              <button
+                onClick={() => handleSelectFarm('all')}
+                className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white text-xs border border-slate-800 transition-colors cursor-pointer"
+              >
+                Ver Todas
+              </button>
+            </div>
+          </div>
+
+          {/* Lotes vinculados a esta fazenda */}
+          <div className="space-y-3">
+            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+              Lotes em Operação ({displayedLots.length})
+            </h4>
+
+            {displayedLots.length === 0 ? (
+              <p className="text-xs text-slate-500 py-4 text-center">
+                Nenhum lote cadastrado para esta fazenda ainda.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {displayedLots.map((lot) => (
+                  <div
+                    key={lot.id}
+                    className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800/80 hover:border-slate-700 transition-all space-y-2"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-sm text-white">{lot.code}</span>
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        {lot.pregnancy_rate.toFixed(1)}% Prenhez
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-400 space-y-0.5">
+                      <p>Protocolo: <strong className="text-slate-300">{lot.protocol_name || 'Padrão'}</strong></p>
+                      <p>D0: <strong className="text-slate-300">{lot.start_date}</strong> {lot.ia_planned_date && `• IA: ${lot.ia_planned_date}`}</p>
+                    </div>
+                    <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
+                      <span className="text-slate-500 text-[11px]">{lot.worked_qty} matrizes</span>
+                      <Link
+                        href="/lots"
+                        className="text-emerald-400 hover:underline flex items-center gap-1 font-semibold text-[11px]"
+                      >
+                        Abrir Lote <ArrowRight className="w-3 h-3" />
+                      </Link>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

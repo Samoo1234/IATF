@@ -57,6 +57,7 @@ export default function AgendaPage() {
   
   // Date State
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
+  const [selectedDateStr, setSelectedDateStr] = useState<string | null>(null);
   const [view, setView] = useState<CalendarView>('month');
   
   // Filters
@@ -106,6 +107,35 @@ export default function AgendaPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Capturar parâmetros da URL quando o veterinário vem da tela de Lotes (Mobile/Desktop)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const dateParam = params.get('date');
+    const lotParam = params.get('lot');
+    const viewParam = params.get('view') as CalendarView | null;
+
+    if (dateParam) {
+      const parsedDate = new Date(dateParam + 'T00:00:00');
+      if (!isNaN(parsedDate.getTime())) {
+        setCurrentDate(parsedDate);
+        setSelectedDateStr(dateParam);
+      }
+    }
+
+    if (lotParam) {
+      setSearchQuery(lotParam);
+    }
+
+    // Em dispositivos móveis no campo (< 768px), foca na visualização de 'day' (Dia) para ergonomia
+    if (viewParam && ['month', 'week', 'day', 'list'].includes(viewParam)) {
+      setView(viewParam);
+    } else if (dateParam) {
+      const isMobile = window.innerWidth < 768;
+      setView(isMobile ? 'day' : 'month');
+    }
+  }, []);
 
   // Quick navigation
   const goToday = () => setCurrentDate(new Date());
@@ -432,6 +462,22 @@ export default function AgendaPage() {
         </div>
       </header>
 
+      {/* Active Filter Chip Bar (Mobile & Desktop) */}
+      {searchQuery && (
+        <div className="bg-emerald-950/50 border-b border-emerald-500/20 px-4 py-2 flex items-center justify-between text-xs text-emerald-300">
+          <span className="flex items-center gap-2 font-medium">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            Filtrando agenda para: <strong className="text-white font-bold">{searchQuery}</strong>
+          </span>
+          <button
+            onClick={() => setSearchQuery('')}
+            className="text-[11px] bg-emerald-500/20 hover:bg-emerald-500/30 px-2.5 py-0.5 rounded-lg border border-emerald-500/40 flex items-center gap-1 cursor-pointer transition-colors text-emerald-200"
+          >
+            Limpar filtro <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* ========================================================================= */}
       {/* 2. BODY: SIDEBAR + CALENDAR MAIN GRID */}
       {/* ========================================================================= */}
@@ -598,25 +644,47 @@ export default function AgendaPage() {
                 {monthGridDays.map((d, idx) => {
                   const dayEvents = eventsByDate[d.dateStr] || [];
                   const isToday = d.dateStr === todayStr;
+                  const isSelectedDate = d.dateStr === selectedDateStr;
 
                   return (
                     <div
                       key={idx}
-                      onClick={() => openCreateForDate(d.dateStr, '08:00')}
-                      className={`min-h-27.5 p-1.5 border-b border-r border-slate-800/60 transition-colors flex flex-col justify-between group relative cursor-pointer ${
-                        d.isCurrentMonth ? 'bg-slate-950/40 hover:bg-slate-900/50' : 'bg-slate-950/90 opacity-40 hover:opacity-60'
+                      onClick={() => {
+                        setSelectedDateStr(d.dateStr);
+                        setCurrentDate(d.date);
+                        if (window.innerWidth < 768) {
+                          setView('day');
+                        } else {
+                          openCreateForDate(d.dateStr, '08:00');
+                        }
+                      }}
+                      className={`min-h-27.5 p-1.5 border-b border-r border-slate-800/60 transition-all flex flex-col justify-between group relative cursor-pointer ${
+                        isSelectedDate
+                          ? 'ring-2 ring-emerald-400 bg-emerald-950/40 z-10'
+                          : d.isCurrentMonth
+                          ? 'bg-slate-950/40 hover:bg-slate-900/50'
+                          : 'bg-slate-950/90 opacity-40 hover:opacity-60'
                       }`}
                     >
                       {/* Top Day Number */}
                       <div className="flex items-center justify-between mb-1">
                         <span
-                          className={`text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center ${
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setCurrentDate(d.date);
+                            setSelectedDateStr(d.dateStr);
+                            setView('day');
+                          }}
+                          className={`text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center transition-transform hover:scale-110 cursor-pointer ${
                             isToday
                               ? 'bg-emerald-500 text-slate-950 font-black shadow-sm'
+                              : isSelectedDate
+                              ? 'bg-emerald-400 text-slate-950 font-extrabold ring-2 ring-emerald-300'
                               : d.isCurrentMonth
-                              ? 'text-slate-300'
+                              ? 'text-slate-300 hover:text-white hover:bg-slate-800'
                               : 'text-slate-600'
                           }`}
+                          title="Toque para abrir a visão deste Dia"
                         >
                           {d.dayNum}
                         </span>
