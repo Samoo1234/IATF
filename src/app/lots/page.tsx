@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   getLots,
@@ -8,6 +8,7 @@ import {
   getProtocols,
   getProperties,
   createLot,
+  updateLotCode,
   addAnimalsToLot,
   removeAnimalFromLot,
   getAvailableAnimalsForLot,
@@ -42,6 +43,7 @@ import {
   ArrowRight,
   Syringe,
   Calendar,
+  Pencil,
 } from 'lucide-react';
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
@@ -244,6 +246,54 @@ export default function LotsPage() {
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setToast({ text, type });
     setTimeout(() => setToast(null), 4500);
+  };
+
+  // Inline Lot Code Editing
+  const [editingLotId, setEditingLotId] = useState<string | null>(null);
+  const [editingLotCode, setEditingLotCode] = useState('');
+  const [savingLotId, setSavingLotId] = useState<string | null>(null);
+  const isCancellingRef = useRef(false);
+
+  const handleStartEditLot = (e: React.MouseEvent, lotId: string, currentCode: string) => {
+    e.stopPropagation();
+    isCancellingRef.current = false;
+    setEditingLotId(lotId);
+    setEditingLotCode(currentCode);
+  };
+
+  const handleSaveLotCode = async (lotId: string, originalCode: string) => {
+    if (isCancellingRef.current) {
+      isCancellingRef.current = false;
+      return;
+    }
+
+    const trimmed = editingLotCode.trim();
+    if (!trimmed) {
+      showToast('O nome do lote não pode ficar em branco.', 'error');
+      setEditingLotId(null);
+      return;
+    }
+
+    if (trimmed === originalCode) {
+      setEditingLotId(null);
+      return;
+    }
+
+    setSavingLotId(lotId);
+    const res = await updateLotCode(lotId, trimmed);
+    setSavingLotId(null);
+    setEditingLotId(null);
+
+    if (res.success) {
+      setLots((prev) =>
+        prev.map((l) => (l.id === lotId ? { ...l, code: trimmed } : l))
+      );
+      showToast(`Nome do lote alterado para "${trimmed}" com sucesso!`);
+      loadLots();
+    } else {
+      showToast(res.error || 'Erro ao atualizar nome do lote.', 'error');
+      loadLots();
+    }
   };
 
   const loadLots = useCallback(async () => {
@@ -535,9 +585,47 @@ export default function LotsPage() {
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2">
-                    <span className="font-extrabold text-lg text-white group-hover:text-emerald-400 transition-colors">
-                      {lot.code}
-                    </span>
+                    {editingLotId === lot.id ? (
+                      <div
+                        className="flex items-center gap-1.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="text"
+                          value={editingLotCode}
+                          onChange={(e) => setEditingLotCode(e.target.value)}
+                          onBlur={() => handleSaveLotCode(lot.id, lot.code)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleSaveLotCode(lot.id, lot.code);
+                            } else if (e.key === 'Escape') {
+                              e.preventDefault();
+                              isCancellingRef.current = true;
+                              setEditingLotId(null);
+                            }
+                          }}
+                          disabled={savingLotId === lot.id}
+                          autoFocus
+                          className="bg-slate-950 border-2 border-emerald-500 text-white font-extrabold text-base sm:text-lg px-2.5 py-0.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/40 w-40 sm:w-52 transition-all shadow-lg"
+                          placeholder="Nome do lote..."
+                        />
+                        {savingLotId === lot.id && (
+                          <RefreshCw className="w-4 h-4 animate-spin text-emerald-400 shrink-0" />
+                        )}
+                      </div>
+                    ) : (
+                      <div
+                        onClick={(e) => handleStartEditLot(e, lot.id, lot.code)}
+                        className="group/title flex items-center gap-1.5 cursor-pointer hover:bg-slate-800/70 px-1.5 py-0.5 -ml-1.5 rounded-lg transition-colors"
+                        title="Clique para editar o nome do lote"
+                      >
+                        <span className="font-extrabold text-lg text-white group-hover/title:text-emerald-400 transition-colors">
+                          {lot.code}
+                        </span>
+                        <Pencil className="w-3.5 h-3.5 text-slate-500 opacity-60 group-hover/title:opacity-100 group-hover/title:text-emerald-400 transition-all shrink-0" />
+                      </div>
+                    )}
                     <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
                       {lot.property_name ?? lot.farm_name}
                     </span>
@@ -701,10 +789,55 @@ export default function LotsPage() {
           <div className="glass-card w-full max-w-4xl max-h-[90vh] rounded-2xl border border-slate-700 bg-slate-900 p-6 overflow-y-auto space-y-6">
             <div className="flex items-center justify-between border-b border-slate-800 pb-4">
               <div>
-                <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                  <Layers className="w-5 h-5 text-emerald-400" />
-                  Ficha do Lote: {selectedLot.code} ({selectedLot.property_name})
-                </h2>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Layers className="w-5 h-5 text-emerald-400 shrink-0" />
+                  <span className="text-xl font-bold text-white">Ficha do Lote:</span>
+                  {editingLotId === selectedLot.id ? (
+                    <div
+                      className="flex items-center gap-1.5"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="text"
+                        value={editingLotCode}
+                        onChange={(e) => setEditingLotCode(e.target.value)}
+                        onBlur={() => handleSaveLotCode(selectedLot.id, selectedLot.code)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleSaveLotCode(selectedLot.id, selectedLot.code);
+                          } else if (e.key === 'Escape') {
+                            e.preventDefault();
+                            isCancellingRef.current = true;
+                            setEditingLotId(null);
+                          }
+                        }}
+                        disabled={savingLotId === selectedLot.id}
+                        autoFocus
+                        className="bg-slate-950 border-2 border-emerald-500 text-white font-extrabold text-lg px-2.5 py-0.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/40 w-48 sm:w-60 transition-all shadow-lg"
+                        placeholder="Nome do lote..."
+                      />
+                      {savingLotId === selectedLot.id && (
+                        <RefreshCw className="w-4 h-4 animate-spin text-emerald-400 shrink-0" />
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={(e) => handleStartEditLot(e, selectedLot.id, selectedLot.code)}
+                      className="group/modal-title flex items-center gap-1.5 hover:bg-slate-800/80 px-2 py-0.5 -ml-1 rounded-lg transition-colors cursor-pointer text-left"
+                      title="Clique para editar o nome do lote"
+                    >
+                      <span className="text-xl font-bold text-white group-hover/modal-title:text-emerald-400 transition-colors">
+                        {selectedLot.code}
+                      </span>
+                      <Pencil className="w-4 h-4 text-slate-500 group-hover/modal-title:text-emerald-400 transition-colors shrink-0" />
+                    </button>
+                  )}
+                  {selectedLot.property_name && (
+                    <span className="text-sm font-normal text-slate-400">({selectedLot.property_name})</span>
+                  )}
+                </div>
                 <p className="text-xs text-slate-400 mt-0.5">
                   {selectedLot.protocol_name} • Responsável: {selectedLot.responsible_name}
                 </p>

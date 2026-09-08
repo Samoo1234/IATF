@@ -1230,6 +1230,39 @@ export async function createLot(lot: {
 }
 
 // ============================================================
+// UPDATE LOT CODE
+// ============================================================
+
+export async function updateLotCode(
+  lotId: string,
+  newCode: string
+): Promise<{ success: boolean; error?: string }> {
+  const cleanCode = newCode.trim();
+  if (!cleanCode) {
+    return { success: false, error: 'O nome do lote não pode ser vazio.' };
+  }
+
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('iatf_lots')
+    .update({
+      code: cleanCode,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', lotId);
+
+  if (error) {
+    console.error('updateLotCode error:', error);
+    return { success: false, error: error.message };
+  }
+
+  invalidateCache('lots');
+  invalidateCache('events');
+  invalidateCache('metrics');
+  return { success: true };
+}
+
+// ============================================================
 // FARMS & PROPERTIES
 // ============================================================
 
