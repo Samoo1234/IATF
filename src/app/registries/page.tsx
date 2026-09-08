@@ -49,6 +49,7 @@ export default function RegistriesPage() {
     reproductive_status: 'vazia',
     birth_date: '',
   });
+  const [modalAnimalError, setModalAnimalError] = useState<string | null>(null);
 
   const [bullForm, setBullForm] = useState({
     name: '',
@@ -130,6 +131,7 @@ export default function RegistriesPage() {
     setSaving(false);
 
     if (res.success) {
+      setModalAnimalError(null);
       setFeedbackMsg({ type: 'success', text: `Matriz Brinco ${animalForm.tag_number} cadastrada com sucesso!` });
       setShowAnimalModal(false);
       const farmToUse = activeFarmId || farms[0]?.id || '';
@@ -147,7 +149,9 @@ export default function RegistriesPage() {
       await loadAllData();
       setTimeout(() => setFeedbackMsg(null), 4000);
     } else {
-      setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao cadastrar matriz.' });
+      const errorText = res.error || 'Erro ao cadastrar matriz.';
+      setModalAnimalError(errorText);
+      setFeedbackMsg({ type: 'error', text: errorText });
     }
   };
 
@@ -583,6 +587,15 @@ export default function RegistriesPage() {
             </div>
 
             <form onSubmit={handleCreateAnimal} className="space-y-4">
+              {modalAnimalError && (
+                <div className="bg-rose-500/15 border border-rose-500/40 rounded-xl p-3.5 flex items-start gap-3 text-xs text-rose-200 animate-in fade-in slide-in-from-top-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <strong className="block text-rose-300 font-semibold mb-0.5">Aviso de Cadastro:</strong>
+                    <span>{modalAnimalError}</span>
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-400 mb-1.5">Número do Brinco *</label>

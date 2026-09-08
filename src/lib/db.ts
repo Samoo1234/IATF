@@ -475,7 +475,7 @@ export async function createAndAddAnimalToLot(
 
   let animalId = existingRows?.[0]?.id;
 
-  // 3. Se o animal já existe, verificar se já está vinculado a ESTE lote
+  // 3. Se o animal já existe nesta fazenda, informar que já está cadastrado
   if (animalId) {
     const { data: alreadyInLot } = await supabase
       .from('iatf_lot_animals')
@@ -487,9 +487,14 @@ export async function createAndAddAnimalToLot(
     if (alreadyInLot) {
       return {
         success: false,
-        error: `A matriz com brinco ${cleanTag} já está vinculada a este lote.`,
+        error: `A matriz com brinco "${cleanTag}" já está cadastrada e vinculada a este lote.`,
       };
     }
+
+    return {
+      success: false,
+      error: `Já existe uma matriz cadastrada com o brinco "${cleanTag}" nesta fazenda. Use a aba "Selecionar Existentes" para vinculá-la a este lote.`,
+    };
   }
 
   // 4. Se o animal não existe ainda, cadastrar na tabela 'animals'
@@ -513,45 +518,16 @@ export async function createAndAddAnimalToLot(
       .maybeSingle();
 
     if (createErr) {
-      // Caso ocorra conflito de chave única (já existe o brinco na mesma fazenda)
-      if (createErr.code === '23505') {
-        const { data: recoveryRows } = await supabase
-          .from('animals')
-          .select('id')
-          .eq('organization_id', targetOrgId)
-          .eq('farm_id', targetFarmId)
-          .ilike('tag_number', cleanTag)
-          .limit(1);
-
-        if (recoveryRows?.[0]?.id) {
-          animalId = recoveryRows[0].id;
-          // Verificar se já está no lote
-          const { data: alreadyLinked } = await supabase
-            .from('iatf_lot_animals')
-            .select('id')
-            .eq('lot_id', lotId)
-            .eq('animal_id', animalId)
-            .maybeSingle();
-
-          if (alreadyLinked) {
-            return {
-              success: false,
-              error: `A matriz com brinco ${cleanTag} já está cadastrada e vinculada a este lote.`,
-            };
-          }
-        } else {
-          return {
-            success: false,
-            error: `Já existe uma matriz cadastrada com o brinco ${cleanTag} nesta fazenda.`,
-          };
-        }
-      } else {
-        console.error('createAndAddAnimalToLot insert error:', createErr.message, createErr.details, createErr.hint, createErr.code);
-        return { success: false, error: createErr.message || 'Erro ao cadastrar matriz.' };
+      if (createErr.code === '23505' || createErr.message?.includes('unique constraint') || createErr.message?.includes('duplicate key')) {
+        return {
+          success: false,
+          error: `Já existe uma matriz cadastrada com o brinco "${cleanTag}" nesta fazenda.`,
+        };
       }
-    } else {
-      animalId = newAnimal?.id;
+      console.error('createAndAddAnimalToLot insert error:', createErr.message, createErr.details, createErr.hint, createErr.code);
+      return { success: false, error: createErr.message || 'Erro ao cadastrar matriz.' };
     }
+    animalId = newAnimal?.id;
   }
 
   if (!animalId) {
@@ -915,7 +891,13 @@ export async function createAnimal(animal: {
   });
 
   if (error) {
-    console.error('createAnimal error:', error);
+    console.error('createAnimal error:', error.message, error.details, error.code);
+    if (error.code === '23505' || error.message?.includes('unique constraint') || error.message?.includes('duplicate key')) {
+      return {
+        success: false,
+        error: `Já existe uma matriz cadastrada com o brinco "${animal.tag_number.trim()}" nesta fazenda.`,
+      };
+    }
     return { success: false, error: error.message };
   }
 

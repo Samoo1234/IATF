@@ -48,6 +48,7 @@ export default function AnimalsPage() {
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   // Form state
   const [animalForm, setAnimalForm] = useState({
@@ -152,6 +153,7 @@ export default function AnimalsPage() {
     setSaving(false);
 
     if (res.success) {
+      setModalError(null);
       setFeedbackMsg({ type: 'success', text: `Matriz Brinco ${animalForm.tag_number} cadastrada com sucesso!` });
       setShowModal(false);
       const farmToUse = activeFarmId || farms[0]?.id || '';
@@ -172,7 +174,9 @@ export default function AnimalsPage() {
       setAnimals(updated);
       setTimeout(() => setFeedbackMsg(null), 4000);
     } else {
-      setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao cadastrar matriz. Verifique se o brinco já existe nesta fazenda.' });
+      const errorText = res.error || 'Erro ao cadastrar matriz.';
+      setModalError(errorText);
+      setFeedbackMsg({ type: 'error', text: errorText });
     }
   };
 
@@ -231,7 +235,7 @@ export default function AnimalsPage() {
           </div>
 
           <button
-            onClick={() => setShowModal(true)}
+            onClick={() => { setModalError(null); setShowModal(true); }}
             className="flex items-center gap-2 bg-linear-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold px-4 py-2.5 rounded-xl text-sm transition-all shadow-md shadow-emerald-500/20"
           >
             <Plus className="w-4 h-4 stroke-3" />
@@ -454,6 +458,15 @@ export default function AnimalsPage() {
             </div>
 
             <form onSubmit={handleCreateAnimal} className="space-y-4">
+              {modalError && (
+                <div className="bg-rose-500/15 border border-rose-500/40 rounded-xl p-3.5 flex items-start gap-3 text-xs text-rose-200 animate-in fade-in slide-in-from-top-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <strong className="block text-rose-300 font-semibold mb-0.5">Aviso de Cadastro:</strong>
+                    <span>{modalError}</span>
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">

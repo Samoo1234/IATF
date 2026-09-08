@@ -236,6 +236,7 @@ export default function LotsPage() {
     category_id: '',
     reproductive_status: 'vazia',
   });
+  const [addModalError, setAddModalError] = useState<string | null>(null);
 
   // Feedback Toast
   const [toast, setToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -328,6 +329,7 @@ export default function LotsPage() {
     setSelectedAnimalIds([]);
     setAnimalSearch('');
     setAddMode('existing');
+    setAddModalError(null);
     const neloreBreed = breeds.find((b) => b.name.toLowerCase().includes('nelore'))?.id || breeds[0]?.id || '';
     setQuickAnimal({
       tag_number: '',
@@ -365,24 +367,29 @@ export default function LotsPage() {
 
   const handleLinkExistingAnimals = async () => {
     if (!selectedLotId || selectedAnimalIds.length === 0) return;
+    setAddModalError(null);
     setSubmittingAdd(true);
     const res = await addAnimalsToLot(selectedLotId, selectedAnimalIds);
     setSubmittingAdd(false);
 
     if (res.success) {
+      setAddModalError(null);
       showToast(`${selectedAnimalIds.length} matriz(es) vinculada(s) ao lote com sucesso!`);
       setShowAddModal(false);
       setSelectedAnimalIds([]);
       // Reload lot animals and metrics
       await Promise.all([handleSelectLot(selectedLotId), loadLots()]);
     } else {
-      showToast(res.error || 'Erro ao vincular matrizes.', 'error');
+      const errMsg = res.error || 'Erro ao vincular matrizes.';
+      setAddModalError(errMsg);
+      showToast(errMsg, 'error');
     }
   };
 
   const handleCreateAndAddQuick = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedLotId || !quickAnimal.tag_number.trim()) {
+      setAddModalError('Informe o número do brinco.');
       showToast('Informe o número do brinco.', 'error');
       return;
     }
@@ -390,6 +397,7 @@ export default function LotsPage() {
     const currentLot = lots.find((l) => l.id === selectedLotId);
     const farmId = currentLot?.farm_id || activeFarmId;
     if (!farmId) {
+      setAddModalError('Nenhuma fazenda selecionada para vincular a matriz.');
       showToast('Nenhuma fazenda selecionada para vincular a matriz.', 'error');
       return;
     }
@@ -397,6 +405,7 @@ export default function LotsPage() {
     // Match property from lot
     const matchedProp = properties.find((p) => p.name === currentLot?.property_name);
 
+    setAddModalError(null);
     setSubmittingAdd(true);
     const res = await createAndAddAnimalToLot(selectedLotId, {
       farm_id: farmId,
@@ -410,6 +419,7 @@ export default function LotsPage() {
     setSubmittingAdd(false);
 
     if (res.success) {
+      setAddModalError(null);
       showToast(`Matriz Brinco ${quickAnimal.tag_number} cadastrada e adicionada ao lote!`);
       const neloreBreed = breeds.find((b) => b.name.toLowerCase().includes('nelore'))?.id || breeds[0]?.id || '';
       setQuickAnimal({
@@ -422,7 +432,9 @@ export default function LotsPage() {
       setShowAddModal(false);
       await Promise.all([handleSelectLot(selectedLotId), loadLots()]);
     } else {
-      showToast(res.error || 'Erro ao cadastrar matriz.', 'error');
+      const errMsg = res.error || 'Erro ao cadastrar matriz.';
+      setAddModalError(errMsg);
+      showToast(errMsg, 'error');
     }
   };
 
@@ -457,7 +469,7 @@ export default function LotsPage() {
       {/* Toast Notification */}
       {toast && (
         <div
-          className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-xl border shadow-xl flex items-center gap-2 text-sm transition-all duration-300 ${
+          className={`fixed bottom-6 right-6 z-[9999] px-4 py-3 rounded-xl border shadow-2xl flex items-center gap-2 text-sm transition-all duration-300 ${
             toast.type === 'success'
               ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/40 glow-emerald'
               : 'bg-rose-950/90 text-rose-300 border-rose-500/40'
@@ -945,7 +957,7 @@ export default function LotsPage() {
             <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
               <button
                 type="button"
-                onClick={() => setAddMode('existing')}
+                onClick={() => { setAddMode('existing'); setAddModalError(null); }}
                 className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   addMode === 'existing'
                     ? 'bg-emerald-600 text-slate-950 shadow-md'
@@ -956,7 +968,7 @@ export default function LotsPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setAddMode('new')}
+                onClick={() => { setAddMode('new'); setAddModalError(null); }}
                 className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   addMode === 'new'
                     ? 'bg-emerald-600 text-slate-950 shadow-md'
@@ -966,6 +978,17 @@ export default function LotsPage() {
                 <Plus className="w-3.5 h-3.5" /> Cadastrar Nova Matriz
               </button>
             </div>
+
+            {/* Modal Error Banner */}
+            {addModalError && (
+              <div className="bg-rose-500/15 border border-rose-500/40 rounded-xl p-3.5 flex items-start gap-3 text-xs text-rose-200 animate-in fade-in slide-in-from-top-2">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <strong className="block text-rose-300 font-semibold mb-0.5">Aviso de Cadastro:</strong>
+                  <span>{addModalError}</span>
+                </div>
+              </div>
+            )}
 
             {/* Tab 1: Existing Animals */}
             {addMode === 'existing' && (
