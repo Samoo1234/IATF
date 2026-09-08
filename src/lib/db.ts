@@ -162,6 +162,7 @@ export async function getOrgMetadata(): Promise<OrgMetadata | null> {
 export interface LotStat {
   id: string;
   code: string;
+  farm_id: string;
   start_date: string;
   ia_planned_date: string | null;
   dg_planned_date: string | null;
@@ -178,22 +179,27 @@ export interface LotStat {
   pending_dg: number;
 }
 
-export async function getLots(forceRefresh = false): Promise<LotStat[]> {
+export async function getLots(forceRefresh = false, farmId?: string): Promise<LotStat[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
 
-  const cacheKey = `lots_${orgId}`;
+  const cacheKey = `lots_${orgId}_${farmId || 'all'}`;
   if (!forceRefresh) {
     const cached = getCached<LotStat[]>(cacheKey);
     if (cached) return cached;
   }
 
   const supabase = createClient();
-  const { data, error } = await supabase
+  let query = supabase
     .from('lot_stats')
     .select('*')
-    .eq('organization_id', orgId)
-    .order('start_date', { ascending: true });
+    .eq('organization_id', orgId);
+
+  if (farmId && farmId !== 'all') {
+    query = query.eq('farm_id', farmId);
+  }
+
+  const { data, error } = await query.order('start_date', { ascending: true });
 
   if (error) {
     console.error('getLots error:', error);
@@ -364,11 +370,24 @@ export async function removeAnimalFromLot(lotAnimalId: string): Promise<boolean>
   return true;
 }
 
-export async function getAvailableAnimalsForLot(lotId: string, search?: string): Promise<Animal[]> {
+export async function getAvailableAnimalsForLot(lotId: string, search?: string, farmId?: string): Promise<Animal[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
 
   const supabase = createClient();
+
+  // If farmId wasn't passed directly, fetch it from iatf_lots
+  let resolvedFarmId = farmId;
+  if (!resolvedFarmId) {
+    const { data: lotData } = await supabase
+      .from('iatf_lots')
+      .select('farm_id')
+      .eq('id', lotId)
+      .maybeSingle();
+    if (lotData?.farm_id) {
+      resolvedFarmId = lotData.farm_id;
+    }
+  }
 
   // 1. Obter IDs já presentes neste lote
   const { data: existing } = await supabase
@@ -378,12 +397,16 @@ export async function getAvailableAnimalsForLot(lotId: string, search?: string):
 
   const existingIds = new Set((existing ?? []).map((e) => e.animal_id));
 
-  // 2. Buscar animais ativos da organização
+  // 2. Buscar animais ativos da mesma fazenda
   let query = supabase
     .from('animals')
     .select('*, breeds(name), animal_categories(name), properties(name), farms(name)')
     .eq('organization_id', orgId)
     .eq('status', 'active');
+
+  if (resolvedFarmId && resolvedFarmId !== 'all') {
+    query = query.eq('farm_id', resolvedFarmId);
+  }
 
   if (search && search.trim()) {
     query = query.ilike('tag_number', `%${search.trim()}%`);
@@ -402,7 +425,7 @@ export async function getAvailableAnimalsForLot(lotId: string, search?: string):
 export async function createAndAddAnimalToLot(
   lotId: string,
   animal: {
-    farm_id: string;
+    farm_id?: string;
     property_id?: string;
     tag_number: string;
     rfid_number?: string;
@@ -417,25 +440,67 @@ export async function createAndAddAnimalToLot(
 
   const supabase = createClient();
 
-  // Verificar se o brinco já existe na organização
-  const { data: existingAnimal } = await supabase
-    .from('animals')
-    .select('id')
-    .eq('organization_id', orgId)
-    .eq('tag_number', animal.tag_number.trim())
-    .limit(1)
+  // 1. Obter os dados do lote (farm_id, organization_id, property_id) para garantir integridade
+  const { data: lotData } = await supabase
+    .from('iatf_lots')
+    .select('farm_id, organization_id, property_id')
+    .eq('id', lotId)
     .maybeSingle();
 
-  let animalId = existingAnimal?.id;
+  const targetOrgId = lotData?.organization_id || orgId;
+  const targetFarmId = animal.farm_id || lotData?.farm_id;
+  const targetPropertyId = animal.property_id || lotData?.property_id || null;
 
+  if (!targetFarmId) {
+    return { success: false, error: 'Fazenda do lote não identificada.' };
+  }
+
+  const cleanTag = animal.tag_number.trim();
+
+  // 2. Verificar se o animal com este brinco já existe nesta fazenda/organização
+  let existingQuery = supabase
+    .from('animals')
+    .select('id, farm_id, tag_number')
+    .eq('organization_id', targetOrgId)
+    .ilike('tag_number', cleanTag);
+
+  if (targetFarmId) {
+    existingQuery = existingQuery.eq('farm_id', targetFarmId);
+  }
+
+  const { data: existingRows, error: searchErr } = await existingQuery.limit(1);
+  if (searchErr) {
+    console.warn('createAndAddAnimalToLot search warning:', searchErr.message);
+  }
+
+  let animalId = existingRows?.[0]?.id;
+
+  // 3. Se o animal já existe, verificar se já está vinculado a ESTE lote
+  if (animalId) {
+    const { data: alreadyInLot } = await supabase
+      .from('iatf_lot_animals')
+      .select('id')
+      .eq('lot_id', lotId)
+      .eq('animal_id', animalId)
+      .maybeSingle();
+
+    if (alreadyInLot) {
+      return {
+        success: false,
+        error: `A matriz com brinco ${cleanTag} já está vinculada a este lote.`,
+      };
+    }
+  }
+
+  // 4. Se o animal não existe ainda, cadastrar na tabela 'animals'
   if (!animalId) {
     const { data: newAnimal, error: createErr } = await supabase
       .from('animals')
       .insert({
-        organization_id: orgId,
-        farm_id: animal.farm_id,
-        property_id: animal.property_id || null,
-        tag_number: animal.tag_number.trim(),
+        organization_id: targetOrgId,
+        farm_id: targetFarmId,
+        property_id: targetPropertyId,
+        tag_number: cleanTag,
         rfid_number: animal.rfid_number ? animal.rfid_number.trim() : null,
         breed_id: animal.breed_id || null,
         category_id: animal.category_id || null,
@@ -445,16 +510,55 @@ export async function createAndAddAnimalToLot(
         status: 'active',
       })
       .select('id')
-      .single();
+      .maybeSingle();
 
-    if (createErr || !newAnimal) {
-      console.error('createAndAddAnimalToLot error:', createErr);
-      return { success: false, error: createErr?.message || 'Erro ao cadastrar matriz.' };
+    if (createErr) {
+      // Caso ocorra conflito de chave única (já existe o brinco na mesma fazenda)
+      if (createErr.code === '23505') {
+        const { data: recoveryRows } = await supabase
+          .from('animals')
+          .select('id')
+          .eq('organization_id', targetOrgId)
+          .eq('farm_id', targetFarmId)
+          .ilike('tag_number', cleanTag)
+          .limit(1);
+
+        if (recoveryRows?.[0]?.id) {
+          animalId = recoveryRows[0].id;
+          // Verificar se já está no lote
+          const { data: alreadyLinked } = await supabase
+            .from('iatf_lot_animals')
+            .select('id')
+            .eq('lot_id', lotId)
+            .eq('animal_id', animalId)
+            .maybeSingle();
+
+          if (alreadyLinked) {
+            return {
+              success: false,
+              error: `A matriz com brinco ${cleanTag} já está cadastrada e vinculada a este lote.`,
+            };
+          }
+        } else {
+          return {
+            success: false,
+            error: `Já existe uma matriz cadastrada com o brinco ${cleanTag} nesta fazenda.`,
+          };
+        }
+      } else {
+        console.error('createAndAddAnimalToLot insert error:', createErr.message, createErr.details, createErr.hint, createErr.code);
+        return { success: false, error: createErr.message || 'Erro ao cadastrar matriz.' };
+      }
+    } else {
+      animalId = newAnimal?.id;
     }
-    animalId = newAnimal.id;
   }
 
-  // Vincular ao lote
+  if (!animalId) {
+    return { success: false, error: 'Não foi possível obter ou criar o registro da matriz.' };
+  }
+
+  // 5. Vincular ao lote em iatf_lot_animals
   const { error: linkErr } = await supabase
     .from('iatf_lot_animals')
     .upsert(
@@ -463,7 +567,7 @@ export async function createAndAddAnimalToLot(
     );
 
   if (linkErr) {
-    console.error('createAndAddAnimalToLot link error:', linkErr);
+    console.error('createAndAddAnimalToLot link error:', linkErr.message, linkErr.details);
     return { success: false, error: linkErr.message };
   }
 
@@ -498,25 +602,30 @@ export interface ManagementEvent {
   } | null;
 }
 
-export async function getManagementEvents(forceRefresh = false): Promise<ManagementEvent[]> {
+export async function getManagementEvents(forceRefresh = false, farmId?: string): Promise<ManagementEvent[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
 
-  const cacheKey = `events_${orgId}`;
+  const cacheKey = `events_${orgId}_${farmId || 'all'}`;
   if (!forceRefresh) {
     const cached = getCached<ManagementEvent[]>(cacheKey);
     if (cached) return cached;
   }
 
   const supabase = createClient();
-  const { data, error } = await supabase
+  let query = supabase
     .from('management_events')
     .select(`
       *,
-      iatf_lots (code, properties(name))
+      iatf_lots!inner (code, farm_id, properties(name))
     `)
-    .eq('organization_id', orgId)
-    .order('planned_date', { ascending: true });
+    .eq('organization_id', orgId);
+
+  if (farmId && farmId !== 'all') {
+    query = query.eq('iatf_lots.farm_id', farmId);
+  }
+
+  const { data, error } = await query.order('planned_date', { ascending: true });
 
   if (error) {
     console.error('getManagementEvents error:', error);
@@ -718,22 +827,28 @@ export interface Animal {
   farms: { name: string } | null;
 }
 
-export async function getAnimals(limit = 50, forceRefresh = false): Promise<Animal[]> {
+export async function getAnimals(limit = 50, forceRefresh = false, farmId?: string): Promise<Animal[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
 
-  const cacheKey = `animals_${orgId}_${limit}`;
+  const cacheKey = `animals_${orgId}_${farmId || 'all'}_${limit}`;
   if (!forceRefresh) {
     const cached = getCached<Animal[]>(cacheKey);
     if (cached) return cached;
   }
 
   const supabase = createClient();
-  const { data, error } = await supabase
+  let query = supabase
     .from('animals')
     .select('*, breeds(name), animal_categories(name), properties(name), farms(name)')
     .eq('organization_id', orgId)
-    .eq('status', 'active')
+    .eq('status', 'active');
+
+  if (farmId && farmId !== 'all') {
+    query = query.eq('farm_id', farmId);
+  }
+
+  const { data, error } = await query
     .order('created_at', { ascending: false })
     .limit(limit);
 
@@ -746,18 +861,23 @@ export async function getAnimals(limit = 50, forceRefresh = false): Promise<Anim
   return result;
 }
 
-export async function searchAnimals(query: string): Promise<Animal[]> {
+export async function searchAnimals(query: string, farmId?: string): Promise<Animal[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
 
   const supabase = createClient();
-  const { data, error } = await supabase
+  let q = supabase
     .from('animals')
     .select('*, breeds(name), animal_categories(name), properties(name), farms(name)')
     .eq('organization_id', orgId)
     .eq('status', 'active')
-    .ilike('tag_number', `%${query}%`)
-    .limit(20);
+    .ilike('tag_number', `%${query}%`);
+
+  if (farmId && farmId !== 'all') {
+    q = q.eq('farm_id', farmId);
+  }
+
+  const { data, error } = await q.limit(20);
 
   if (error) {
     console.error('searchAnimals error:', error);
@@ -1200,22 +1320,27 @@ export interface Property {
   farm_id: string;
 }
 
-export async function getProperties(forceRefresh = false): Promise<Property[]> {
+export async function getProperties(forceRefresh = false, farmId?: string): Promise<Property[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
 
-  const cacheKey = `properties_${orgId}`;
+  const cacheKey = `properties_${orgId}_${farmId || 'all'}`;
   if (!forceRefresh) {
     const cached = getCached<Property[]>(cacheKey);
     if (cached) return cached;
   }
 
   const supabase = createClient();
-  const { data, error } = await supabase
+  let query = supabase
     .from('properties')
     .select('*')
-    .eq('organization_id', orgId)
-    .order('name');
+    .eq('organization_id', orgId);
+
+  if (farmId && farmId !== 'all') {
+    query = query.eq('farm_id', farmId);
+  }
+
+  const { data, error } = await query.order('name');
 
   if (error) {
     console.error('getProperties error:', error);

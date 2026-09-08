@@ -12,21 +12,22 @@ import {
   Check,
   Sparkles
 } from 'lucide-react';
-import { getOrgMetadata, getFarms, type OrgMetadata, type Farm } from '@/lib/db';
+import { getOrgMetadata, type OrgMetadata } from '@/lib/db';
+import { useActiveFarm } from '@/context/FarmContext';
 
 interface HeaderProps {
-  onOpenMobileMenu: () => void;
+  onOpenMobileMenu?: () => void;
   collapsed?: boolean;
 }
 
 const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
-  '/': { title: 'Dashboard Executivo', subtitle: 'Visão Geral dos Indicadores de Taxa de Concepção e DG' },
-  '/agenda': { title: 'Agenda de Campo', subtitle: 'Cronograma Operacional de Manejos e Aplicações' },
-  '/lots': { title: 'Lotes de IATF', subtitle: 'Gestão de Lotes, Protocolos e Estatísticas' },
-  '/animals': { title: 'Matrizes & Rebanho', subtitle: 'Cadastro Geral de Fêmeas e Histórico Reprodutivo' },
-  '/protocols': { title: 'Protocolos Hormonais', subtitle: 'Configuração de Etapas, D0, D7, D9, IA e Fármacos' },
-  '/inputs': { title: 'Estoque de Sêmen & Fármacos', subtitle: 'Controle de Doses, Touros, Centrais e Perdas' },
-  '/reports': { title: 'Relatórios & Inteligência', subtitle: 'Análise de Desempenho, Touros e Inseminadores' },
+  '/': { title: 'Visão Geral Operacional', subtitle: 'Painel Gerencial de Reprodução Bovina & IATF' },
+  '/lots': { title: 'Gestão de Lotes de IATF', subtitle: 'Acompanhamento de protocolos, D0, IA e Diagnósticos de Gestação' },
+  '/animals': { title: 'Rebanho de Matrizes', subtitle: 'Cadastro individual, histórico reprodutivo e rastreabilidade' },
+  '/agenda': { title: 'Agenda de Manejos', subtitle: 'Cronograma dinâmico de aplicações hormonais e desmames' },
+  '/reports': { title: 'Relatórios & Desempenho', subtitle: 'Exportação executiva de taxas de prenhez e indicadores' },
+  '/inputs': { title: 'Estoque de Insumos', subtitle: 'Controle de botijões de sêmen, partidas e perdas' },
+  '/protocols': { title: 'Protocolos Reprodutivos', subtitle: 'Modelos de sincronização de cio (D0, D8, D10, DG)' },
   '/import': { title: 'Importação de Planilhas', subtitle: 'Importe dados de matrizes e lotes em Excel (.xlsx)' },
   '/registries': { title: 'Cadastros Gerais', subtitle: 'Fazendas, Retiros, Raças e Categorias' },
 };
@@ -34,8 +35,7 @@ const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
 export default function Header({ onOpenMobileMenu }: HeaderProps) {
   const pathname = usePathname();
   const [metadata, setMetadata] = useState<OrgMetadata | null>(null);
-  const [farms, setFarms] = useState<Farm[]>([]);
-  const [activeFarmId, setActiveFarmId] = useState<string>('all');
+  const { farms, activeFarmId, activeFarm, setActiveFarmId } = useActiveFarm();
   const [farmDropdownOpen, setFarmDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -43,22 +43,9 @@ export default function Header({ onOpenMobileMenu }: HeaderProps) {
     let mounted = true;
 
     async function load() {
-      const [meta, farmsList] = await Promise.all([
-        getOrgMetadata(),
-        getFarms()
-      ]);
+      const meta = await getOrgMetadata();
       if (!mounted) return;
       setMetadata(meta);
-      setFarms(farmsList);
-
-      // Load saved active farm from localStorage
-      const savedFarm = typeof window !== 'undefined' ? localStorage.getItem('iatf_active_farm_id') : null;
-      if (savedFarm) {
-        setActiveFarmId(savedFarm);
-      } else if (farmsList.length > 0) {
-        setActiveFarmId(farmsList[0].id);
-        localStorage.setItem('iatf_active_farm_id', farmsList[0].id);
-      }
     }
     load();
 
@@ -80,16 +67,10 @@ export default function Header({ onOpenMobileMenu }: HeaderProps) {
 
   const handleSelectFarm = (farmId: string) => {
     setActiveFarmId(farmId);
-    localStorage.setItem('iatf_active_farm_id', farmId);
     setFarmDropdownOpen(false);
-    // Dispara evento para sincronizar outros componentes
-    window.dispatchEvent(new CustomEvent('iatf_farm_changed', { detail: { farmId } }));
   };
 
-  const selectedFarm = farms.find(f => f.id === activeFarmId);
-  const activeFarmName = activeFarmId === 'all' 
-    ? 'Todas as Fazendas' 
-    : (selectedFarm?.name || metadata?.farm?.name || 'Fazenda Principal');
+  const activeFarmName = activeFarm?.name || metadata?.farm?.name || 'Fazenda Principal';
 
   const currentPage = PAGE_TITLES[pathname] || {
     title: 'Plataforma IATF Master',
@@ -138,7 +119,7 @@ export default function Header({ onOpenMobileMenu }: HeaderProps) {
                 {activeFarmName}
               </span>
               <span className="text-[9px] text-slate-400 block leading-tight">
-                {activeFarmId === 'all' ? 'Consolidado' : 'Safra 25/26'}
+                {activeFarm?.city ? `${activeFarm.city} - ${activeFarm.state || 'MT'}` : 'Safra 25/26'}
               </span>
             </div>
 
@@ -154,27 +135,6 @@ export default function Header({ onOpenMobileMenu }: HeaderProps) {
               </div>
 
               <div className="space-y-1 max-h-60 overflow-y-auto custom-scrollbar">
-                {/* Opção: Todas as Fazendas */}
-                <button
-                  onClick={() => handleSelectFarm('all')}
-                  className={`w-full flex items-center justify-between p-2.5 rounded-xl transition-all text-left ${
-                    activeFarmId === 'all'
-                      ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-bold'
-                      : 'hover:bg-slate-800/80 text-slate-300'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-7 h-7 rounded-lg bg-slate-800 flex items-center justify-center text-slate-300">
-                      <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                    </div>
-                    <div>
-                      <p className="font-semibold leading-tight">Todas as Fazendas</p>
-                      <p className="text-[10px] text-slate-400 leading-tight">Visão consolidada da operação</p>
-                    </div>
-                  </div>
-                  {activeFarmId === 'all' && <Check className="w-4 h-4 text-emerald-400 stroke-3" />}
-                </button>
-
                 {/* Lista de Fazendas Individuais */}
                 {farms.map((farm) => {
                   const isSelected = activeFarmId === farm.id;

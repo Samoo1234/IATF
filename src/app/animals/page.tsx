@@ -30,8 +30,10 @@ import {
   Dna
 } from 'lucide-react';
 import Link from 'next/link';
+import { useActiveFarm } from '@/context/FarmContext';
 
 export default function AnimalsPage() {
+  const { activeFarmId, activeFarm } = useActiveFarm();
   const [query, setQuery] = useState('');
   const [animals, setAnimals] = useState<Animal[]>([]);
   const [selectedAnimal, setSelectedAnimal] = useState<Animal | null>(null);
@@ -62,25 +64,34 @@ export default function AnimalsPage() {
   const loadInitialData = useCallback(async () => {
     setLoading(true);
     const [animalsList, farmsList, breedsList, categoriesList] = await Promise.all([
-      getAnimals(50),
+      getAnimals(50, false, activeFarmId || undefined),
       getFarms(),
       getBreeds(),
       getAnimalCategories(),
     ]);
+    const sortedBreeds = breedsList.slice().sort((x, y) => {
+      const xIsNelore = x.name.toLowerCase().includes('nelore');
+      const yIsNelore = y.name.toLowerCase().includes('nelore');
+      if (xIsNelore && !yIsNelore) return -1;
+      if (!xIsNelore && yIsNelore) return 1;
+      return x.name.localeCompare(y.name);
+    });
     setAnimals(animalsList);
     setFarms(farmsList);
-    setBreeds(breedsList);
+    setBreeds(sortedBreeds);
     setCategories(categoriesList);
 
-    if (farmsList.length > 0 && !animalForm.farm_id) {
-      setAnimalForm((f) => ({
-        ...f,
-        farm_id: farmsList[0].id,
-        property_id: farmsList[0].properties?.[0]?.id || '',
-      }));
-    }
+    const farmToUse = activeFarmId || farmsList[0]?.id || '';
+    const activeFarmObj = farmsList.find(f => f.id === farmToUse);
+    const neloreBreed = sortedBreeds.find(b => b.name.toLowerCase().includes('nelore'))?.id || sortedBreeds[0]?.id || '';
+    setAnimalForm((f) => ({
+      ...f,
+      farm_id: farmToUse,
+      property_id: activeFarmObj?.properties?.[0]?.id || '',
+      breed_id: neloreBreed,
+    }));
     setLoading(false);
-  }, [animalForm.farm_id]);
+  }, [activeFarmId]);
 
   useEffect(() => {
     loadInitialData();
@@ -90,15 +101,15 @@ export default function AnimalsPage() {
     if (query.trim().length >= 1) {
       const t = setTimeout(async () => {
         setLoading(true);
-        const data = await searchAnimals(query.trim());
+        const data = await searchAnimals(query.trim(), activeFarmId || undefined);
         setAnimals(data);
         setLoading(false);
       }, 300);
       return () => clearTimeout(t);
     } else if (query.trim().length === 0) {
-      getAnimals(50).then((data) => setAnimals(data));
+      getAnimals(50, false, activeFarmId || undefined).then((data) => setAnimals(data));
     }
-  }, [query]);
+  }, [query, activeFarmId]);
 
   async function selectAnimal(a: Animal) {
     setSelectedAnimal(a);
@@ -143,18 +154,21 @@ export default function AnimalsPage() {
     if (res.success) {
       setFeedbackMsg({ type: 'success', text: `Matriz Brinco ${animalForm.tag_number} cadastrada com sucesso!` });
       setShowModal(false);
+      const farmToUse = activeFarmId || farms[0]?.id || '';
+      const activeFarmObj = farms.find(f => f.id === farmToUse);
+      const neloreBreed = breeds.find(b => b.name.toLowerCase().includes('nelore'))?.id || breeds[0]?.id || '';
       setAnimalForm({
         tag_number: '',
         rfid_number: '',
-        farm_id: farms[0]?.id || '',
-        property_id: farms[0]?.properties?.[0]?.id || '',
-        breed_id: '',
+        farm_id: farmToUse,
+        property_id: activeFarmObj?.properties?.[0]?.id || '',
+        breed_id: neloreBreed,
         category_id: '',
         reproductive_status: 'vazia',
         birth_date: '',
       });
       // Recarregar lista
-      const updated = await getAnimals(50);
+      const updated = await getAnimals(50, true, activeFarmId || undefined);
       setAnimals(updated);
       setTimeout(() => setFeedbackMsg(null), 4000);
     } else {
@@ -200,7 +214,7 @@ export default function AnimalsPage() {
             Matrizes & Rebanho Bovino
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Cadastro de vacas/matrizes, busca por brinco e histórico de IATF.
+            {loading ? 'Carregando...' : `${animals.length} matrizes da ${activeFarm?.name || 'fazenda ativa'}`}
           </p>
         </div>
 

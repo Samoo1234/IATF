@@ -11,6 +11,7 @@ import {
   type SemenBatch,
   type Farm,
 } from '@/lib/db';
+import { useActiveFarm } from '@/context/FarmContext';
 import {
   TrendingUp,
   CheckCircle2,
@@ -31,70 +32,49 @@ import {
 import Link from 'next/link';
 
 export default function DashboardPage() {
+  const { farms, activeFarmId, activeFarm, setActiveFarmId } = useActiveFarm();
+  const [viewScope, setViewScope] = useState<'farm' | 'consolidated'>('farm');
   const [metrics, setMetrics] = useState<OrgMetrics | null>(null);
   const [lots, setLots] = useState<LotStat[]>([]);
   const [semenBatches, setSemenBatches] = useState<SemenBatch[]>([]);
-  const [farms, setFarms] = useState<Farm[]>([]);
-  const [activeFarmId, setActiveFarmId] = useState<string>('all');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
     async function load() {
       setLoading(true);
-      const [m, l, s, f] = await Promise.all([
+      const [m, l, s] = await Promise.all([
         getOrgMetrics(),
         getLots(),
         getSemenBatches(),
-        getFarms(),
       ]);
       if (!mounted) return;
       setMetrics(m);
       setLots(l);
       setSemenBatches(s);
-      setFarms(f);
-
-      const savedFarm = typeof window !== 'undefined' ? localStorage.getItem('iatf_active_farm_id') : null;
-      if (savedFarm) {
-        setActiveFarmId(savedFarm);
-      }
       setLoading(false);
     }
     load();
 
-    const handleFarmChanged = (e: Event) => {
-      const customEvent = e as CustomEvent<{ farmId: string }>;
-      if (customEvent.detail?.farmId) {
-        setActiveFarmId(customEvent.detail.farmId);
-      }
-    };
-    window.addEventListener('iatf_farm_changed', handleFarmChanged);
-
     return () => {
       mounted = false;
-      window.removeEventListener('iatf_farm_changed', handleFarmChanged);
     };
   }, []);
 
   const handleSelectFarm = (farmId: string) => {
     setActiveFarmId(farmId);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('iatf_active_farm_id', farmId);
-      window.dispatchEvent(new CustomEvent('iatf_farm_changed', { detail: { farmId } }));
-    }
+    setViewScope('farm');
   };
 
-  const selectedFarm = farms.find((f) => f.id === activeFarmId);
+  const selectedFarm = activeFarm;
 
-  // Compute stats for each farm
+  // Compute stats for each farm using accurate farm_id
   const farmStats = useMemo(() => {
     return farms.map((farm) => {
       const farmLotsList = lots.filter(
         (l) =>
-          l.farm_name === farm.name ||
-          l.farm_name?.toLowerCase() === farm.name.toLowerCase() ||
-          l.property_name === farm.name ||
-          (farms.length === 1) // fallback if only 1 farm
+          l.farm_id === farm.id ||
+          l.farm_name?.toLowerCase() === farm.name.toLowerCase()
       );
 
       const totalLots = farmLotsList.length;
@@ -127,16 +107,15 @@ export default function DashboardPage() {
     );
   }, [semenBatches]);
 
-  // Filter lots based on selected farm
+  // Filter lots based on selected viewScope
   const displayedLots = useMemo(() => {
-    if (activeFarmId === 'all' || !selectedFarm) return lots;
+    if (viewScope === 'consolidated') return lots;
     return lots.filter(
       (l) =>
-        l.farm_name === selectedFarm.name ||
-        l.farm_name?.toLowerCase() === selectedFarm.name.toLowerCase() ||
-        l.property_name === selectedFarm.name
+        l.farm_id === activeFarmId ||
+        (selectedFarm && l.farm_name?.toLowerCase() === selectedFarm.name.toLowerCase())
     );
-  }, [lots, activeFarmId, selectedFarm]);
+  }, [lots, activeFarmId, selectedFarm, viewScope]);
 
   if (loading) {
     return (
@@ -151,25 +130,26 @@ export default function DashboardPage() {
 
   // Active farm stats if filtered
   const activeFarmStat = farmStats.find((fs) => fs.farm.id === activeFarmId);
+  const isFarmView = viewScope === 'farm' && activeFarmStat;
 
-  const overallRate = activeFarmId !== 'all' && activeFarmStat
+  const overallRate = isFarmView
     ? activeFarmStat.rate
     : (metrics?.overall_pregnancy_rate ?? 0);
 
-  const totalPregnancies = activeFarmId !== 'all' && activeFarmStat
+  const totalPregnancies = isFarmView
     ? activeFarmStat.totalPregnancies
     : (metrics?.total_pregnancies ?? 0);
 
-  const totalDiagnoses = activeFarmId !== 'all' && activeFarmStat
+  const totalDiagnoses = isFarmView
     ? activeFarmStat.totalInseminated
     : (metrics?.total_diagnoses ?? 0);
 
-  const totalAnimals = activeFarmId !== 'all' && activeFarmStat
+  const totalAnimals = isFarmView
     ? activeFarmStat.totalWorked
     : (metrics?.total_animals ?? 0);
 
   const activeLotsCount = displayedLots.length;
-  const totalInseminations = activeFarmId !== 'all' && activeFarmStat
+  const totalInseminations = isFarmView
     ? activeFarmStat.totalInseminated
     : (metrics?.total_inseminations ?? 0);
   const deviceLosses = metrics?.total_device_losses ?? 0;
@@ -186,16 +166,8 @@ export default function DashboardPage() {
             <span>Estação Reprodutiva <span className="text-emerald-400 font-semibold">2025/2026</span></span>
             <span>•</span>
             <span className="font-semibold text-slate-200">
-              {selectedFarm ? selectedFarm.name : 'Todas as Fazendas'}
+              {viewScope === 'farm' ? (selectedFarm?.name || 'Fazenda Ativa') : 'Visão Geral Consolidada'}
             </span>
-            {selectedFarm && (
-              <button
-                onClick={() => handleSelectFarm('all')}
-                className="text-xs text-emerald-400 hover:text-emerald-300 underline font-medium cursor-pointer ml-1"
-              >
-                (Ver Todas)
-              </button>
-            )}
             <span className="inline-flex items-center gap-1 text-xs text-emerald-500 font-semibold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full ml-1">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse" />
               Supabase Live
@@ -203,20 +175,44 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Toggle de Escopo: Fazenda Selecionada vs Consolidado Geral */}
+          <div className="flex items-center bg-slate-950/90 p-1 rounded-xl border border-slate-800 text-xs">
+            <button
+              onClick={() => setViewScope('farm')}
+              className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+                viewScope === 'farm'
+                  ? 'bg-emerald-600 text-slate-950 font-bold shadow-md glow-emerald'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {selectedFarm?.name || 'Fazenda Ativa'}
+            </button>
+            <button
+              onClick={() => setViewScope('consolidated')}
+              className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+                viewScope === 'consolidated'
+                  ? 'bg-emerald-600 text-slate-950 font-bold shadow-md glow-emerald'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Consolidado Geral
+            </button>
+          </div>
+
           <Link
             href="/agenda"
-            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all shadow-lg glow-emerald text-sm cursor-pointer"
+            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium px-4 py-2.5 rounded-xl border border-slate-700 transition-all text-sm cursor-pointer"
           >
             <Calendar className="w-4 h-4" />
-            Agenda de Campo
+            Agenda
           </Link>
           <Link
             href="/lots"
-            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium px-4 py-2.5 rounded-xl border border-slate-700 transition-all text-sm cursor-pointer"
+            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all shadow-lg glow-emerald text-sm cursor-pointer"
           >
             <Layers className="w-4 h-4" />
-            Lotes de IATF
+            Lotes
           </Link>
         </div>
       </div>
@@ -313,12 +309,19 @@ export default function DashboardPage() {
               </h2>
               <p className="text-xs text-slate-400">Desempenho reprodutivo consolidado de cada propriedade</p>
             </div>
-            {selectedFarm && (
+            {viewScope === 'farm' ? (
               <button
-                onClick={() => handleSelectFarm('all')}
+                onClick={() => setViewScope('consolidated')}
                 className="text-xs font-semibold text-emerald-400 hover:underline flex items-center gap-1 cursor-pointer"
               >
-                Ver Todas <ArrowUpRight className="w-3.5 h-3.5" />
+                Ver Consolidado <ArrowUpRight className="w-3.5 h-3.5" />
+              </button>
+            ) : (
+              <button
+                onClick={() => setViewScope('farm')}
+                className="text-xs font-semibold text-emerald-400 hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                Focar na Fazenda Ativa <ArrowUpRight className="w-3.5 h-3.5" />
               </button>
             )}
           </div>

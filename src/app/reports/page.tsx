@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { getLots, getSemenBatches, type LotStat, type SemenBatch } from '@/lib/db';
+import { useActiveFarm } from '@/context/FarmContext';
 import { FileText, Printer, Layers, Syringe, RefreshCw } from 'lucide-react';
 
 export default function ReportsPage() {
+  const { activeFarmId, activeFarm } = useActiveFarm();
   const [activeTab, setActiveTab] = useState<'lotes' | 'matrizes' | 'semen'>('lotes');
   const [lots, setLots] = useState<LotStat[]>([]);
   const [semenBatches, setSemenBatches] = useState<SemenBatch[]>([]);
@@ -13,13 +15,16 @@ export default function ReportsPage() {
   useEffect(() => {
     async function load() {
       setLoading(true);
-      const [l, s] = await Promise.all([getLots(), getSemenBatches()]);
+      const [l, s] = await Promise.all([
+        getLots(false, activeFarmId || undefined),
+        getSemenBatches(),
+      ]);
       setLots(l);
       setSemenBatches(s);
       setLoading(false);
     }
     load();
-  }, []);
+  }, [activeFarmId]);
 
   const totalWorked = lots.reduce((s, l) => s + l.worked_qty, 0);
   const totalInseminated = lots.reduce((s, l) => s + l.inseminated_qty, 0);
@@ -37,7 +42,7 @@ export default function ReportsPage() {
             Central de Relatórios & Exportação
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Relatórios da estação 2025/2026 — dados ao vivo do Supabase.
+            Relatórios da estação 2025/2026 — {activeFarm?.name || 'dados ao vivo da fazenda ativa'}.
           </p>
         </div>
 
@@ -96,7 +101,7 @@ export default function ReportsPage() {
       <div className="glass-card p-6 rounded-2xl border border-slate-800 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-bold text-white uppercase tracking-wider">
-            Relatório Oficial da Estação 2025/2026 — FAZENDA BOI GORDO
+            Relatório Oficial da Estação 2025/2026 — {activeFarm?.name || 'FAZENDA ATIVA'}
           </h2>
           <span className="text-xs text-slate-400">DR. SAMOEL DUARTE</span>
         </div>

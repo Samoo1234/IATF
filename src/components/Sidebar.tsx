@@ -22,8 +22,9 @@ import {
   ChevronDown,
   X
 } from 'lucide-react';
-import { getOrgMetadata, getFarms, type OrgMetadata } from '@/lib/db';
+import { getOrgMetadata, type OrgMetadata } from '@/lib/db';
 import { createClient } from '@/lib/supabase/client';
+import { useActiveFarm } from '@/context/FarmContext';
 
 interface NavSection {
   title: string;
@@ -81,28 +82,15 @@ export default function Sidebar({
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
 
-  const [activeFarmName, setActiveFarmName] = useState<string>('Fazenda Principal');
+  const { activeFarm } = useActiveFarm();
 
   useEffect(() => {
     let mounted = true;
 
     async function loadData() {
-      const [meta, farmsList] = await Promise.all([
-        getOrgMetadata(),
-        getFarms()
-      ]);
+      const meta = await getOrgMetadata();
       if (!mounted) return;
       setMetadata(meta);
-
-      const savedFarmId = typeof window !== 'undefined' ? localStorage.getItem('iatf_active_farm_id') : null;
-      const found = farmsList.find(f => f.id === savedFarmId);
-      if (found) {
-        setActiveFarmName(found.name);
-      } else if (savedFarmId === 'all') {
-        setActiveFarmName('Todas as Fazendas');
-      } else if (meta?.farm?.name) {
-        setActiveFarmName(meta.farm.name);
-      }
 
       const supabase = createClient();
       const { data: { session } } = await supabase.auth.getSession();
@@ -112,25 +100,8 @@ export default function Sidebar({
     }
 
     loadData();
-
-    const handleFarmChange = (e: Event) => {
-      const customEvent = e as CustomEvent<{ farmId: string }>;
-      const farmId = customEvent.detail?.farmId;
-      if (farmId === 'all') {
-        setActiveFarmName('Todas as Fazendas');
-      } else {
-        const savedFarm = localStorage.getItem('iatf_active_farm_id');
-        getFarms().then((list) => {
-          const found = list.find(f => f.id === (farmId || savedFarm));
-          if (found) setActiveFarmName(found.name);
-        });
-      }
-    };
-
-    window.addEventListener('iatf_farm_changed', handleFarmChange);
     return () => {
       mounted = false;
-      window.removeEventListener('iatf_farm_changed', handleFarmChange);
     };
   }, []);
 
@@ -148,7 +119,7 @@ export default function Sidebar({
   const userDisplayName = userEmail 
     ? (metadata?.farm?.technical_responsible || userEmail.split('@')[0].toUpperCase())
     : 'Usuário';
-  const farmName = activeFarmName || metadata?.farm?.name || 'Fazenda Principal';
+  const farmName = activeFarm?.name || metadata?.farm?.name || 'Fazenda Principal';
   const orgName = metadata?.name || (userEmail ? `Agropecuária ${userEmail.split('@')[0]}` : 'Organização');
   const techResponsible = userDisplayName;
 

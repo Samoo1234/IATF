@@ -14,10 +14,12 @@ import {
   Dna, MapPin, Tag, Building2, Award, Syringe, CheckCircle2, AlertCircle
 } from 'lucide-react';
 import Link from 'next/link';
+import { useActiveFarm } from '@/context/FarmContext';
 
 type TabType = 'matrizes' | 'bulls' | 'farms' | 'breeds';
 
 export default function RegistriesPage() {
+  const { activeFarmId, activeFarm } = useActiveFarm();
   const [activeTab, setActiveTab] = useState<TabType>('matrizes');
   const [loading, setLoading] = useState(true);
 
@@ -76,7 +78,7 @@ export default function RegistriesPage() {
   const loadAllData = useCallback(async () => {
     setLoading(true);
     const [a, b, f, br, c] = await Promise.all([
-      getAnimals(100),
+      getAnimals(100, false, activeFarmId || undefined),
       getBulls(),
       getFarms(),
       getBreeds(),
@@ -88,15 +90,19 @@ export default function RegistriesPage() {
     setBreeds(br);
     setCategories(c);
 
-    if (f.length > 0 && !animalForm.farm_id) {
-      setAnimalForm((prev) => ({
-        ...prev,
-        farm_id: f[0].id,
-        property_id: f[0].properties?.[0]?.id || '',
-      }));
-    }
+    const farmToUse = activeFarmId || f[0]?.id || '';
+    const activeFarmObj = f.find(farm => farm.id === farmToUse);
+    setAnimalForm((prev) => ({
+      ...prev,
+      farm_id: farmToUse,
+      property_id: activeFarmObj?.properties?.[0]?.id || '',
+    }));
+    setPropertyForm((prev) => ({
+      ...prev,
+      farm_id: farmToUse,
+    }));
     setLoading(false);
-  }, [animalForm.farm_id]);
+  }, [activeFarmId]);
 
   useEffect(() => {
     loadAllData();
@@ -126,11 +132,13 @@ export default function RegistriesPage() {
     if (res.success) {
       setFeedbackMsg({ type: 'success', text: `Matriz Brinco ${animalForm.tag_number} cadastrada com sucesso!` });
       setShowAnimalModal(false);
+      const farmToUse = activeFarmId || farms[0]?.id || '';
+      const activeFarmObj = farms.find(farm => farm.id === farmToUse);
       setAnimalForm({
         tag_number: '',
         rfid_number: '',
-        farm_id: farms[0]?.id || '',
-        property_id: farms[0]?.properties?.[0]?.id || '',
+        farm_id: farmToUse,
+        property_id: activeFarmObj?.properties?.[0]?.id || '',
         breed_id: '',
         category_id: '',
         reproductive_status: 'vazia',

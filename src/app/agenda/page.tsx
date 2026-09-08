@@ -10,6 +10,7 @@ import {
   type ManagementEvent, 
   type LotStat 
 } from '@/lib/db';
+import { useActiveFarm } from '@/context/FarmContext';
 import { 
   CheckCircle2, 
   AlertCircle, 
@@ -51,6 +52,7 @@ const WEEKDAY_NAMES_MINI = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'];
 const HOURS = Array.from({ length: 15 }, (_, i) => i + 6); // 06:00 to 20:00
 
 export default function AgendaPage() {
+  const { activeFarmId, activeFarm } = useActiveFarm();
   const [events, setEvents] = useState<ManagementEvent[]>([]);
   const [lots, setLots] = useState<LotStat[]>([]);
   const [loading, setLoading] = useState(true);
@@ -93,8 +95,8 @@ export default function AgendaPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     const [eventsData, lotsData] = await Promise.all([
-      getManagementEvents(),
-      getLots()
+      getManagementEvents(false, activeFarmId || undefined),
+      getLots(false, activeFarmId || undefined)
     ]);
     setEvents(eventsData);
     setLots(lotsData);
@@ -102,7 +104,7 @@ export default function AgendaPage() {
       setCreateLotId(lotsData[0].id);
     }
     setLoading(false);
-  }, [createLotId]);
+  }, [activeFarmId, createLotId]);
 
   useEffect(() => {
     loadData();
@@ -395,9 +397,16 @@ export default function AgendaPage() {
             </button>
           </div>
 
-          <h2 className="text-lg sm:text-xl font-bold text-slate-100 capitalize">
-            {formattedMonthYear}
-          </h2>
+          <div>
+            <h2 className="text-lg sm:text-xl font-bold text-slate-100 capitalize">
+              {formattedMonthYear}
+            </h2>
+            {activeFarm && (
+              <span className="text-[11px] text-emerald-400 font-semibold block -mt-0.5">
+                {activeFarm.name}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Right: Search, Filter Toggle, View Selector */}

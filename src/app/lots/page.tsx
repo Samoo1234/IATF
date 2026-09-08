@@ -189,9 +189,11 @@ function computeLotProgress(
     currentStepDate: steps[steps.length - 1]?.date || null,
   };
 }
+import { useActiveFarm } from '@/context/FarmContext';
 
 export default function LotsPage() {
   const router = useRouter();
+  const { activeFarmId, activeFarm } = useActiveFarm();
   const [lots, setLots] = useState<LotStat[]>([]);
   const [managementEvents, setManagementEvents] = useState<ManagementEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -246,28 +248,43 @@ export default function LotsPage() {
   const loadLots = useCallback(async () => {
     setLoading(true);
     const [lotsData, eventsData] = await Promise.all([
-      getLots(),
-      getManagementEvents(),
+      getLots(false, activeFarmId || undefined),
+      getManagementEvents(false, activeFarmId || undefined),
     ]);
     setLots(lotsData);
     setManagementEvents(eventsData);
     setLoading(false);
-  }, []);
+  }, [activeFarmId]);
 
   const loadAuxData = useCallback(async () => {
     const [p, pr, f, b, c] = await Promise.all([
       getProtocols(),
-      getProperties(),
+      getProperties(false, activeFarmId || undefined),
       getFarms(),
       getBreeds(),
       getAnimalCategories(),
     ]);
+    // Prioritize Nelore so it appears first by default
+    const sortedBreeds = b.slice().sort((x, y) => {
+      const xIsNelore = x.name.toLowerCase().includes('nelore');
+      const yIsNelore = y.name.toLowerCase().includes('nelore');
+      if (xIsNelore && !yIsNelore) return -1;
+      if (!xIsNelore && yIsNelore) return 1;
+      return x.name.localeCompare(y.name);
+    });
     setProtocols(p);
     setProperties(pr);
     setFarms(f);
-    setBreeds(b);
+    setBreeds(sortedBreeds);
     setCategories(c);
-  }, []);
+
+    const defaultBreed = sortedBreeds.find((x) => x.name.toLowerCase().includes('nelore'))?.id || sortedBreeds[0]?.id || '';
+    setQuickAnimal((prev) => ({
+      ...prev,
+      breed_id: prev.breed_id || defaultBreed,
+      category_id: prev.category_id || c[0]?.id || '',
+    }));
+  }, [activeFarmId]);
 
   useEffect(() => {
     loadLots();
@@ -299,20 +316,23 @@ export default function LotsPage() {
   // Load available animals when opening the Add Modal
   const loadAvailableAnimals = useCallback(async (lotId: string, search = '') => {
     setLoadingAvailable(true);
-    const data = await getAvailableAnimalsForLot(lotId, search);
+    const currentLot = lots.find((l) => l.id === lotId);
+    const targetFarmId = currentLot?.farm_id || activeFarmId || undefined;
+    const data = await getAvailableAnimalsForLot(lotId, search, targetFarmId);
     setAvailableAnimals(data);
     setLoadingAvailable(false);
-  }, []);
+  }, [lots, activeFarmId]);
 
   const openAddModal = () => {
     if (!selectedLotId) return;
     setSelectedAnimalIds([]);
     setAnimalSearch('');
     setAddMode('existing');
+    const neloreBreed = breeds.find((b) => b.name.toLowerCase().includes('nelore'))?.id || breeds[0]?.id || '';
     setQuickAnimal({
       tag_number: '',
       rfid_number: '',
-      breed_id: breeds[0]?.id || '',
+      breed_id: neloreBreed,
       category_id: categories[0]?.id || '',
       reproductive_status: 'vazia',
     });
@@ -368,9 +388,9 @@ export default function LotsPage() {
     }
 
     const currentLot = lots.find((l) => l.id === selectedLotId);
-    const farmId = farms[0]?.id;
+    const farmId = currentLot?.farm_id || activeFarmId;
     if (!farmId) {
-      showToast('Nenhuma fazenda cadastrada para vincular o animal.', 'error');
+      showToast('Nenhuma fazenda selecionada para vincular a matriz.', 'error');
       return;
     }
 
@@ -391,10 +411,11 @@ export default function LotsPage() {
 
     if (res.success) {
       showToast(`Matriz Brinco ${quickAnimal.tag_number} cadastrada e adicionada ao lote!`);
+      const neloreBreed = breeds.find((b) => b.name.toLowerCase().includes('nelore'))?.id || breeds[0]?.id || '';
       setQuickAnimal({
         tag_number: '',
         rfid_number: '',
-        breed_id: breeds[0]?.id || '',
+        breed_id: neloreBreed,
         category_id: categories[0]?.id || '',
         reproductive_status: 'vazia',
       });
@@ -419,12 +440,15 @@ export default function LotsPage() {
     }
   };
 
-  const filteredLots = lots.filter(
-    (l) =>
+  const filteredLots = lots.filter((l) => {
+    // Isolamento estrito por fazenda
+    if (activeFarmId && l.farm_id && l.farm_id !== activeFarmId) return false;
+    return (
       l.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (l.property_name ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (l.protocol_name ?? '').toLowerCase().includes(searchTerm.toLowerCase())
-  );
+    );
+  });
 
   const selectedLot = lots.find((l) => l.id === selectedLotId);
 
@@ -456,7 +480,7 @@ export default function LotsPage() {
             Gestão de Lotes de IATF
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            {loading ? 'Carregando...' : `${lots.length} lotes cadastrados na estação 2025/2026`}
+            {loading ? 'Carregando...' : `${filteredLots.length} lotes da ${activeFarm?.name || 'fazenda ativa'} na estação 2025/2026`}
           </p>
         </div>
 
@@ -1186,9 +1210,16 @@ export default function LotsPage() {
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="glass-card w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 p-6 space-y-5">
             <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                <Plus className="w-5 h-5 text-emerald-400" /> Novo Lote de IATF
-              </h2>
+              <div>
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  <Plus className="w-5 h-5 text-emerald-400" /> Novo Lote de IATF
+                </h2>
+                {activeFarm && (
+                  <p className="text-xs text-emerald-400 font-medium mt-0.5">
+                    Vinculado à fazenda: <strong>{activeFarm.name}</strong>
+                  </p>
+                )}
+              </div>
               <button
                 onClick={() => setShowNewLot(false)}
                 className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
@@ -1231,11 +1262,13 @@ export default function LotsPage() {
                   className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
                 >
                   <option value="">Selecione o retiro...</option>
-                  {properties.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} ({p.code})
-                    </option>
-                  ))}
+                  {properties
+                    .filter((p) => !activeFarmId || p.farm_id === activeFarmId)
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} {p.code ? `(${p.code})` : ''}
+                      </option>
+                    ))}
                 </select>
               </div>
 

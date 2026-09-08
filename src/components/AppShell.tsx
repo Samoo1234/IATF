@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import { createClient } from '@/lib/supabase/client';
+import { FarmProvider } from '@/context/FarmContext';
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -89,37 +90,39 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex relative">
-      {/* Top Navigation Progress Bar */}
-      {isNavigating && (
-        <div className="fixed top-0 left-0 right-0 z-50 h-0.75 bg-linear-to-r from-emerald-500 via-teal-400 to-emerald-300 animate-pulse shadow-sm shadow-emerald-400/50" />
-      )}
+    <FarmProvider>
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex relative">
+        {/* Top Navigation Progress Bar */}
+        {isNavigating && (
+          <div className="fixed top-0 left-0 right-0 z-50 h-0.75 bg-linear-to-r from-emerald-500 via-teal-400 to-emerald-300 animate-pulse shadow-sm shadow-emerald-400/50" />
+        )}
 
-      {/* Sidebar Component */}
-      <Sidebar
-        collapsed={collapsed}
-        onToggleCollapse={handleToggleCollapse}
-        mobileOpen={mobileOpen}
-        onCloseMobile={() => setMobileOpen(false)}
-      />
-
-      {/* Main Content Area */}
-      <div
-        className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ease-in-out ${
-          collapsed ? 'md:ml-20' : 'md:ml-64'
-        }`}
-      >
-        {/* Top Header */}
-        <Header
+        {/* Sidebar Component */}
+        <Sidebar
           collapsed={collapsed}
-          onOpenMobileMenu={() => setMobileOpen(true)}
+          onToggleCollapse={handleToggleCollapse}
+          mobileOpen={mobileOpen}
+          onCloseMobile={() => setMobileOpen(false)}
         />
 
-        {/* Dynamic Page Content */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1600px] w-full mx-auto">
-          {children}
-        </main>
+        {/* Main Content Area */}
+        <div
+          className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ease-in-out ${
+            collapsed ? 'md:ml-20' : 'md:ml-64'
+          }`}
+        >
+          {/* Top Header */}
+          <Header
+            collapsed={collapsed}
+            onOpenMobileMenu={() => setMobileOpen(true)}
+          />
+
+          {/* Dynamic Page Content */}
+          <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1600px] w-full mx-auto">
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+    </FarmProvider>
   );
 }
