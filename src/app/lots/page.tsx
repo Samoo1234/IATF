@@ -9,6 +9,7 @@ import {
   getProperties,
   createLot,
   updateLotCode,
+  deleteLot,
   addAnimalsToLot,
   removeAnimalFromLot,
   getAvailableAnimalsForLot,
@@ -246,6 +247,28 @@ export default function LotsPage() {
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setToast({ text, type });
     setTimeout(() => setToast(null), 4500);
+  };
+
+  // Delete Lot State
+  const [lotToDelete, setLotToDelete] = useState<LotStat | null>(null);
+  const [isDeletingLot, setIsDeletingLot] = useState(false);
+
+  const handleConfirmDeleteLot = async () => {
+    if (!lotToDelete) return;
+    setIsDeletingLot(true);
+    const res = await deleteLot(lotToDelete.id);
+    setIsDeletingLot(false);
+
+    if (res.success) {
+      showToast(`Lote "${lotToDelete.code}" excluído com sucesso!`);
+      if (selectedLotId === lotToDelete.id) {
+        setSelectedLotId(null);
+      }
+      setLotToDelete(null);
+      await loadLots();
+    } else {
+      showToast(res.error || 'Erro ao excluir o lote.', 'error');
+    }
   };
 
   // Inline Lot Code Editing
@@ -630,13 +653,26 @@ export default function LotsPage() {
                       {lot.property_name ?? lot.farm_name}
                     </span>
                   </div>
-                  <span className={`text-xs font-semibold border px-2.5 py-1 rounded-lg flex items-center gap-1 ${statusInfo.color}`}>
-                    {lot.pregnancy_rate > 0 ? (
-                      <><CheckCircle2 className="w-3 h-3" /> {lot.pregnancy_rate.toFixed(1)}%</>
-                    ) : (
-                      <><Clock className="w-3 h-3" /> {statusInfo.label}</>
-                    )}
-                  </span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className={`text-xs font-semibold border px-2.5 py-1 rounded-lg flex items-center gap-1 ${statusInfo.color}`}>
+                      {lot.pregnancy_rate > 0 ? (
+                        <><CheckCircle2 className="w-3 h-3" /> {lot.pregnancy_rate.toFixed(1)}%</>
+                      ) : (
+                        <><Clock className="w-3 h-3" /> {statusInfo.label}</>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setLotToDelete(lot);
+                      }}
+                      title="Excluir Lote"
+                      className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="text-xs text-slate-400 space-y-1">
@@ -842,12 +878,23 @@ export default function LotsPage() {
                   {selectedLot.protocol_name} • Responsável: {selectedLot.responsible_name}
                 </p>
               </div>
-              <button
-                onClick={() => setSelectedLotId(null)}
-                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setLotToDelete(selectedLot)}
+                  className="px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 hover:border-rose-500/50 text-rose-400 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                  title="Excluir este lote"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Excluir Lote</span>
+                </button>
+                <button
+                  onClick={() => setSelectedLotId(null)}
+                  className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Metrics */}
@@ -1521,6 +1568,76 @@ export default function LotsPage() {
           </div>
         </div>
       )}
+      {/* ===== Modal: Confirmação de Exclusão de Lote ===== */}
+      {lotToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="glass-card w-full max-w-md rounded-2xl border border-rose-500/40 bg-slate-900 p-6 space-y-5 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-lg font-bold text-white">Excluir Lote IATF</h3>
+                <p className="text-xs text-slate-400">
+                  Tem certeza que deseja excluir o lote <strong className="text-white font-mono">{lotToDelete.code}</strong>?
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/80 rounded-xl p-3.5 border border-slate-800 space-y-2 text-xs">
+              <div className="flex justify-between text-slate-400">
+                <span>Fazenda / Retiro:</span>
+                <span className="font-semibold text-slate-200">{lotToDelete.property_name || lotToDelete.farm_name || '-'}</span>
+              </div>
+              <div className="flex justify-between text-slate-400">
+                <span>Protocolo:</span>
+                <span className="font-semibold text-slate-200">{lotToDelete.protocol_name || '-'}</span>
+              </div>
+              <div className="flex justify-between text-slate-400">
+                <span>Matrizes vinculadas:</span>
+                <span className="font-bold text-emerald-400">{lotToDelete.worked_qty}</span>
+              </div>
+            </div>
+
+            <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 text-xs text-rose-300 flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <p className="leading-relaxed">
+                Esta ação cancelará e removerá permanentemente os manejos agendados deste lote na agenda. As matrizes cadastradas não serão deletadas do sistema, apenas desvinculadas deste lote.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                disabled={isDeletingLot}
+                onClick={() => setLotToDelete(null)}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingLot}
+                onClick={handleConfirmDeleteLot}
+                className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-rose-600/20 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {isDeletingLot ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    Excluindo Lote...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Confirmar Exclusão
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

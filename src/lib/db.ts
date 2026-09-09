@@ -1263,6 +1263,70 @@ export async function updateLotCode(
 }
 
 // ============================================================
+// DELETE LOT
+// ============================================================
+
+export async function deleteLot(
+  lotId: string
+): Promise<{ success: boolean; error?: string }> {
+  const supabase = createClient();
+
+  try {
+    // 1. Remover perdas de insumos associadas ao lote (se houver)
+    try {
+      await supabase.from('input_losses').delete().eq('lot_id', lotId);
+    } catch {
+      // Ignora se tabela ou coluna não existir
+    }
+
+    // 2. Remover eventos de manejo vinculados ao lote
+    const { error: eventsErr } = await supabase
+      .from('management_events')
+      .delete()
+      .eq('lot_id', lotId);
+
+    if (eventsErr) {
+      console.error('deleteLot: erro ao remover eventos:', eventsErr);
+      return { success: false, error: 'Falha ao remover eventos da agenda: ' + eventsErr.message };
+    }
+
+    // 3. Desvincular matrizes do lote (iatf_lot_animals)
+    const { error: animalsErr } = await supabase
+      .from('iatf_lot_animals')
+      .delete()
+      .eq('lot_id', lotId);
+
+    if (animalsErr) {
+      console.error('deleteLot: erro ao desvincular matrizes:', animalsErr);
+      return { success: false, error: 'Falha ao desvincular matrizes: ' + animalsErr.message };
+    }
+
+    // 4. Remover o lote
+    const { error: lotErr } = await supabase
+      .from('iatf_lots')
+      .delete()
+      .eq('id', lotId);
+
+    if (lotErr) {
+      console.error('deleteLot: erro ao remover lote:', lotErr);
+      return { success: false, error: 'Falha ao excluir lote: ' + lotErr.message };
+    }
+
+    // 5. Invalidar caches
+    invalidateCache('lots');
+    invalidateCache('events');
+    invalidateCache('lot_animals');
+    invalidateCache('metrics');
+
+    return { success: true };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Erro inesperado ao excluir o lote.';
+    console.error('deleteLot unexpected error:', err);
+    return { success: false, error: message };
+  }
+}
+
+// ============================================================
 // FARMS & PROPERTIES
 // ============================================================
 
