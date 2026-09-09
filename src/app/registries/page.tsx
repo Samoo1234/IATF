@@ -7,21 +7,35 @@ import {
   getBreeds, createBreed, 
   getAnimalCategories, createAnimalCategory,
   getAnimals, createAnimal,
-  type Bull, type Farm, type Breed, type AnimalCategory, type Animal
+  createReproductiveSeason, updateReproductiveSeason, deleteReproductiveSeason,
+  type Bull, type Farm, type Breed, type AnimalCategory, type Animal, type ReproductiveSeason
 } from '@/lib/db';
 import { 
   FolderTree, Plus, RefreshCw, X,
-  Dna, MapPin, Tag, Building2, Award, Syringe, CheckCircle2, AlertCircle
+  Dna, MapPin, Tag, Building2, Award, Syringe, CheckCircle2, AlertCircle,
+  Calendar, Edit2, Trash2, Star
 } from 'lucide-react';
 import Link from 'next/link';
 import { useActiveFarm } from '@/context/FarmContext';
+import { useActiveSeason } from '@/context/SeasonContext';
 
-type TabType = 'matrizes' | 'bulls' | 'farms' | 'breeds';
+type TabType = 'matrizes' | 'bulls' | 'farms' | 'breeds' | 'seasons';
 
 export default function RegistriesPage() {
   const { activeFarmId, activeFarm } = useActiveFarm();
+  const { seasons, refreshSeasons, setAsGlobalActiveSeason } = useActiveSeason();
   const [activeTab, setActiveTab] = useState<TabType>('matrizes');
   const [loading, setLoading] = useState(true);
+
+  // Season states
+  const [showSeasonModal, setShowSeasonModal] = useState(false);
+  const [editingSeasonId, setEditingSeasonId] = useState<string | null>(null);
+  const [seasonForm, setSeasonForm] = useState({
+    name: '',
+    start_date: '',
+    end_date: '',
+    status: 'active' as 'active' | 'closed',
+  });
 
   // Data states
   const [animals, setAnimals] = useState<Animal[]>([]);
@@ -230,6 +244,88 @@ export default function RegistriesPage() {
     }
   };
 
+  const handleSaveSeason = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!seasonForm.name.trim() || !seasonForm.start_date || !seasonForm.end_date) {
+      setFeedbackMsg({ type: 'error', text: 'Preencha o nome da estação e as datas de início e término.' });
+      return;
+    }
+
+    setSaving(true);
+    let success = false;
+
+    if (editingSeasonId) {
+      success = await updateReproductiveSeason(editingSeasonId, {
+        name: seasonForm.name,
+        start_date: seasonForm.start_date,
+        end_date: seasonForm.end_date,
+        status: seasonForm.status,
+      });
+    } else {
+      const created = await createReproductiveSeason({
+        name: seasonForm.name,
+        start_date: seasonForm.start_date,
+        end_date: seasonForm.end_date,
+        status: seasonForm.status,
+      });
+      success = !!created;
+    }
+    setSaving(false);
+
+    if (success) {
+      setFeedbackMsg({
+        type: 'success',
+        text: editingSeasonId ? 'Estação reprodutiva atualizada com sucesso!' : 'Estação reprodutiva cadastrada com sucesso!',
+      });
+      setShowSeasonModal(false);
+      setEditingSeasonId(null);
+      setSeasonForm({ name: '', start_date: '', end_date: '', status: 'active' });
+      await refreshSeasons();
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: 'Erro ao salvar estação reprodutiva.' });
+    }
+  };
+
+  const handleSetActiveSeasonClick = async (id: string, name: string) => {
+    setSaving(true);
+    const ok = await setAsGlobalActiveSeason(id);
+    setSaving(false);
+    if (ok) {
+      setFeedbackMsg({ type: 'success', text: `A estação "${name}" agora é a Estação Ativa do sistema!` });
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: 'Erro ao definir estação ativa.' });
+    }
+  };
+
+  const handleDeleteSeason = async (id: string, name: string) => {
+    if (!confirm(`Deseja realmente excluir a estação "${name}"?`)) return;
+
+    setSaving(true);
+    const res = await deleteReproductiveSeason(id);
+    setSaving(false);
+
+    if (res.success) {
+      setFeedbackMsg({ type: 'success', text: `Estação "${name}" excluída com sucesso!` });
+      await refreshSeasons();
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao excluir estação.' });
+    }
+  };
+
+  const handleOpenEditSeason = (s: ReproductiveSeason) => {
+    setEditingSeasonId(s.id);
+    setSeasonForm({
+      name: s.name,
+      start_date: s.start_date,
+      end_date: s.end_date,
+      status: s.status,
+    });
+    setShowSeasonModal(true);
+  };
+
   const selectedFarmObj = farms.find((f) => f.id === animalForm.farm_id);
   const availableProperties = selectedFarmObj?.properties || [];
 
@@ -303,6 +399,23 @@ export default function RegistriesPage() {
               </button>
             </div>
           )}
+          {activeTab === 'seasons' && (
+            <button
+              onClick={() => {
+                setEditingSeasonId(null);
+                setSeasonForm({
+                  name: '',
+                  start_date: new Date().toISOString().split('T')[0],
+                  end_date: '',
+                  status: 'active',
+                });
+                setShowSeasonModal(true);
+              }}
+              className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
+            >
+              <Plus className="w-4 h-4" /> Nova Estação de Monta
+            </button>
+          )}
         </div>
       </div>
 
@@ -347,6 +460,16 @@ export default function RegistriesPage() {
           }`}
         >
           <Dna className="w-4 h-4" /> Raças & Categorias ({breeds.length + categories.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('seasons')}
+          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
+            activeTab === 'seasons'
+              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Calendar className="w-4 h-4" /> Estações de Monta ({seasons.length})
         </button>
       </div>
 
@@ -506,7 +629,7 @@ export default function RegistriesPage() {
             ))}
           </div>
         </div>
-      ) : (
+      ) : activeTab === 'breeds' ? (
         /* ===== TAB: RAÇAS & CATEGORIAS ===== */
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Breeds Card */}
@@ -571,7 +694,154 @@ export default function RegistriesPage() {
             </div>
           </div>
         </div>
-      )}
+      ) : activeTab === 'seasons' ? (
+        /* ===== TAB: ESTAÇÕES DE MONTA ===== */
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/60 p-4 rounded-2xl border border-slate-800">
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-emerald-400" /> Ciclos Reprodutivos & Estações de Monta
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Defina manualmente qual estação está ativa para direcionar novos lotes, métricas do dashboard e relatórios oficiais.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setEditingSeasonId(null);
+                setSeasonForm({
+                  name: '',
+                  start_date: new Date().toISOString().split('T')[0],
+                  end_date: '',
+                  status: 'active',
+                });
+                setShowSeasonModal(true);
+              }}
+              className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20 shrink-0"
+            >
+              <Plus className="w-4 h-4" /> Nova Estação
+            </button>
+          </div>
+
+          {seasons.length === 0 ? (
+            <div className="glass-card p-12 text-center rounded-2xl border border-slate-800 space-y-3">
+              <Calendar className="w-12 h-12 text-slate-600 mx-auto" />
+              <p className="text-slate-400 text-sm">Nenhuma estação reprodutiva cadastrada no sistema.</p>
+              <button
+                onClick={() => {
+                  setEditingSeasonId(null);
+                  setSeasonForm({
+                    name: 'Estação 2025/2026',
+                    start_date: '2025-10-01',
+                    end_date: '2026-03-31',
+                    status: 'active',
+                  });
+                  setShowSeasonModal(true);
+                }}
+                className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs transition-all inline-flex items-center gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5" /> Criar Primeira Estação
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {seasons.map((s) => {
+                const isActive = s.status === 'active';
+                const formatDate = (dStr: string) => {
+                  if (!dStr) return '—';
+                  const parts = dStr.split('-');
+                  if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+                  return dStr;
+                };
+
+                return (
+                  <div
+                    key={s.id}
+                    className={`glass-card p-5 rounded-2xl border transition-all space-y-4 relative ${
+                      isActive
+                        ? 'border-emerald-500/50 bg-linear-to-b from-slate-900/90 to-emerald-950/20 shadow-lg shadow-emerald-950/30'
+                        : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
+                    }`}
+                  >
+                    {/* Header: Name + Badge */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 block">
+                          Estação Reprodutiva
+                        </span>
+                        <h4 className="text-lg font-bold text-white tracking-tight mt-0.5">
+                          {s.name}
+                        </h4>
+                      </div>
+
+                      {isActive ? (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1 rounded-full shrink-0">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                          Ativa Vigente
+                        </span>
+                      ) : (
+                        <span className="text-[11px] font-medium text-slate-400 bg-slate-800 border border-slate-700 px-2.5 py-0.5 rounded-full shrink-0">
+                          Encerrada / Arquivo
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Period info */}
+                    <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800/80 grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="text-slate-400 block text-[10px] uppercase font-semibold">Início</span>
+                        <span className="text-slate-200 font-medium">{formatDate(s.start_date)}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block text-[10px] uppercase font-semibold">Término</span>
+                        <span className="text-slate-200 font-medium">{formatDate(s.end_date)}</span>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-800/80">
+                      <div>
+                        {!isActive && (
+                          <button
+                            onClick={() => handleSetActiveSeasonClick(s.id, s.name)}
+                            disabled={saving}
+                            className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold px-3 py-1.5 rounded-xl text-xs transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                            title="Tornar esta estação a ativa do sistema"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Tornar Ativa
+                          </button>
+                        )}
+                        {isActive && (
+                          <span className="text-[11px] text-emerald-400/80 font-medium flex items-center gap-1">
+                            <Star className="w-3.5 h-3.5 fill-emerald-400 text-emerald-400" /> Estação Padrão Atual
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => handleOpenEditSeason(s)}
+                          className="p-2 rounded-xl bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition-all text-xs cursor-pointer"
+                          title="Editar datas e nome"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteSeason(s.id, s.name)}
+                          className="p-2 rounded-xl bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20 transition-all text-xs cursor-pointer"
+                          title="Excluir estação"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : null}
 
       {/* ===== MODAL CADASTRO DE MATRIZ ===== */}
       {showAnimalModal && (
@@ -944,6 +1214,102 @@ export default function RegistriesPage() {
                 <button
                   type="button"
                   onClick={() => setShowPropertyModal(false)}
+                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===== MODAL CADASTRO / EDIÇÃO DE ESTAÇÃO DE MONTA ===== */}
+      {showSeasonModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="glass-card w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 space-y-5 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-emerald-400" />
+                {editingSeasonId ? 'Editar Estação de Monta' : 'Nova Estação de Monta'}
+              </h3>
+              <button
+                onClick={() => setShowSeasonModal(false)}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveSeason} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                  Nome da Estação Reprodutiva *
+                </label>
+                <input
+                  required
+                  type="text"
+                  placeholder="Ex: Estação 2025/2026, Monta Primavera 2025"
+                  value={seasonForm.name}
+                  onChange={(e) => setSeasonForm((f) => ({ ...f, name: e.target.value }))}
+                  className="w-full bg-slate-950 border border-slate-700 text-white font-bold text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Data de Início *</label>
+                  <input
+                    required
+                    type="date"
+                    value={seasonForm.start_date}
+                    onChange={(e) => setSeasonForm((f) => ({ ...f, start_date: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Data de Término *</label>
+                  <input
+                    required
+                    type="date"
+                    value={seasonForm.end_date}
+                    onChange={(e) => setSeasonForm((f) => ({ ...f, end_date: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-1">
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={seasonForm.status === 'active'}
+                    onChange={(e) =>
+                      setSeasonForm((f) => ({
+                        ...f,
+                        status: e.target.checked ? 'active' : 'closed',
+                      }))
+                    }
+                    className="w-4 h-4 rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  <span className="text-xs text-slate-300 font-medium">
+                    Definir como Estação Ativa Vigente (padrão do sistema)
+                  </span>
+                </label>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm shadow-md"
+                >
+                  {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  {saving ? 'Salvando...' : editingSeasonId ? 'Salvar Alterações' : 'Cadastrar Estação'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowSeasonModal(false)}
                   className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm"
                 >
                   Cancelar

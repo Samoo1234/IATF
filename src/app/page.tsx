@@ -12,6 +12,7 @@ import {
   type Farm,
 } from '@/lib/db';
 import { useActiveFarm } from '@/context/FarmContext';
+import { useActiveSeason } from '@/context/SeasonContext';
 import {
   TrendingUp,
   CheckCircle2,
@@ -33,6 +34,7 @@ import Link from 'next/link';
 
 export default function DashboardPage() {
   const { farms, activeFarmId, activeFarm, setActiveFarmId } = useActiveFarm();
+  const { activeSeason } = useActiveSeason();
   const [viewScope, setViewScope] = useState<'farm' | 'consolidated'>('farm');
   const [metrics, setMetrics] = useState<OrgMetrics | null>(null);
   const [lots, setLots] = useState<LotStat[]>([]);
@@ -163,7 +165,7 @@ export default function DashboardPage() {
             Painel de Controle Reprodutivo IATF
           </h1>
           <div className="flex flex-wrap items-center gap-2 text-sm text-slate-400 mt-1">
-            <span>Estação Reprodutiva <span className="text-emerald-400 font-semibold">2025/2026</span></span>
+            <span>Estação Reprodutiva <span className="text-emerald-400 font-semibold">{activeSeason?.name || 'Ativa'}</span></span>
             <span>•</span>
             <span className="font-semibold text-slate-200">
               {viewScope === 'farm' ? (selectedFarm?.name || 'Fazenda Ativa') : 'Visão Geral Consolidada'}

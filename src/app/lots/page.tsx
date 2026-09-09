@@ -193,10 +193,12 @@ function computeLotProgress(
   };
 }
 import { useActiveFarm } from '@/context/FarmContext';
+import { useActiveSeason } from '@/context/SeasonContext';
 
 export default function LotsPage() {
   const router = useRouter();
   const { activeFarmId, activeFarm } = useActiveFarm();
+  const { seasons, activeSeasonId, activeSeason } = useActiveSeason();
   const [lots, setLots] = useState<LotStat[]>([]);
   const [managementEvents, setManagementEvents] = useState<ManagementEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -218,6 +220,7 @@ export default function LotsPage() {
     property_id: '',
     protocol_id: '',
     start_date: '',
+    season_id: '',
     responsible_name: 'MV. DR. SAMOEL DUARTE',
   });
 
@@ -377,11 +380,21 @@ export default function LotsPage() {
     e.preventDefault();
     if (!form.code || !form.property_id || !form.protocol_id || !form.start_date) return;
     setSaving(true);
-    const id = await createLot(form);
+    const id = await createLot({
+      ...form,
+      season_id: form.season_id || activeSeasonId || undefined,
+    });
     setSaving(false);
     if (id) {
       setShowNewLot(false);
-      setForm({ code: '', property_id: '', protocol_id: '', start_date: '', responsible_name: 'MV. DR. SAMOEL DUARTE' });
+      setForm({
+        code: '',
+        property_id: '',
+        protocol_id: '',
+        start_date: '',
+        season_id: activeSeasonId || '',
+        responsible_name: 'MV. DR. SAMOEL DUARTE',
+      });
       await loadLots();
       showToast(`Lote ${form.code} criado com sucesso! Agenda gerada.`);
     }
@@ -565,7 +578,7 @@ export default function LotsPage() {
             Gestão de Lotes de IATF
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            {loading ? 'Carregando...' : `${filteredLots.length} lotes da ${activeFarm?.name || 'fazenda ativa'} na estação 2025/2026`}
+            {loading ? 'Carregando...' : `${filteredLots.length} lotes da ${activeFarm?.name || 'fazenda ativa'} na estação ${activeSeason?.name || 'ativa'}`}
           </p>
         </div>
 
@@ -581,7 +594,10 @@ export default function LotsPage() {
             />
           </div>
           <button
-            onClick={() => setShowNewLot(true)}
+            onClick={() => {
+              setForm((f) => ({ ...f, season_id: f.season_id || activeSeasonId || '' }));
+              setShowNewLot(true);
+            }}
             className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md glow-emerald cursor-pointer"
           >
             <Plus className="w-4 h-4" /> Novo Lote
@@ -652,6 +668,11 @@ export default function LotsPage() {
                     <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
                       {lot.property_name ?? lot.farm_name}
                     </span>
+                    {lot.season_name && (
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                        {lot.season_name}
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <span className={`text-xs font-semibold border px-2.5 py-1 rounded-lg flex items-center gap-1 ${statusInfo.color}`}>
@@ -1454,6 +1475,25 @@ export default function LotsPage() {
                     className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                  Estação de Monta / Reprodutiva *
+                </label>
+                <select
+                  required
+                  value={form.season_id}
+                  onChange={(e) => setForm((f) => ({ ...f, season_id: e.target.value }))}
+                  className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="">Selecione a estação...</option>
+                  {seasons.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} {s.status === 'active' ? '(Ativa Vigente)' : '(Encerrada)'}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>

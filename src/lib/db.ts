@@ -163,6 +163,8 @@ export interface LotStat {
   id: string;
   code: string;
   farm_id: string;
+  season_id?: string;
+  season_name?: string | null;
   start_date: string;
   ia_planned_date: string | null;
   dg_planned_date: string | null;
@@ -1145,22 +1147,59 @@ export async function createLot(lot: {
   code: string;
   start_date: string;
   responsible_name: string;
+  season_id?: string;
 }): Promise<string | null> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return null;
 
   const supabase = createClient();
 
-  // Fetch active season
-  const { data: season } = await supabase
-    .from('reproductive_seasons')
-    .select('id')
-    .eq('organization_id', orgId)
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
+  // Resolve target season: use provided season_id or find active season
+  let targetSeasonId = lot.season_id;
+  if (!targetSeasonId) {
+    const { data: season } = await supabase
+      .from('reproductive_seasons')
+      .select('id')
+      .eq('organization_id', orgId)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle();
 
-  if (!season) return null;
+    targetSeasonId = season?.id;
+  }
+
+  // Fallback: pick any available season
+  if (!targetSeasonId) {
+    const { data: anySeason } = await supabase
+      .from('reproductive_seasons')
+      .select('id')
+      .eq('organization_id', orgId)
+      .limit(1)
+      .maybeSingle();
+
+    targetSeasonId = anySeason?.id;
+  }
+
+  // If none exists, create a default active season
+  if (!targetSeasonId) {
+    const currentYear = new Date().getFullYear();
+    const defaultName = `Estação ${currentYear}/${currentYear + 1}`;
+    const { data: createdSeason } = await supabase
+      .from('reproductive_seasons')
+      .insert({
+        organization_id: orgId,
+        name: defaultName,
+        start_date: `${currentYear}-10-01`,
+        end_date: `${currentYear + 1}-03-31`,
+        status: 'active',
+      })
+      .select('id')
+      .single();
+
+    targetSeasonId = createdSeason?.id;
+  }
+
+  if (!targetSeasonId) return null;
 
   // Fetch protocol steps to calculate dates
   const { data: proto } = await supabase
@@ -1191,7 +1230,7 @@ export async function createLot(lot: {
     .from('iatf_lots')
     .insert({
       organization_id: orgId,
-      season_id: season.id,
+      season_id: targetSeasonId,
       farm_id: prop?.farm_id,
       property_id: lot.property_id,
       protocol_id: lot.protocol_id,
@@ -1554,3 +1593,204 @@ export async function createAnimalCategory(name: string): Promise<boolean> {
   invalidateCache('categories');
   return true;
 }
+
+// ============================================================
+// REPRODUCTIVE SEASONS (ESTAÇÕES DE MONTA)
+// ============================================================
+
+export interface ReproductiveSeason {
+  id: string;
+  organization_id?: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+  status: 'active' | 'closed';
+  created_at?: string;
+}
+
+export async function getReproductiveSeasons(forceRefresh = false): Promise<ReproductiveSeason[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+
+  const cacheKey = `seasons_${orgId}`;
+  if (!forceRefresh) {
+    const cached = getCached<ReproductiveSeason[]>(cacheKey);
+    if (cached) return cached;
+  }
+
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('reproductive_seasons')
+    .select('*')
+    .eq('organization_id', orgId)
+    .order('start_date', { ascending: false });
+
+  if (error) {
+    console.error('getReproductiveSeasons error:', error);
+    return getCached<ReproductiveSeason[]>(cacheKey) ?? [];
+  }
+
+  const result = (data ?? []) as ReproductiveSeason[];
+  setCached(cacheKey, result);
+  return result;
+}
+
+export async function createReproductiveSeason(season: {
+  name: string;
+  start_date: string;
+  end_date: string;
+  status?: 'active' | 'closed';
+}): Promise<ReproductiveSeason | null> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return null;
+
+  const supabase = createClient();
+  const status = season.status || 'closed';
+
+  // If new season is set to active, mark other seasons of this org as closed
+  if (status === 'active') {
+    await supabase
+      .from('reproductive_seasons')
+      .update({ status: 'closed' })
+      .eq('organization_id', orgId);
+  }
+
+  const { data, error } = await supabase
+    .from('reproductive_seasons')
+    .insert({
+      organization_id: orgId,
+      name: season.name.trim(),
+      start_date: season.start_date,
+      end_date: season.end_date,
+      status,
+    })
+    .select('*')
+    .single();
+
+  if (error) {
+    console.error('createReproductiveSeason error:', error);
+    return null;
+  }
+
+  invalidateCache('seasons');
+  invalidateCache('lots');
+  invalidateCache('metrics');
+  return data as ReproductiveSeason;
+}
+
+export async function updateReproductiveSeason(
+  id: string,
+  updates: {
+    name?: string;
+    start_date?: string;
+    end_date?: string;
+    status?: 'active' | 'closed';
+  }
+): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+
+  const supabase = createClient();
+
+  if (updates.status === 'active') {
+    // If activating, close others
+    await supabase
+      .from('reproductive_seasons')
+      .update({ status: 'closed' })
+      .eq('organization_id', orgId)
+      .neq('id', id);
+  }
+
+  const payload: Record<string, unknown> = {};
+  if (updates.name !== undefined) payload.name = updates.name.trim();
+  if (updates.start_date !== undefined) payload.start_date = updates.start_date;
+  if (updates.end_date !== undefined) payload.end_date = updates.end_date;
+  if (updates.status !== undefined) payload.status = updates.status;
+
+  const { error } = await supabase
+    .from('reproductive_seasons')
+    .update(payload)
+    .eq('id', id)
+    .eq('organization_id', orgId);
+
+  if (error) {
+    console.error('updateReproductiveSeason error:', error);
+    return false;
+  }
+
+  invalidateCache('seasons');
+  invalidateCache('lots');
+  invalidateCache('metrics');
+  return true;
+}
+
+export async function setActiveReproductiveSeason(id: string): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+
+  const supabase = createClient();
+
+  // Set all to closed
+  await supabase
+    .from('reproductive_seasons')
+    .update({ status: 'closed' })
+    .eq('organization_id', orgId);
+
+  // Set target to active
+  const { error } = await supabase
+    .from('reproductive_seasons')
+    .update({ status: 'active' })
+    .eq('id', id)
+    .eq('organization_id', orgId);
+
+  if (error) {
+    console.error('setActiveReproductiveSeason error:', error);
+    return false;
+  }
+
+  invalidateCache('seasons');
+  invalidateCache('lots');
+  invalidateCache('metrics');
+  return true;
+}
+
+export async function deleteReproductiveSeason(id: string): Promise<{ success: boolean; error?: string }> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return { success: false, error: 'Sessão inválida' };
+
+  const supabase = createClient();
+
+  // Check if any lot is associated with this season
+  const { count, error: countErr } = await supabase
+    .from('iatf_lots')
+    .select('id', { count: 'exact', head: true })
+    .eq('season_id', id);
+
+  if (countErr) {
+    console.error('deleteReproductiveSeason check lots error:', countErr);
+  }
+
+  if (count && count > 0) {
+    return {
+      success: false,
+      error: `Não é possível excluir esta estação pois existem ${count} lote(s) vinculados a ela.`,
+    };
+  }
+
+  const { error } = await supabase
+    .from('reproductive_seasons')
+    .delete()
+    .eq('id', id)
+    .eq('organization_id', orgId);
+
+  if (error) {
+    console.error('deleteReproductiveSeason error:', error);
+    return { success: false, error: error.message };
+  }
+
+  invalidateCache('seasons');
+  invalidateCache('lots');
+  invalidateCache('metrics');
+  return { success: true };
+}
+

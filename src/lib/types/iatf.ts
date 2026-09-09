@@ -15,10 +15,12 @@ export interface Property {
 
 export interface ReproductiveSeason {
   id: string;
+  organization_id?: string;
   name: string;
   start_date: string;
   end_date: string;
   status: 'active' | 'closed';
+  created_at?: string;
 }
 
 export interface ProtocolStep {
