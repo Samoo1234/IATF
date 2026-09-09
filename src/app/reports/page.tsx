@@ -233,7 +233,7 @@ export default function ReportsPage() {
             <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Sistema IATF Master Gestão Reprodutiva</p>
             <p className="text-slate-400">Emissão: {new Date().toLocaleDateString('pt-BR')}</p>
           </div>
-          <div className="text-center sm:text-right min-w-[240px] pt-4 sm:pt-0">
+          <div className="text-center sm:text-right min-w-60 pt-4 sm:pt-0">
             <div className="w-56 h-px bg-slate-600 mx-auto sm:ml-auto sm:mr-0 mb-2" />
             <p className="font-bold text-white uppercase text-xs">{vetDisplayName}</p>
             <p className="text-[11px] text-emerald-400 font-mono">{vetCrmv || 'Médico Veterinário Responsável'}</p>
