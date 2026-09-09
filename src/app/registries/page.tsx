@@ -985,31 +985,13 @@ export default function RegistriesPage() {
       ) : activeTab === 'veterinarians' ? (
         /* ===== TAB: MÉDICOS VETERINÁRIOS ===== */
         <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/60 p-4 rounded-2xl border border-slate-800">
-            <div>
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <GraduationCap className="w-4 h-4 text-emerald-400" /> Médicos Veterinários & Responsáveis Técnicos (RT)
-              </h3>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Gerencie os profissionais técnicos habilitados, registros no CRMV e defina o RT padrão para novos lotes e laudos oficiais.
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                setEditingVetId(null);
-                setVetForm({
-                  name: '',
-                  crmv: '',
-                  phone: '',
-                  email: '',
-                  is_default: veterinarians.length === 0,
-                });
-                setShowVetModal(true);
-              }}
-              className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20 shrink-0"
-            >
-              <Plus className="w-4 h-4" /> Novo Veterinário
-            </button>
+          <div className="bg-slate-900/60 p-4 rounded-2xl border border-slate-800">
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <GraduationCap className="w-4 h-4 text-emerald-400" /> Médicos Veterinários & Responsáveis Técnicos (RT)
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Gerencie os profissionais técnicos habilitados, registros no CRMV e defina o RT padrão para novos lotes e laudos oficiais.
+            </p>
           </div>
 
           {veterinarians.length === 0 ? (
