@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getLots, getSemenBatches, type LotStat, type SemenBatch } from '@/lib/db';
+import { getLots, getSemenBatches, getVeterinarians, type LotStat, type SemenBatch, type Veterinarian } from '@/lib/db';
 import { useActiveFarm } from '@/context/FarmContext';
 import { useActiveSeason } from '@/context/SeasonContext';
-import { FileText, Printer, Layers, Syringe, RefreshCw } from 'lucide-react';
+import { FileText, Printer, Layers, Syringe, RefreshCw, Award } from 'lucide-react';
 
 export default function ReportsPage() {
   const { activeFarmId, activeFarm } = useActiveFarm();
@@ -12,17 +12,20 @@ export default function ReportsPage() {
   const [activeTab, setActiveTab] = useState<'lotes' | 'matrizes' | 'semen'>('lotes');
   const [lots, setLots] = useState<LotStat[]>([]);
   const [semenBatches, setSemenBatches] = useState<SemenBatch[]>([]);
+  const [veterinarians, setVeterinarians] = useState<Veterinarian[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
       setLoading(true);
-      const [l, s] = await Promise.all([
+      const [l, s, v] = await Promise.all([
         getLots(false, activeFarmId || undefined),
         getSemenBatches(),
+        getVeterinarians(),
       ]);
       setLots(l);
       setSemenBatches(s);
+      setVeterinarians(v);
       setLoading(false);
     }
     load();
@@ -33,6 +36,10 @@ export default function ReportsPage() {
   const totalPregnant = lots.reduce((s, l) => s + l.pregnancies, 0);
   const totalEmpty = lots.reduce((s, l) => s + l.empty_count, 0);
   const overallRate = totalInseminated > 0 ? (totalPregnant / totalInseminated) * 100 : 0;
+
+  const defaultVet = veterinarians.find((v) => v.is_default) || veterinarians[0];
+  const vetDisplayName = defaultVet ? defaultVet.name : 'DR. SAMOEL DUARTE';
+  const vetCrmv = defaultVet?.crmv ? `CRMV: ${defaultVet.crmv}` : '';
 
   return (
     <div className="space-y-6">
@@ -101,11 +108,14 @@ export default function ReportsPage() {
 
       {/* Table */}
       <div className="glass-card p-6 rounded-2xl border border-slate-800 space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <h2 className="text-base font-bold text-white uppercase tracking-wider">
             Relatório Oficial da Estação {activeSeason?.name || 'Vigente'} — {activeFarm?.name || 'FAZENDA ATIVA'}
           </h2>
-          <span className="text-xs text-slate-400">DR. SAMOEL DUARTE</span>
+          <div className="text-right">
+            <span className="text-xs font-semibold text-slate-300 block">{vetDisplayName}</span>
+            {vetCrmv && <span className="text-[10px] text-emerald-400 block font-mono">{vetCrmv}</span>}
+          </div>
         </div>
 
         {loading ? (
@@ -216,6 +226,19 @@ export default function ReportsPage() {
             </table>
           </div>
         )}
+
+        {/* Assinatura / Rodapé do Relatório Oficial */}
+        <div className="pt-8 pb-2 border-t border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-6 text-xs text-slate-400 print:mt-6">
+          <div className="space-y-1 text-center sm:text-left">
+            <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Sistema IATF Master Gestão Reprodutiva</p>
+            <p className="text-slate-400">Emissão: {new Date().toLocaleDateString('pt-BR')}</p>
+          </div>
+          <div className="text-center sm:text-right min-w-[240px] pt-4 sm:pt-0">
+            <div className="w-56 h-px bg-slate-600 mx-auto sm:ml-auto sm:mr-0 mb-2" />
+            <p className="font-bold text-white uppercase text-xs">{vetDisplayName}</p>
+            <p className="text-[11px] text-emerald-400 font-mono">{vetCrmv || 'Médico Veterinário Responsável'}</p>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -8,18 +8,20 @@ import {
   getAnimalCategories, createAnimalCategory,
   getAnimals, createAnimal,
   createReproductiveSeason, updateReproductiveSeason, deleteReproductiveSeason,
-  type Bull, type Farm, type Breed, type AnimalCategory, type Animal, type ReproductiveSeason
+  getVeterinarians, createVeterinarian, updateVeterinarian, deleteVeterinarian, setDefaultVeterinarian,
+  type Bull, type Farm, type Breed, type AnimalCategory, type Animal, type ReproductiveSeason, type Veterinarian
 } from '@/lib/db';
 import { 
   FolderTree, Plus, RefreshCw, X,
   Dna, MapPin, Tag, Building2, Award, Syringe, CheckCircle2, AlertCircle,
-  Calendar, Edit2, Trash2, Star
+  Calendar, Edit2, Trash2, Star,
+  GraduationCap, Phone, Mail
 } from 'lucide-react';
 import Link from 'next/link';
 import { useActiveFarm } from '@/context/FarmContext';
 import { useActiveSeason } from '@/context/SeasonContext';
 
-type TabType = 'matrizes' | 'bulls' | 'farms' | 'breeds' | 'seasons';
+type TabType = 'matrizes' | 'bulls' | 'farms' | 'breeds' | 'seasons' | 'veterinarians';
 
 export default function RegistriesPage() {
   const { activeFarmId, activeFarm } = useActiveFarm();
@@ -35,6 +37,18 @@ export default function RegistriesPage() {
     start_date: '',
     end_date: '',
     status: 'active' as 'active' | 'closed',
+  });
+
+  // Veterinarian states
+  const [veterinarians, setVeterinarians] = useState<Veterinarian[]>([]);
+  const [showVetModal, setShowVetModal] = useState(false);
+  const [editingVetId, setEditingVetId] = useState<string | null>(null);
+  const [vetForm, setVetForm] = useState({
+    name: '',
+    crmv: '',
+    phone: '',
+    email: '',
+    is_default: false,
   });
 
   // Data states
@@ -92,18 +106,28 @@ export default function RegistriesPage() {
 
   const loadAllData = useCallback(async () => {
     setLoading(true);
-    const [a, b, f, br, c] = await Promise.all([
+    const [a, b, f, br, c, v] = await Promise.all([
       getAnimals(100, false, activeFarmId || undefined),
       getBulls(),
       getFarms(),
       getBreeds(),
       getAnimalCategories(),
+      getVeterinarians(),
     ]);
     setAnimals(a);
     setBulls(b);
     setFarms(f);
     setBreeds(br);
     setCategories(c);
+    setVeterinarians(v);
+
+    const defaultVet = v.find((vet) => vet.is_default);
+    if (defaultVet && !farmForm.technical_responsible) {
+      setFarmForm((prev) => ({
+        ...prev,
+        technical_responsible: defaultVet.crmv ? `${defaultVet.name} (${defaultVet.crmv})` : defaultVet.name,
+      }));
+    }
 
     const farmToUse = activeFarmId || f[0]?.id || '';
     const activeFarmObj = f.find(farm => farm.id === farmToUse);
@@ -326,6 +350,95 @@ export default function RegistriesPage() {
     setShowSeasonModal(true);
   };
 
+  const handleSaveVeterinarian = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!vetForm.name.trim()) {
+      setFeedbackMsg({ type: 'error', text: 'Preencha o nome do médico veterinário.' });
+      return;
+    }
+
+    setSaving(true);
+    let success = false;
+
+    if (editingVetId) {
+      success = await updateVeterinarian(editingVetId, {
+        name: vetForm.name,
+        crmv: vetForm.crmv,
+        phone: vetForm.phone,
+        email: vetForm.email,
+        is_default: vetForm.is_default,
+      });
+    } else {
+      const created = await createVeterinarian({
+        name: vetForm.name,
+        crmv: vetForm.crmv,
+        phone: vetForm.phone,
+        email: vetForm.email,
+        is_default: vetForm.is_default,
+      });
+      success = !!created;
+    }
+    setSaving(false);
+
+    if (success) {
+      setFeedbackMsg({
+        type: 'success',
+        text: editingVetId ? 'Médico veterinário atualizado com sucesso!' : 'Médico veterinário cadastrado com sucesso!',
+      });
+      setShowVetModal(false);
+      setEditingVetId(null);
+      setVetForm({ name: '', crmv: '', phone: '', email: '', is_default: false });
+      const v = await getVeterinarians(true);
+      setVeterinarians(v);
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: 'Erro ao salvar médico veterinário.' });
+    }
+  };
+
+  const handleSetDefaultVet = async (id: string, name: string) => {
+    setSaving(true);
+    const ok = await setDefaultVeterinarian(id);
+    setSaving(false);
+    if (ok) {
+      setFeedbackMsg({ type: 'success', text: `Dr(a). ${name} agora é o(a) Responsável Técnico(a) Padrão!` });
+      const v = await getVeterinarians(true);
+      setVeterinarians(v);
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: 'Erro ao definir RT padrão.' });
+    }
+  };
+
+  const handleDeleteVet = async (id: string, name: string) => {
+    if (!confirm(`Deseja realmente excluir o cadastro do(a) Dr(a). "${name}"?`)) return;
+
+    setSaving(true);
+    const res = await deleteVeterinarian(id);
+    setSaving(false);
+
+    if (res.success) {
+      setFeedbackMsg({ type: 'success', text: `Veterinário "${name}" excluído com sucesso!` });
+      const v = await getVeterinarians(true);
+      setVeterinarians(v);
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao excluir veterinário.' });
+    }
+  };
+
+  const handleOpenEditVet = (v: Veterinarian) => {
+    setEditingVetId(v.id);
+    setVetForm({
+      name: v.name,
+      crmv: v.crmv || '',
+      phone: v.phone || '',
+      email: v.email || '',
+      is_default: !!v.is_default,
+    });
+    setShowVetModal(true);
+  };
+
   const selectedFarmObj = farms.find((f) => f.id === animalForm.farm_id);
   const availableProperties = selectedFarmObj?.properties || [];
 
@@ -416,6 +529,24 @@ export default function RegistriesPage() {
               <Plus className="w-4 h-4" /> Nova Estação de Monta
             </button>
           )}
+          {activeTab === 'veterinarians' && (
+            <button
+              onClick={() => {
+                setEditingVetId(null);
+                setVetForm({
+                  name: '',
+                  crmv: '',
+                  phone: '',
+                  email: '',
+                  is_default: veterinarians.length === 0,
+                });
+                setShowVetModal(true);
+              }}
+              className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
+            >
+              <Plus className="w-4 h-4" /> Novo Veterinário (RT)
+            </button>
+          )}
         </div>
       </div>
 
@@ -470,6 +601,16 @@ export default function RegistriesPage() {
           }`}
         >
           <Calendar className="w-4 h-4" /> Estações de Monta ({seasons.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('veterinarians')}
+          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
+            activeTab === 'veterinarians'
+              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <GraduationCap className="w-4 h-4" /> Médicos Veterinários ({veterinarians.length})
         </button>
       </div>
 
@@ -841,6 +982,150 @@ export default function RegistriesPage() {
             </div>
           )}
         </div>
+      ) : activeTab === 'veterinarians' ? (
+        /* ===== TAB: MÉDICOS VETERINÁRIOS ===== */
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/60 p-4 rounded-2xl border border-slate-800">
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <GraduationCap className="w-4 h-4 text-emerald-400" /> Médicos Veterinários & Responsáveis Técnicos (RT)
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Gerencie os profissionais técnicos habilitados, registros no CRMV e defina o RT padrão para novos lotes e laudos oficiais.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setEditingVetId(null);
+                setVetForm({
+                  name: '',
+                  crmv: '',
+                  phone: '',
+                  email: '',
+                  is_default: veterinarians.length === 0,
+                });
+                setShowVetModal(true);
+              }}
+              className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20 shrink-0"
+            >
+              <Plus className="w-4 h-4" /> Novo Veterinário
+            </button>
+          </div>
+
+          {veterinarians.length === 0 ? (
+            <div className="glass-card p-12 text-center rounded-2xl border border-slate-800 space-y-3">
+              <GraduationCap className="w-12 h-12 text-slate-600 mx-auto" />
+              <p className="text-slate-400 text-sm">Nenhum médico veterinário cadastrado.</p>
+              <button
+                onClick={() => {
+                  setEditingVetId(null);
+                  setVetForm({
+                    name: 'MV. DR. SAMOEL DUARTE',
+                    crmv: 'CRMV-MT 1234',
+                    phone: '',
+                    email: '',
+                    is_default: true,
+                  });
+                  setShowVetModal(true);
+                }}
+                className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs transition-all inline-flex items-center gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5" /> Cadastrar Primeiro Veterinário
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {veterinarians.map((v) => (
+                <div
+                  key={v.id}
+                  className={`glass-card p-5 rounded-2xl border transition-all space-y-4 relative ${
+                    v.is_default
+                      ? 'border-emerald-500/50 bg-linear-to-b from-slate-900/90 to-emerald-950/20 shadow-lg shadow-emerald-950/30'
+                      : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
+                  }`}
+                >
+                  {/* Header: Name + Badge */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 block">
+                        Médico Veterinário
+                      </span>
+                      <h4 className="text-base font-bold text-white tracking-tight mt-0.5">
+                        {v.name}
+                      </h4>
+                      {v.crmv && (
+                        <span className="inline-block mt-1 font-mono text-xs font-semibold px-2 py-0.5 rounded-lg bg-slate-950 border border-emerald-500/30 text-emerald-400">
+                          {v.crmv}
+                        </span>
+                      )}
+                    </div>
+
+                    {v.is_default ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-1 rounded-full shrink-0">
+                        <Star className="w-3 h-3 fill-emerald-400" />
+                        RT Padrão
+                      </span>
+                    ) : (
+                      <span className="text-[11px] font-medium text-slate-400 bg-slate-800 border border-slate-700 px-2.5 py-0.5 rounded-full shrink-0">
+                        Equipe Técnica
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Contact info */}
+                  <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800/80 space-y-1.5 text-xs">
+                    <div className="flex items-center gap-2 text-slate-300">
+                      <Phone className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                      <span>{v.phone || 'Telefone não informado'}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-slate-300 truncate">
+                      <Mail className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                      <span className="truncate">{v.email || 'E-mail não informado'}</span>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-800/80">
+                    <div>
+                      {!v.is_default && (
+                        <button
+                          onClick={() => handleSetDefaultVet(v.id, v.name)}
+                          disabled={saving}
+                          className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold px-3 py-1.5 rounded-xl text-xs transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          title="Definir este profissional como RT padrão"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Tornar RT Padrão
+                        </button>
+                      )}
+                      {v.is_default && (
+                        <span className="text-[11px] text-emerald-400/80 font-medium flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Responsável Principal
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => handleOpenEditVet(v)}
+                        className="p-2 rounded-xl bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition-all text-xs cursor-pointer"
+                        title="Editar dados"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteVet(v.id, v.name)}
+                        className="p-2 rounded-xl bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20 transition-all text-xs cursor-pointer"
+                        title="Excluir veterinário"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       ) : null}
 
       {/* ===== MODAL CADASTRO DE MATRIZ ===== */}
@@ -1095,13 +1380,28 @@ export default function RegistriesPage() {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-400 mb-1.5">Responsável Técnico</label>
-                <input
-                  type="text"
-                  placeholder="Ex: MV. DR. SAMOEL DUARTE"
-                  value={farmForm.technical_responsible}
-                  onChange={(e) => setFarmForm((f) => ({ ...f, technical_responsible: e.target.value }))}
-                  className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
-                />
+                {veterinarians.length > 0 ? (
+                  <select
+                    value={farmForm.technical_responsible}
+                    onChange={(e) => setFarmForm((f) => ({ ...f, technical_responsible: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="">Selecione o veterinário...</option>
+                    {veterinarians.map((v) => (
+                      <option key={v.id} value={v.crmv ? `${v.name} (${v.crmv})` : v.name}>
+                        {v.name} {v.crmv ? `• ${v.crmv}` : ''} {v.is_default ? '(Padrão)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    placeholder="Ex: MV. DR. SAMOEL DUARTE"
+                    value={farmForm.technical_responsible}
+                    onChange={(e) => setFarmForm((f) => ({ ...f, technical_responsible: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                  />
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -1310,6 +1610,115 @@ export default function RegistriesPage() {
                 <button
                   type="button"
                   onClick={() => setShowSeasonModal(false)}
+                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===== MODAL CADASTRO / EDIÇÃO DE MÉDICO VETERINÁRIO ===== */}
+      {showVetModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="glass-card w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 space-y-5 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <GraduationCap className="w-5 h-5 text-emerald-400" />
+                {editingVetId ? 'Editar Médico Veterinário' : 'Novo Médico Veterinário'}
+              </h3>
+              <button
+                onClick={() => setShowVetModal(false)}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveVeterinarian} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                  Nome Completo do Médico Veterinário *
+                </label>
+                <input
+                  required
+                  type="text"
+                  placeholder="Ex: Dr. Samoel Duarte"
+                  value={vetForm.name}
+                  onChange={(e) => setVetForm((f) => ({ ...f, name: e.target.value }))}
+                  className="w-full bg-slate-950 border border-slate-700 text-white font-bold text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                  Registro Profissional (CRMV)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex: CRMV-MT 12345"
+                  value={vetForm.crmv}
+                  onChange={(e) => setVetForm((f) => ({ ...f, crmv: e.target.value }))}
+                  className="w-full bg-slate-950 border border-slate-700 text-white font-mono text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Telefone / WhatsApp</label>
+                  <input
+                    type="text"
+                    placeholder="(65) 99999-0000"
+                    value={vetForm.phone}
+                    onChange={(e) => setVetForm((f) => ({ ...f, phone: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">E-mail</label>
+                  <input
+                    type="email"
+                    placeholder="vet@iatf.com"
+                    value={vetForm.email}
+                    onChange={(e) => setVetForm((f) => ({ ...f, email: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-1">
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={vetForm.is_default}
+                    onChange={(e) =>
+                      setVetForm((f) => ({
+                        ...f,
+                        is_default: e.target.checked,
+                      }))
+                    }
+                    className="w-4 h-4 rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  <span className="text-xs text-slate-300 font-medium">
+                    Definir como Responsável Técnico Padrão (RT)
+                  </span>
+                </label>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm shadow-md"
+                >
+                  {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  {saving ? 'Salvando...' : editingVetId ? 'Salvar Alterações' : 'Cadastrar Veterinário'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowVetModal(false)}
                   className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm"
                 >
                   Cancelar

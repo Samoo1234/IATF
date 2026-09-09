@@ -18,6 +18,7 @@ import {
   getAnimalCategories,
   getFarms,
   getManagementEvents,
+  getVeterinarians,
   type LotStat,
   type LotAnimal,
   type Protocol,
@@ -27,6 +28,7 @@ import {
   type Farm,
   type Animal,
   type ManagementEvent,
+  type Veterinarian,
 } from '@/lib/db';
 import {
   Layers,
@@ -212,6 +214,7 @@ export default function LotsPage() {
   const [farms, setFarms] = useState<Farm[]>([]);
   const [breeds, setBreeds] = useState<Breed[]>([]);
   const [categories, setCategories] = useState<AnimalCategory[]>([]);
+  const [veterinarians, setVeterinarians] = useState<Veterinarian[]>([]);
   const [saving, setSaving] = useState(false);
 
   // New lot form state
@@ -334,12 +337,13 @@ export default function LotsPage() {
   }, [activeFarmId]);
 
   const loadAuxData = useCallback(async () => {
-    const [p, pr, f, b, c] = await Promise.all([
+    const [p, pr, f, b, c, v] = await Promise.all([
       getProtocols(),
       getProperties(false, activeFarmId || undefined),
       getFarms(),
       getBreeds(),
       getAnimalCategories(),
+      getVeterinarians(),
     ]);
     // Prioritize Nelore so it appears first by default
     const sortedBreeds = b.slice().sort((x, y) => {
@@ -354,6 +358,7 @@ export default function LotsPage() {
     setFarms(f);
     setBreeds(sortedBreeds);
     setCategories(c);
+    setVeterinarians(v);
 
     const defaultBreed = sortedBreeds.find((x) => x.name.toLowerCase().includes('nelore'))?.id || sortedBreeds[0]?.id || '';
     setQuickAnimal((prev) => ({
@@ -361,6 +366,15 @@ export default function LotsPage() {
       breed_id: prev.breed_id || defaultBreed,
       category_id: prev.category_id || c[0]?.id || '',
     }));
+
+    const defaultVet = v.find((vet) => vet.is_default) || v[0];
+    if (defaultVet) {
+      const defaultVetLabel = defaultVet.crmv ? `${defaultVet.name} (${defaultVet.crmv})` : defaultVet.name;
+      setForm((prev) => ({
+        ...prev,
+        responsible_name: prev.responsible_name && prev.responsible_name !== 'MV. DR. SAMOEL DUARTE' ? prev.responsible_name : defaultVetLabel,
+      }));
+    }
   }, [activeFarmId]);
 
   useEffect(() => {
@@ -387,13 +401,15 @@ export default function LotsPage() {
     setSaving(false);
     if (id) {
       setShowNewLot(false);
+      const defaultVet = veterinarians.find((vet) => vet.is_default) || veterinarians[0];
+      const defaultVetLabel = defaultVet ? (defaultVet.crmv ? `${defaultVet.name} (${defaultVet.crmv})` : defaultVet.name) : 'MV. DR. SAMOEL DUARTE';
       setForm({
         code: '',
         property_id: '',
         protocol_id: '',
         start_date: '',
         season_id: activeSeasonId || '',
-        responsible_name: 'MV. DR. SAMOEL DUARTE',
+        responsible_name: defaultVetLabel,
       });
       await loadLots();
       showToast(`Lote ${form.code} criado com sucesso! Agenda gerada.`);
@@ -1533,13 +1549,28 @@ export default function LotsPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1.5">Responsável Técnico</label>
-                <input
-                  type="text"
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-semibold text-slate-400">Responsável Técnico (RT)</label>
+                  <span className="text-[10px] text-emerald-400 font-medium">Médico Veterinário</span>
+                </div>
+                <select
                   value={form.responsible_name}
                   onChange={(e) => setForm((f) => ({ ...f, responsible_name: e.target.value }))}
                   className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
-                />
+                >
+                  <option value="">Selecione o Responsável Técnico...</option>
+                  {veterinarians.map((vet) => {
+                    const vetLabel = vet.crmv ? `${vet.name} (${vet.crmv})` : vet.name;
+                    return (
+                      <option key={vet.id} value={vetLabel}>
+                        {vet.name} {vet.crmv ? `• CRMV: ${vet.crmv}` : ''} {vet.is_default ? '⭐ (RT Padrão)' : ''}
+                      </option>
+                    );
+                  })}
+                  {form.responsible_name && !veterinarians.some((v) => (v.crmv ? `${v.name} (${v.crmv})` : v.name) === form.responsible_name) && (
+                    <option value={form.responsible_name}>{form.responsible_name}</option>
+                  )}
+                </select>
               </div>
 
               {form.start_date && form.protocol_id && protocols.length > 0 && (() => {

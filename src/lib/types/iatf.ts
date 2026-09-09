@@ -13,6 +13,17 @@ export interface Property {
   name: string;
 }
 
+export interface Veterinarian {
+  id: string;
+  organization_id?: string;
+  name: string;
+  crmv?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  is_default?: boolean;
+  created_at?: string;
+}
+
 export interface ReproductiveSeason {
   id: string;
   organization_id?: string;

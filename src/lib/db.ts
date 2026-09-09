@@ -1794,3 +1794,203 @@ export async function deleteReproductiveSeason(id: string): Promise<{ success: b
   return { success: true };
 }
 
+// ============================================================
+// VETERINARIANS (MÉDICOS VETERINÁRIOS / RT)
+// ============================================================
+
+export interface Veterinarian {
+  id: string;
+  organization_id?: string;
+  name: string;
+  crmv?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  is_default?: boolean;
+  created_at?: string;
+}
+
+export async function getVeterinarians(forceRefresh = false): Promise<Veterinarian[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+
+  const cacheKey = `vets_${orgId}`;
+  if (!forceRefresh) {
+    const cached = getCached<Veterinarian[]>(cacheKey);
+    if (cached) return cached;
+  }
+
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('veterinarians')
+    .select('*')
+    .eq('organization_id', orgId)
+    .order('is_default', { ascending: false })
+    .order('name', { ascending: true });
+
+  if (error) {
+    console.error('getVeterinarians error:', error);
+    // Fallback in memory if table not yet seeded or error
+    return getCached<Veterinarian[]>(cacheKey) ?? [
+      {
+        id: 'default-vet',
+        name: 'MV. DR. SAMOEL DUARTE',
+        crmv: 'CRMV-MT',
+        is_default: true,
+      },
+    ];
+  }
+
+  let result = (data ?? []) as Veterinarian[];
+  if (result.length === 0) {
+    // Auto-create default veterinarian if table is completely empty
+    const { data: created } = await supabase
+      .from('veterinarians')
+      .insert({
+        organization_id: orgId,
+        name: 'MV. DR. SAMOEL DUARTE',
+        crmv: 'CRMV-MT 1234',
+        phone: '(65) 99999-0000',
+        email: 'samoel@iatfmaster.com.br',
+        is_default: true,
+      })
+      .select('*')
+      .single();
+
+    if (created) {
+      result = [created as Veterinarian];
+    }
+  }
+
+  setCached(cacheKey, result);
+  return result;
+}
+
+export async function createVeterinarian(vet: {
+  name: string;
+  crmv?: string;
+  phone?: string;
+  email?: string;
+  is_default?: boolean;
+}): Promise<Veterinarian | null> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return null;
+
+  const supabase = createClient();
+  const isDefault = !!vet.is_default;
+
+  if (isDefault) {
+    await supabase
+      .from('veterinarians')
+      .update({ is_default: false })
+      .eq('organization_id', orgId);
+  }
+
+  const { data, error } = await supabase
+    .from('veterinarians')
+    .insert({
+      organization_id: orgId,
+      name: vet.name.trim(),
+      crmv: vet.crmv ? vet.crmv.trim() : null,
+      phone: vet.phone ? vet.phone.trim() : null,
+      email: vet.email ? vet.email.trim() : null,
+      is_default: isDefault,
+    })
+    .select('*')
+    .single();
+
+  if (error) {
+    console.error('createVeterinarian error:', error);
+    return null;
+  }
+
+  invalidateCache('vets');
+  return data as Veterinarian;
+}
+
+export async function updateVeterinarian(
+  id: string,
+  updates: Partial<Veterinarian>
+): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+
+  const supabase = createClient();
+
+  if (updates.is_default) {
+    await supabase
+      .from('veterinarians')
+      .update({ is_default: false })
+      .eq('organization_id', orgId)
+      .neq('id', id);
+  }
+
+  const payload: Record<string, unknown> = {};
+  if (updates.name !== undefined) payload.name = updates.name.trim();
+  if (updates.crmv !== undefined) payload.crmv = updates.crmv ? updates.crmv.trim() : null;
+  if (updates.phone !== undefined) payload.phone = updates.phone ? updates.phone.trim() : null;
+  if (updates.email !== undefined) payload.email = updates.email ? updates.email.trim() : null;
+  if (updates.is_default !== undefined) payload.is_default = updates.is_default;
+
+  const { error } = await supabase
+    .from('veterinarians')
+    .update(payload)
+    .eq('id', id)
+    .eq('organization_id', orgId);
+
+  if (error) {
+    console.error('updateVeterinarian error:', error);
+    return false;
+  }
+
+  invalidateCache('vets');
+  return true;
+}
+
+export async function setDefaultVeterinarian(id: string): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+
+  const supabase = createClient();
+
+  await supabase
+    .from('veterinarians')
+    .update({ is_default: false })
+    .eq('organization_id', orgId);
+
+  const { error } = await supabase
+    .from('veterinarians')
+    .update({ is_default: true })
+    .eq('id', id)
+    .eq('organization_id', orgId);
+
+  if (error) {
+    console.error('setDefaultVeterinarian error:', error);
+    return false;
+  }
+
+  invalidateCache('vets');
+  return true;
+}
+
+export async function deleteVeterinarian(id: string): Promise<{ success: boolean; error?: string }> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return { success: false, error: 'Sessão inválida' };
+
+  const supabase = createClient();
+
+  const { error } = await supabase
+    .from('veterinarians')
+    .delete()
+    .eq('id', id)
+    .eq('organization_id', orgId);
+
+  if (error) {
+    console.error('deleteVeterinarian error:', error);
+    return { success: false, error: error.message };
+  }
+
+  invalidateCache('vets');
+  return { success: true };
+}
+
+
