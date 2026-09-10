@@ -910,25 +910,88 @@ export async function createAnimal(animal: {
 
 export async function getAnimalHistory(animalId: string) {
   const supabase = createClient();
-  const { data, error } = await supabase
-    .from('iatf_lot_animals')
-    .select(`
-      id, ecc_ia, ecc_dg, inseminator_name, pregnancy_status, expected_parturition_date,
-      iatf_lots (code, start_date, ia_planned_date, status,
+  const [lotRes, mgmtRes] = await Promise.all([
+    supabase
+      .from('iatf_lot_animals')
+      .select(`
+        id, ecc_ia, ecc_dg, inseminator_name, pregnancy_status, expected_parturition_date, created_at,
+        iatf_lots (code, start_date, ia_planned_date, status,
+          reproductive_seasons (name),
+          protocols (name),
+          properties (name)
+        ),
+        bulls (name)
+      `)
+      .eq('animal_id', animalId)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('animal_managements')
+      .select(`
+        id, ecc_ia, ecc_dg, inseminator_name, pregnancy_status, expected_parturition_date, created_at,
+        cycle_number, start_date, ia_date, dg_date, status,
+        d0_executed_at, d9_executed_at, ia_executed_at, dg_executed_at,
         reproductive_seasons (name),
         protocols (name),
-        properties (name)
-      ),
-      bulls (name)
-    `)
-    .eq('animal_id', animalId)
-    .order('created_at', { ascending: false });
+        iatf_lots (code),
+        bulls (name)
+      `)
+      .eq('animal_id', animalId)
+      .order('created_at', { ascending: false }),
+  ]);
 
-  if (error) {
-    console.error('getAnimalHistory error:', error);
-    return [];
+  if (lotRes.error) {
+    console.error('getAnimalHistory lot error:', lotRes.error);
   }
-  return data ?? [];
+  if (mgmtRes.error) {
+    console.error('getAnimalHistory mgmt error:', mgmtRes.error);
+  }
+
+  const lotData = (lotRes.data ?? []).map((row: Record<string, unknown>) => ({
+    ...row,
+    source: 'lot',
+  }));
+
+  const mgmtData = (mgmtRes.data ?? []).map((m: Record<string, unknown>) => ({
+    id: m.id,
+    ecc_ia: m.ecc_ia,
+    ecc_dg: m.ecc_dg,
+    inseminator_name: m.inseminator_name,
+    pregnancy_status: m.pregnancy_status,
+    expected_parturition_date: m.expected_parturition_date,
+    created_at: m.created_at,
+    cycle_number: m.cycle_number,
+    source: 'individual',
+    d0_executed_at: m.d0_executed_at,
+    d9_executed_at: m.d9_executed_at,
+    ia_executed_at: m.ia_executed_at,
+    dg_executed_at: m.dg_executed_at,
+    iatf_lots: (m.iatf_lots as Record<string, unknown> | null)?.code
+      ? {
+          code: (m.iatf_lots as Record<string, unknown>).code,
+          start_date: m.start_date,
+          ia_planned_date: m.ia_date,
+          status: m.status,
+          reproductive_seasons: m.reproductive_seasons,
+          protocols: m.protocols,
+        }
+      : {
+          code: `Manejo Indiv. (${m.cycle_number}ª IATF)`,
+          start_date: m.start_date,
+          ia_planned_date: m.ia_date,
+          status: m.status,
+          reproductive_seasons: m.reproductive_seasons,
+          protocols: m.protocols,
+        },
+    bulls: m.bulls,
+  }));
+
+  const combined = [...mgmtData, ...lotData].sort((a: Record<string, unknown>, b: Record<string, unknown>) => {
+    const dateA = new Date(String(a.created_at || 0)).getTime();
+    const dateB = new Date(String(b.created_at || 0)).getTime();
+    return dateB - dateA;
+  });
+
+  return combined;
 }
 
 // ============================================================
@@ -1992,5 +2055,530 @@ export async function deleteVeterinarian(id: string): Promise<{ success: boolean
   invalidateCache('vets');
   return { success: true };
 }
+
+// ============================================================
+// ANIMAL MANAGEMENT (MANEJO INDIVIDUAL POR ANIMAL)
+// ============================================================
+
+export interface AnimalManagement {
+  id: string;
+  organization_id: string;
+  farm_id: string;
+  animal_id: string;
+  season_id: string | null;
+  protocol_id: string | null;
+  lot_id: string | null;
+  cycle_number: number;
+  start_date: string;
+  d7_date: string | null;
+  d9_date: string | null;
+  ia_date: string | null;
+  dg_date: string | null;
+  d0_executed_at: string | null;
+  d0_responsible: string | null;
+  d0_notes: string | null;
+  d9_executed_at: string | null;
+  d9_responsible: string | null;
+  d9_device_loss: boolean;
+  d9_notes: string | null;
+  ia_executed_at: string | null;
+  bull_id: string | null;
+  semen_batch_id: string | null;
+  inseminator_name: string | null;
+  ecc_ia: number | null;
+  ia_notes: string | null;
+  dg_executed_at: string | null;
+  pregnancy_status: 'pendente' | 'prenha' | 'vazia' | 'inconclusivo';
+  ecc_dg: number | null;
+  expected_parturition_date: string | null;
+  dg_notes: string | null;
+  status: 'em_andamento' | 'concluido' | 'cancelado';
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  protocols?: { 
+    name: string; 
+    number_of_managements?: number;
+    protocol_steps?: { code: string; name: string; day_offset: number; step_order: number; dosage_instruction?: string }[];
+  } | null;
+  bulls?: { name: string; code?: string | null } | null;
+  semen_batches?: { batch_number: string } | null;
+  reproductive_seasons?: { name: string } | null;
+  iatf_lots?: { code: string } | null;
+}
+
+export async function getAnimalManagements(animalId: string, forceRefresh = false): Promise<AnimalManagement[]> {
+  const cacheKey = `animal_managements_${animalId}`;
+  if (!forceRefresh) {
+    const cached = getCached<AnimalManagement[]>(cacheKey);
+    if (cached) return cached;
+  }
+
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('animal_managements')
+    .select(`
+      *,
+      protocols (
+        name,
+        number_of_managements,
+        protocol_steps (code, name, day_offset, step_order, dosage_instruction)
+      ),
+      bulls (name, code),
+      semen_batches (batch_number),
+      reproductive_seasons (name),
+      iatf_lots (code)
+    `)
+    .eq('animal_id', animalId)
+    .order('cycle_number', { ascending: false });
+
+  if (error) {
+    console.error('getAnimalManagements error:', error);
+    return getCached<AnimalManagement[]>(cacheKey) ?? [];
+  }
+
+  const result = (data ?? []) as unknown as AnimalManagement[];
+  setCached(cacheKey, result);
+  return result;
+}
+
+export async function startAnimalManagement(params: {
+  animal_id: string;
+  farm_id: string;
+  protocol_id: string;
+  season_id?: string | null;
+  lot_id?: string | null;
+  start_date: string;
+  d0_responsible?: string | null;
+  d0_executed?: boolean;
+  notes?: string | null;
+  custom_d9_date?: string | null;
+  custom_ia_date?: string | null;
+  custom_dg_date?: string | null;
+}): Promise<{ success: boolean; managementId?: string; error?: string }> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return { success: false, error: 'Sessão inválida.' };
+
+  const supabase = createClient();
+
+  // 1. Determinar o ciclo sequencial (ex: 1ª IATF, 2ª IATF)
+  const { count } = await supabase
+    .from('animal_managements')
+    .select('id', { count: 'exact', head: true })
+    .eq('animal_id', params.animal_id);
+
+  const nextCycle = (count ?? 0) + 1;
+
+  // 2. Buscar etapas do protocolo para calcular datas
+  const { data: protocolSteps } = await supabase
+    .from('protocol_steps')
+    .select('code, day_offset')
+    .eq('protocol_id', params.protocol_id)
+    .order('step_order', { ascending: true });
+
+  const d0Date = new Date(params.start_date + 'T00:00:00');
+
+  let d7Date: string | null = null;
+  let d9Date: string | null = null;
+  let iaDate: string | null = null;
+  let dgDate: string | null = null;
+
+  if (protocolSteps && protocolSteps.length > 0) {
+    for (const step of protocolSteps) {
+      const target = new Date(d0Date);
+      target.setDate(target.getDate() + step.day_offset);
+      const str = target.toISOString().split('T')[0];
+      const codeUpper = step.code.toUpperCase();
+
+      if (codeUpper === 'D7') d7Date = str;
+      else if (codeUpper === 'D8' || codeUpper === 'D9') d9Date = str;
+      else if (codeUpper === 'IA') iaDate = str;
+      else if (codeUpper === 'DG' || codeUpper === 'DG1') dgDate = str;
+    }
+  }
+
+  // Fallbacks padrão caso o protocolo não especifique algum step
+  if (!d9Date) {
+    const d9 = new Date(d0Date);
+    d9.setDate(d9.getDate() + 9);
+    d9Date = d9.toISOString().split('T')[0];
+  }
+  if (!iaDate) {
+    const ia = new Date(d0Date);
+    ia.setDate(ia.getDate() + 11);
+    iaDate = ia.toISOString().split('T')[0];
+  }
+  if (!dgDate) {
+    const dg = new Date(d0Date);
+    dg.setDate(dg.getDate() + 44);
+    dgDate = dg.toISOString().split('T')[0];
+  }
+
+  // Livre escolha do veterinário tem precedência sobre o cálculo automático
+  if (params.custom_d9_date) d9Date = params.custom_d9_date;
+  if (params.custom_ia_date) iaDate = params.custom_ia_date;
+  if (params.custom_dg_date) dgDate = params.custom_dg_date;
+
+  const { data: inserted, error } = await supabase
+    .from('animal_managements')
+    .insert({
+      organization_id: orgId,
+      farm_id: params.farm_id,
+      animal_id: params.animal_id,
+      season_id: params.season_id || null,
+      protocol_id: params.protocol_id,
+      lot_id: params.lot_id || null,
+      cycle_number: nextCycle,
+      start_date: params.start_date,
+      d7_date: d7Date,
+      d9_date: d9Date,
+      ia_date: iaDate,
+      dg_date: dgDate,
+      d0_executed_at: params.d0_executed !== false ? params.start_date : null,
+      d0_responsible: params.d0_responsible || null,
+      d0_notes: params.notes || null,
+      status: 'em_andamento',
+      pregnancy_status: 'pendente',
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    console.error('startAnimalManagement error:', error);
+    return { success: false, error: error.message };
+  }
+
+  invalidateCache('animal_managements');
+  invalidateCache('animals');
+  return { success: true, managementId: inserted.id };
+}
+
+export async function executeStepD0(
+  managementId: string,
+  data: { executed_at: string; responsible?: string | null; notes?: string | null }
+): Promise<boolean> {
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('animal_managements')
+    .update({
+      d0_executed_at: data.executed_at,
+      d0_responsible: data.responsible || null,
+      d0_notes: data.notes || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', managementId);
+
+  if (error) {
+    console.error('executeStepD0 error:', error);
+    return false;
+  }
+  invalidateCache('animal_managements');
+  return true;
+}
+
+export async function executeStepD9(
+  managementId: string,
+  data: { executed_at: string; responsible?: string | null; device_loss?: boolean; notes?: string | null }
+): Promise<boolean> {
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('animal_managements')
+    .update({
+      d9_executed_at: data.executed_at,
+      d9_responsible: data.responsible || null,
+      d9_device_loss: Boolean(data.device_loss),
+      d9_notes: data.notes || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', managementId);
+
+  if (error) {
+    console.error('executeStepD9 error:', error);
+    return false;
+  }
+  invalidateCache('animal_managements');
+  return true;
+}
+
+export async function executeStepIA(
+  managementId: string,
+  data: {
+    animal_id: string;
+    executed_at: string;
+    bull_id?: string | null;
+    semen_batch_id?: string | null;
+    inseminator_name?: string | null;
+    ecc_ia?: number | null;
+    notes?: string | null;
+  }
+): Promise<{ success: boolean; error?: string }> {
+  const supabase = createClient();
+
+  // 1. Atualizar o registro do manejo individual
+  const { error: mgmtError } = await supabase
+    .from('animal_managements')
+    .update({
+      ia_executed_at: data.executed_at,
+      bull_id: data.bull_id || null,
+      semen_batch_id: data.semen_batch_id || null,
+      inseminator_name: data.inseminator_name || null,
+      ecc_ia: data.ecc_ia !== undefined && data.ecc_ia !== null ? Number(data.ecc_ia) : null,
+      ia_notes: data.notes || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', managementId);
+
+  if (mgmtError) {
+    console.error('executeStepIA error:', mgmtError);
+    return { success: false, error: mgmtError.message };
+  }
+
+  // 2. Atualizar o status da fêmea para 'inseminada'
+  await supabase
+    .from('animals')
+    .update({ reproductive_status: 'inseminada', updated_at: new Date().toISOString() })
+    .eq('id', data.animal_id);
+
+  // 3. Dar baixa automática de 1 dose do sêmen selecionado (RN-08)
+  if (data.semen_batch_id) {
+    const { data: batch } = await supabase
+      .from('semen_batches')
+      .select('used_quantity')
+      .eq('id', data.semen_batch_id)
+      .maybeSingle();
+
+    if (batch) {
+      await supabase
+        .from('semen_batches')
+        .update({
+          used_quantity: (batch.used_quantity || 0) + 1,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', data.semen_batch_id);
+    }
+  }
+
+  invalidateCache('animal_managements');
+  invalidateCache('animals');
+  invalidateCache('semen');
+  invalidateCache('metrics');
+  return { success: true };
+}
+
+export async function executeStepDG(
+  managementId: string,
+  data: {
+    animal_id: string;
+    executed_at: string;
+    pregnancy_status: 'prenha' | 'vazia' | 'inconclusivo';
+    ecc_dg?: number | null;
+    ia_date?: string | null;
+    notes?: string | null;
+  }
+): Promise<{ success: boolean; error?: string }> {
+  const supabase = createClient();
+
+  let expectedParturition: string | null = null;
+
+  // Se prenha, calcular previsão de parto: Data IA + 295 dias (RN-06)
+  if (data.pregnancy_status === 'prenha') {
+    let baseIaDate = data.ia_date;
+    if (!baseIaDate) {
+      const { data: mgmt } = await supabase
+        .from('animal_managements')
+        .select('ia_executed_at, ia_date')
+        .eq('id', managementId)
+        .single();
+      baseIaDate = mgmt?.ia_executed_at || mgmt?.ia_date;
+    }
+
+    if (baseIaDate) {
+      const iaD = new Date(baseIaDate + 'T00:00:00');
+      iaD.setDate(iaD.getDate() + 295);
+      expectedParturition = iaD.toISOString().split('T')[0];
+    }
+  }
+
+  // 1. Atualizar registro do manejo
+  const { error: mgmtError } = await supabase
+    .from('animal_managements')
+    .update({
+      dg_executed_at: data.executed_at,
+      pregnancy_status: data.pregnancy_status,
+      ecc_dg: data.ecc_dg !== undefined && data.ecc_dg !== null ? Number(data.ecc_dg) : null,
+      expected_parturition_date: expectedParturition,
+      dg_notes: data.notes || null,
+      status: 'concluido',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', managementId);
+
+  if (mgmtError) {
+    console.error('executeStepDG error:', mgmtError);
+    return { success: false, error: mgmtError.message };
+  }
+
+  // 2. Atualizar status reprodutivo da matriz
+  const newAnimalStatus = data.pregnancy_status === 'prenha' ? 'prenha' : 'vazia';
+  await supabase
+    .from('animals')
+    .update({
+      reproductive_status: newAnimalStatus,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', data.animal_id);
+
+  // 3. Sincronizar status do animal no lote (se participante de lote)
+  await supabase
+    .from('lot_animals')
+    .update({
+      pregnancy_status: data.pregnancy_status,
+      ecc_dg: data.ecc_dg !== undefined && data.ecc_dg !== null ? Number(data.ecc_dg) : null,
+      expected_parturition_date: expectedParturition,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('animal_id', data.animal_id);
+
+  invalidateCache('animal_managements');
+  invalidateCache('animals');
+  invalidateCache('lots');
+  invalidateCache('metrics');
+  return { success: true };
+}
+
+export async function recordDirectDG(params: {
+  animal_id: string;
+  farm_id: string;
+  dg_date: string;
+  pregnancy_status: 'prenha' | 'vazia' | 'inconclusivo';
+  ecc_dg?: number | null;
+  season_id?: string | null;
+  lot_id?: string | null;
+  notes?: string | null;
+  expected_parturition_date?: string | null;
+  management_id?: string | null;
+}): Promise<{ success: boolean; error?: string }> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return { success: false, error: 'Sessão inválida.' };
+
+  const supabase = createClient();
+
+  // 1. Se tem management_id fornecido, executa via executeStepDG
+  if (params.management_id) {
+    return executeStepDG(params.management_id, {
+      animal_id: params.animal_id,
+      executed_at: params.dg_date,
+      pregnancy_status: params.pregnancy_status,
+      ecc_dg: params.ecc_dg,
+      notes: params.notes,
+    });
+  }
+
+  // 2. Verificar se existe algum manejo em andamento para este animal
+  const { data: activeMgmt } = await supabase
+    .from('animal_managements')
+    .select('id, ia_executed_at, ia_date')
+    .eq('animal_id', params.animal_id)
+    .eq('status', 'em_andamento')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (activeMgmt) {
+    return executeStepDG(activeMgmt.id, {
+      animal_id: params.animal_id,
+      executed_at: params.dg_date,
+      pregnancy_status: params.pregnancy_status,
+      ecc_dg: params.ecc_dg,
+      ia_date: activeMgmt.ia_executed_at || activeMgmt.ia_date,
+      notes: params.notes,
+    });
+  }
+
+  // 3. Se NÃO existe manejo prévio: cria registro direto de DG
+  const { count } = await supabase
+    .from('animal_managements')
+    .select('id', { count: 'exact', head: true })
+    .eq('animal_id', params.animal_id);
+
+  const nextCycle = (count ?? 0) + 1;
+
+  let expectedParturition = params.expected_parturition_date || null;
+  if (params.pregnancy_status === 'prenha' && !expectedParturition) {
+    const d = new Date(params.dg_date + 'T00:00:00');
+    d.setDate(d.getDate() + 250); // Estimativa padrão se gestação confirmada sem data de IA
+    expectedParturition = d.toISOString().split('T')[0];
+  }
+
+  const { error: insertError } = await supabase
+    .from('animal_managements')
+    .insert({
+      organization_id: orgId,
+      farm_id: params.farm_id,
+      animal_id: params.animal_id,
+      season_id: params.season_id || null,
+      lot_id: params.lot_id || null,
+      cycle_number: nextCycle,
+      start_date: params.dg_date,
+      dg_date: params.dg_date,
+      dg_executed_at: params.dg_date,
+      pregnancy_status: params.pregnancy_status,
+      ecc_dg: params.ecc_dg !== undefined && params.ecc_dg !== null ? Number(params.ecc_dg) : null,
+      expected_parturition_date: expectedParturition,
+      dg_notes: params.notes || null,
+      status: 'concluido',
+      notes: params.notes ? `DG direto: ${params.notes}` : 'Diagnóstico de Gestação Direto (Toque)',
+    });
+
+  if (insertError) {
+    console.error('recordDirectDG error:', insertError);
+    return { success: false, error: insertError.message };
+  }
+
+  // 4. Atualizar status reprodutivo da fêmea
+  const newAnimalStatus = params.pregnancy_status === 'prenha' ? 'prenha' : 'vazia';
+  await supabase
+    .from('animals')
+    .update({
+      reproductive_status: newAnimalStatus,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', params.animal_id);
+
+  // 5. Atualizar lot_animals se participante de lote
+  await supabase
+    .from('lot_animals')
+    .update({
+      pregnancy_status: params.pregnancy_status,
+      ecc_dg: params.ecc_dg !== undefined && params.ecc_dg !== null ? Number(params.ecc_dg) : null,
+      expected_parturition_date: expectedParturition,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('animal_id', params.animal_id);
+
+  invalidateCache('animal_managements');
+  invalidateCache('animals');
+  invalidateCache('lots');
+  invalidateCache('metrics');
+  return { success: true };
+}
+
+export async function deleteAnimalManagement(managementId: string): Promise<boolean> {
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('animal_managements')
+    .delete()
+    .eq('id', managementId);
+
+  if (error) {
+    console.error('deleteAnimalManagement error:', error);
+    return false;
+  }
+
+  invalidateCache('animal_managements');
+  invalidateCache('animals');
+  return true;
+}
+
 
 

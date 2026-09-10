@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import AnimalManagementModal from '@/components/AnimalManagementModal';
 import {
   getLots,
   getLotAnimals,
@@ -236,6 +238,20 @@ export default function LotsPage() {
   const [selectedAnimalIds, setSelectedAnimalIds] = useState<string[]>([]);
   const [submittingAdd, setSubmittingAdd] = useState(false);
   const [deletingAnimalId, setDeletingAnimalId] = useState<string | null>(null);
+
+  // Animal Management Modal State
+  const [managementAnimal, setManagementAnimal] = useState<{ id: string; tag_number: string; farm_id: string } | null>(null);
+  const [isManagementModalOpen, setIsManagementModalOpen] = useState(false);
+
+  const handleOpenAnimalManagement = (animalId: string, tagNumber: string) => {
+    const lotFarmId = selectedLot?.farm_id || activeFarmId || '';
+    setManagementAnimal({
+      id: animalId,
+      tag_number: tagNumber,
+      farm_id: lotFarmId,
+    });
+    setIsManagementModalOpen(true);
+  };
 
   // Quick Animal Form
   const [quickAnimal, setQuickAnimal] = useState({
@@ -1098,7 +1114,21 @@ export default function LotsPage() {
                     <tbody className="divide-y divide-slate-800/80 bg-slate-900/60 font-mono">
                       {lotAnimals.map((la) => (
                         <tr key={la.id} className="hover:bg-slate-800/50 transition-colors">
-                          <td className="p-3 font-bold text-white font-sans">{la.animals?.tag_number}</td>
+                          <td className="p-3">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenAnimalManagement(la.animal_id, la.animals?.tag_number || '')}
+                                className="font-bold text-emerald-400 hover:text-emerald-300 font-sans inline-flex items-center gap-1.5 cursor-pointer text-left group"
+                                title="Abrir manejo reprodutivo desta matriz diretamente"
+                              >
+                                <span className="px-2 py-0.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 group-hover:bg-emerald-500/20 group-hover:border-emerald-500/40 group-hover:text-emerald-200 transition-all font-mono font-black text-xs">
+                                  {la.animals?.tag_number}
+                                </span>
+                                <Syringe className="w-3.5 h-3.5 text-emerald-400/70 group-hover:text-emerald-300 transition-colors" />
+                              </button>
+                            </div>
+                          </td>
                           <td className="p-3 font-sans">{la.animals?.animal_categories?.name ?? '-'}</td>
                           <td className="p-3">{la.ecc_ia != null ? la.ecc_ia.toFixed(2) : '-'}</td>
                           <td className="p-3">{la.ecc_dg != null ? la.ecc_dg.toFixed(2) : '-'}</td>
@@ -1123,18 +1153,35 @@ export default function LotsPage() {
                           </td>
                           <td className="p-3 text-emerald-400">{la.expected_parturition_date ?? '-'}</td>
                           <td className="p-3 text-center">
-                            <button
-                              title="Remover matriz deste lote"
-                              disabled={deletingAnimalId === la.id}
-                              onClick={() => handleRemoveAnimal(la.id, la.animals?.tag_number || '')}
-                              className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer disabled:opacity-40"
-                            >
-                              {deletingAnimalId === la.id ? (
-                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <Trash2 className="w-3.5 h-3.5" />
-                              )}
-                            </button>
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenAnimalManagement(la.animal_id, la.animals?.tag_number || '')}
+                                title="Abrir manejo reprodutivo da matriz"
+                                className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Syringe className="w-3.5 h-3.5" />
+                              </button>
+                              <Link
+                                href={`/animals/${la.animal_id}`}
+                                title="Ver ficha completa da matriz"
+                                className="p-1.5 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <ArrowRight className="w-3.5 h-3.5" />
+                              </Link>
+                              <button
+                                title="Remover matriz deste lote"
+                                disabled={deletingAnimalId === la.id}
+                                onClick={() => handleRemoveAnimal(la.id, la.animals?.tag_number || '')}
+                                className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer disabled:opacity-40"
+                              >
+                                {deletingAnimalId === la.id ? (
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -1707,6 +1754,25 @@ export default function LotsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Animal Management Modal */}
+      {managementAnimal && (
+        <AnimalManagementModal
+          isOpen={isManagementModalOpen}
+          onClose={() => setIsManagementModalOpen(false)}
+          onSuccess={async () => {
+            setIsManagementModalOpen(false);
+            if (selectedLotId) {
+              const updated = await getLotAnimals(selectedLotId, true);
+              setLotAnimals(updated);
+              loadLots();
+            }
+          }}
+          animalId={managementAnimal.id}
+          animalTag={managementAnimal.tag_number}
+          farmId={managementAnimal.farm_id}
+        />
       )}
     </div>
   );

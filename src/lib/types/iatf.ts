@@ -101,6 +101,49 @@ export interface LotAnimal {
   notes?: string;
 }
 
+export interface AnimalManagement {
+  id: string;
+  organization_id?: string;
+  farm_id: string;
+  animal_id: string;
+  season_id?: string | null;
+  protocol_id?: string | null;
+  lot_id?: string | null;
+  cycle_number: number;
+  start_date: string;
+  d7_date?: string | null;
+  d9_date?: string | null;
+  ia_date?: string | null;
+  dg_date?: string | null;
+  d0_executed_at?: string | null;
+  d0_responsible?: string | null;
+  d0_notes?: string | null;
+  d9_executed_at?: string | null;
+  d9_responsible?: string | null;
+  d9_device_loss?: boolean;
+  d9_notes?: string | null;
+  ia_executed_at?: string | null;
+  bull_id?: string | null;
+  semen_batch_id?: string | null;
+  inseminator_name?: string | null;
+  ecc_ia?: number | null;
+  ia_notes?: string | null;
+  dg_executed_at?: string | null;
+  pregnancy_status: 'pendente' | 'prenha' | 'vazia' | 'inconclusivo';
+  ecc_dg?: number | null;
+  expected_parturition_date?: string | null;
+  dg_notes?: string | null;
+  status: 'em_andamento' | 'concluido' | 'cancelado';
+  notes?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  protocols?: { name: string; number_of_managements?: number } | null;
+  bulls?: { name: string; code?: string | null } | null;
+  semen_batches?: { batch_number: string } | null;
+  reproductive_seasons?: { name: string } | null;
+  iatf_lots?: { code: string } | null;
+}
+
 export interface ManagementEvent {
   id: string;
   lot_code: string;

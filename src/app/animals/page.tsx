@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useActiveFarm } from '@/context/FarmContext';
+import AnimalManagementModal, { type ManagementModalMode } from '@/components/AnimalManagementModal';
 
 export default function AnimalsPage() {
   const { activeFarmId, activeFarm } = useActiveFarm();
@@ -49,6 +50,10 @@ export default function AnimalsPage() {
   const [saving, setSaving] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
+
+  // Individual management modal state
+  const [mgmtModalOpen, setMgmtModalOpen] = useState(false);
+  const [mgmtModalMode, setMgmtModalMode] = useState<ManagementModalMode>('start');
 
   // Form state
   const [animalForm, setAnimalForm] = useState({
@@ -305,9 +310,19 @@ export default function AnimalsPage() {
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center font-black text-sm">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      selectAnimal(a);
+                      setMgmtModalMode('start');
+                      setMgmtModalOpen(true);
+                    }}
+                    title="Clique para abrir o manejo reprodutivo desta matriz"
+                    className="w-10 h-10 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 flex items-center justify-center font-black text-sm transition-all hover:scale-105 cursor-pointer"
+                  >
                     {a.tag_number}
-                  </div>
+                  </button>
                   <div>
                     <p className="font-bold text-white text-sm">Brinco {a.tag_number}</p>
                     <p className="text-xs text-slate-400">
@@ -364,12 +379,26 @@ export default function AnimalsPage() {
                     )}
                   </div>
                 </div>
-                <Link
-                  href={`/animals/${selectedAnimal.id}`}
-                  className="flex items-center gap-2 text-xs font-semibold text-emerald-400 hover:text-emerald-300 transition-colors"
-                >
-                  Ver ficha detalhada <ArrowRight className="w-4 h-4" />
-                </Link>
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMgmtModalMode('start');
+                      setMgmtModalOpen(true);
+                    }}
+                    className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-3.5 py-2 rounded-xl text-xs transition-all shadow-md glow-emerald cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5 stroke-3" />
+                    <span>Novo Manejo / Protocolo</span>
+                  </button>
+
+                  <Link
+                    href={`/animals/${selectedAnimal.id}`}
+                    className="flex items-center gap-1.5 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-xl transition-colors"
+                  >
+                    Ficha da Vaca <ArrowRight className="w-3.5 h-3.5 text-emerald-400" />
+                  </Link>
+                </div>
               </div>
 
               {/* Timeline */}
@@ -627,6 +656,25 @@ export default function AnimalsPage() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Animal Management Modal */}
+      {selectedAnimal && (
+        <AnimalManagementModal
+          isOpen={mgmtModalOpen}
+          onClose={() => setMgmtModalOpen(false)}
+          onSuccess={async () => {
+            if (selectedAnimal) {
+              selectAnimal(selectedAnimal);
+            }
+            const updated = await getAnimals(50, true, activeFarmId || undefined);
+            setAnimals(updated);
+          }}
+          animalId={selectedAnimal.id}
+          animalTag={selectedAnimal.tag_number}
+          farmId={(selectedAnimal as unknown as { farm_id?: string }).farm_id || activeFarmId || ''}
+          mode={mgmtModalMode}
+        />
       )}
     </div>
   );

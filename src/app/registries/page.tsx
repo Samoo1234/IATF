@@ -15,9 +15,10 @@ import {
   FolderTree, Plus, RefreshCw, X,
   Dna, MapPin, Tag, Building2, Award, Syringe, CheckCircle2, AlertCircle,
   Calendar, Edit2, Trash2, Star,
-  GraduationCap, Phone, Mail
+  GraduationCap, Phone, Mail, ArrowRight
 } from 'lucide-react';
 import Link from 'next/link';
+import AnimalManagementModal from '@/components/AnimalManagementModal';
 import { useActiveFarm } from '@/context/FarmContext';
 import { useActiveSeason } from '@/context/SeasonContext';
 
@@ -57,6 +58,19 @@ export default function RegistriesPage() {
   const [farms, setFarms] = useState<Farm[]>([]);
   const [breeds, setBreeds] = useState<Breed[]>([]);
   const [categories, setCategories] = useState<AnimalCategory[]>([]);
+
+  // Animal Management Modal State
+  const [mgmtAnimal, setMgmtAnimal] = useState<{ id: string; tag_number: string; farm_id: string } | null>(null);
+  const [isMgmtModalOpen, setIsMgmtModalOpen] = useState(false);
+
+  const handleOpenAnimalMgmt = (animalId: string, tagNumber: string, farmId?: string) => {
+    setMgmtAnimal({
+      id: animalId,
+      tag_number: tagNumber,
+      farm_id: farmId || activeFarmId || '',
+    });
+    setIsMgmtModalOpen(true);
+  };
 
   // Modal states
   const [showAnimalModal, setShowAnimalModal] = useState(false);
@@ -659,9 +673,26 @@ export default function RegistriesPage() {
                   animals.map((a) => (
                     <tr key={a.id} className="hover:bg-slate-800/50 transition-colors">
                       <td className="p-3 font-bold text-white">
-                        <Link href={`/animals/${a.id}`} className="hover:text-emerald-400 hover:underline">
-                          {a.tag_number}
-                        </Link>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenAnimalMgmt(a.id, a.tag_number)}
+                            className="font-bold text-emerald-400 hover:text-emerald-300 font-sans inline-flex items-center gap-1.5 cursor-pointer text-left group"
+                            title="Abrir manejo reprodutivo desta matriz diretamente"
+                          >
+                            <span className="px-2 py-0.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 group-hover:bg-emerald-500/20 group-hover:border-emerald-500/40 group-hover:text-emerald-200 transition-all font-mono font-black text-xs">
+                              {a.tag_number}
+                            </span>
+                            <Syringe className="w-3.5 h-3.5 text-emerald-400/70 group-hover:text-emerald-300 transition-colors" />
+                          </button>
+                          <Link
+                            href={`/animals/${a.id}`}
+                            title="Ver ficha completa da matriz"
+                            className="p-1 text-slate-500 hover:text-slate-300 rounded transition-colors"
+                          >
+                            <ArrowRight className="w-3 h-3" />
+                          </Link>
+                        </div>
                       </td>
                       <td className="p-3 font-mono text-slate-400">{a.rfid_number || '-'}</td>
                       <td className="p-3 text-slate-300">{a.farms?.name || '-'}</td>
@@ -1709,6 +1740,21 @@ export default function RegistriesPage() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Animal Management Modal */}
+      {mgmtAnimal && (
+        <AnimalManagementModal
+          isOpen={isMgmtModalOpen}
+          onClose={() => setIsMgmtModalOpen(false)}
+          onSuccess={async () => {
+            setIsMgmtModalOpen(false);
+            loadAllData();
+          }}
+          animalId={mgmtAnimal.id}
+          animalTag={mgmtAnimal.tag_number}
+          farmId={mgmtAnimal.farm_id}
+        />
       )}
     </div>
   );
