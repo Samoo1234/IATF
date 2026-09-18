@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <defs>
+    <linearGradient id="bgGrad192" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="50%" stop-color="#020617" />
+      <stop offset="100%" stop-color="#064e3b" />
+    </linearGradient>
+    <linearGradient id="primaryGrad192" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34d399" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+  </defs>
+  <rect width="192" height="192" rx="42" fill="url(#bgGrad192)" />
+  <rect width="188" height="188" x="2" y="2" rx="40" fill="none" stroke="#10b981" stroke-width="2" stroke-opacity="0.3" />
+
+  <g transform="translate(36, 30)">
+    <path d="M60 10 C40 10 24 26 20 46 C18 56 22 66 28 74 L60 110 L92 74 C98 66 102 56 100 46 C96 26 80 10 60 10 Z" 
+          fill="none" 
+          stroke="url(#primaryGrad192)" 
+          stroke-width="7" 
+          stroke-linejoin="round" />
+    <path d="M20 46 C8 34 6 18 12 10 C18 16 24 30 28 40" 
+          fill="none" 
+          stroke="url(#primaryGrad192)" 
+          stroke-width="6" 
+          stroke-linecap="round" />
+    <path d="M100 46 C112 34 114 18 108 10 C102 16 96 30 92 40" 
+          fill="none" 
+          stroke="url(#primaryGrad192)" 
+          stroke-width="6" 
+          stroke-linecap="round" />
+    <circle cx="60" cy="54" r="12" fill="#10b981" fill-opacity="0.25" stroke="#34d399" stroke-width="3" />
+    <path d="M60 46 L60 62 M52 54 L68 54" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" />
+  </g>
+  <text x="96" y="166" text-anchor="middle" fill="#f8fafc" font-family="system-ui, -apple-system, sans-serif" font-weight="800" font-size="18" letter-spacing="2">
+    IATF
+  </text>
+</svg>

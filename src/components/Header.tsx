@@ -15,6 +15,8 @@ import {
 import { getOrgMetadata, type OrgMetadata } from '@/lib/db';
 import { useActiveFarm } from '@/context/FarmContext';
 import { useActiveSeason } from '@/context/SeasonContext';
+import SyncStatusBadge from '@/components/offline/SyncStatusBadge';
+import CurralPrepModal from '@/components/offline/CurralPrepModal';
 
 interface HeaderProps {
   onOpenMobileMenu?: () => void;
@@ -41,6 +43,7 @@ export default function Header({ onOpenMobileMenu }: HeaderProps) {
   const { seasons, activeSeason, setActiveSeasonId } = useActiveSeason();
   const [farmDropdownOpen, setFarmDropdownOpen] = useState(false);
   const [seasonDropdownOpen, setSeasonDropdownOpen] = useState(false);
+  const [prepModalOpen, setPrepModalOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const seasonDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -250,6 +253,9 @@ export default function Header({ onOpenMobileMenu }: HeaderProps) {
           )}
         </div>
 
+        {/* Offline / Curral Sync Badge */}
+        <SyncStatusBadge onOpenPrepModal={() => setPrepModalOpen(true)} />
+
         {/* Quick Links */}
         <div className="flex items-center gap-1.5">
           <Link
@@ -270,6 +276,12 @@ export default function Header({ onOpenMobileMenu }: HeaderProps) {
         </div>
 
       </div>
+
+      {/* Curral Preparation Modal */}
+      <CurralPrepModal
+        isOpen={prepModalOpen}
+        onClose={() => setPrepModalOpen(false)}
+      />
 
     </header>
   );

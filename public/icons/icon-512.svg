@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="50%" stop-color="#020617" />
+      <stop offset="100%" stop-color="#064e3b" />
+    </linearGradient>
+    <linearGradient id="primaryGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34d399" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#10b981" flood-opacity="0.4" />
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+  <rect width="504" height="504" x="4" y="4" rx="108" fill="none" stroke="#10b981" stroke-width="3" stroke-opacity="0.25" />
+
+  <!-- Stylized Bull / DNA Reproductive Shield -->
+  <g filter="url(#glow)" transform="translate(106, 106)">
+    <!-- Bull silhouette & reproductive pulse -->
+    <path d="M150 20 C100 20 60 60 50 110 C45 135 55 160 70 180 L150 270 L230 180 C245 160 255 135 250 110 C240 60 200 20 150 20 Z" 
+          fill="none" 
+          stroke="url(#primaryGrad)" 
+          stroke-width="16" 
+          stroke-linejoin="round" />
+    
+    <!-- Horns -->
+    <path d="M50 110 C20 80 15 40 30 20 C45 35 60 70 70 95" 
+          fill="none" 
+          stroke="url(#primaryGrad)" 
+          stroke-width="14" 
+          stroke-linecap="round" />
+    <path d="M250 110 C280 80 285 40 270 20 C255 35 240 70 230 95" 
+          fill="none" 
+          stroke="url(#primaryGrad)" 
+          stroke-width="14" 
+          stroke-linecap="round" />
+
+    <!-- Center Pulse / Syringe Star -->
+    <circle cx="150" cy="130" r="28" fill="#10b981" fill-opacity="0.2" stroke="#34d399" stroke-width="8" />
+    <path d="M150 112 L150 148 M132 130 L168 130" stroke="#ffffff" stroke-width="8" stroke-linecap="round" />
+  </g>
+
+  <!-- Bottom Brand Text -->
+  <text x="256" y="430" text-anchor="middle" fill="#f8fafc" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="44" letter-spacing="4">
+    IATF MASTER
+  </text>
+</svg>

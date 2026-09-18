@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGradM" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="50%" stop-color="#020617" />
+      <stop offset="100%" stop-color="#064e3b" />
+    </linearGradient>
+    <linearGradient id="primaryGradM" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34d399" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+  </defs>
+  <!-- Full rectangle for safe zone maskable -->
+  <rect width="512" height="512" fill="url(#bgGradM)" />
+  <g transform="translate(136, 120) scale(0.8)">
+    <path d="M150 20 C100 20 60 60 50 110 C45 135 55 160 70 180 L150 270 L230 180 C245 160 255 135 250 110 C240 60 200 20 150 20 Z" 
+          fill="none" 
+          stroke="url(#primaryGradM)" 
+          stroke-width="16" 
+          stroke-linejoin="round" />
+    <path d="M50 110 C20 80 15 40 30 20 C45 35 60 70 70 95" 
+          fill="none" 
+          stroke="url(#primaryGradM)" 
+          stroke-width="14" 
+          stroke-linecap="round" />
+    <path d="M250 110 C280 80 285 40 270 20 C255 35 240 70 230 95" 
+          fill="none" 
+          stroke="url(#primaryGradM)" 
+          stroke-width="14" 
+          stroke-linecap="round" />
+    <circle cx="150" cy="130" r="28" fill="#10b981" fill-opacity="0.2" stroke="#34d399" stroke-width="8" />
+    <path d="M150 112 L150 148 M132 130 L168 130" stroke="#ffffff" stroke-width="8" stroke-linecap="round" />
+  </g>
+  <text x="256" y="410" text-anchor="middle" fill="#f8fafc" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="40" letter-spacing="3">
+    IATF
+  </text>
+</svg>

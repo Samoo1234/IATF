@@ -1,4 +1,6 @@
 import { createClient } from './supabase/client';
+import { offlineDb } from './offline/offlineDb';
+import { syncEngine } from './offline/syncEngine';
 
 // ============================================================
 // DYNAMIC MULTI-TENANT RESOLVER & GLOBAL IN-MEMORY CACHE
@@ -182,6 +184,41 @@ export interface LotStat {
 }
 
 export async function getLots(forceRefresh = false, farmId?: string): Promise<LotStat[]> {
+  const isOffline = typeof window !== 'undefined' && !navigator.onLine;
+  if (isOffline) {
+    try {
+      let offlineLots = await offlineDb.lots.toArray();
+      if (farmId && farmId !== 'all') {
+        offlineLots = offlineLots.filter((l) => l.farm_id === farmId);
+      }
+      if (offlineLots.length > 0) {
+        return offlineLots.map((l) => ({
+          id: l.id,
+          code: l.code || 'Lote',
+          farm_id: l.farm_id,
+          season_id: l.season_id,
+          season_name: null,
+          start_date: (l.start_date as string) || new Date().toISOString().slice(0, 10),
+          ia_planned_date: null,
+          dg_planned_date: null,
+          responsible_name: null,
+          status: (l.status as string) || 'ativo',
+          property_name: null,
+          protocol_name: null,
+          farm_name: null,
+          worked_qty: (l.females_count as number) || 0,
+          inseminated_qty: (l.inseminated_count as number) || 0,
+          pregnancies: (l.pregnant_count as number) || 0,
+          empty_count: 0,
+          pregnancy_rate: 0,
+          pending_dg: 0,
+        }));
+      }
+    } catch (e) {
+      console.warn('Falha ao carregar lotes offline:', e);
+    }
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
 
@@ -205,6 +242,34 @@ export async function getLots(forceRefresh = false, farmId?: string): Promise<Lo
 
   if (error) {
     console.error('getLots error:', error);
+    try {
+      const offlineLots = await offlineDb.lots.toArray();
+      if (offlineLots.length > 0) {
+        return offlineLots.map((l) => ({
+          id: l.id,
+          code: l.code || 'Lote',
+          farm_id: l.farm_id,
+          season_id: l.season_id,
+          season_name: null,
+          start_date: (l.start_date as string) || new Date().toISOString().slice(0, 10),
+          ia_planned_date: null,
+          dg_planned_date: null,
+          responsible_name: null,
+          status: (l.status as string) || 'ativo',
+          property_name: null,
+          protocol_name: null,
+          farm_name: null,
+          worked_qty: (l.females_count as number) || 0,
+          inseminated_qty: (l.inseminated_count as number) || 0,
+          pregnancies: (l.pregnant_count as number) || 0,
+          empty_count: 0,
+          pregnancy_rate: 0,
+          pending_dg: 0,
+        }));
+      }
+    } catch {
+      // ignore
+    }
     return getCached<LotStat[]>(cacheKey) ?? [];
   }
   const result = (data ?? []) as LotStat[];
@@ -1452,6 +1517,26 @@ export interface Farm {
 }
 
 export async function getFarms(forceRefresh = false): Promise<Farm[]> {
+  const isOffline = typeof window !== 'undefined' && !navigator.onLine;
+  if (isOffline) {
+    try {
+      const offlineFarms = await offlineDb.farms.toArray();
+      if (offlineFarms.length > 0) {
+        return offlineFarms.map((f) => ({
+          id: f.id,
+          name: f.name,
+          owner_name: (f.owner_name as string) || null,
+          technical_responsible: (f.technical_responsible as string) || null,
+          city: (f.city as string) || null,
+          state: (f.state as string) || null,
+          properties: [],
+        }));
+      }
+    } catch (e) {
+      console.warn('Falha ao carregar fazendas offline:', e);
+    }
+  }
+
   const now = Date.now();
   if (!forceRefresh && cachedFarms && now - cachedFarmsTimestamp < CACHE_TTL_MS) {
     return cachedFarms;
@@ -1469,6 +1554,22 @@ export async function getFarms(forceRefresh = false): Promise<Farm[]> {
 
   if (error) {
     console.error('getFarms error:', error);
+    try {
+      const offlineFarms = await offlineDb.farms.toArray();
+      if (offlineFarms.length > 0) {
+        return offlineFarms.map((f) => ({
+          id: f.id,
+          name: f.name,
+          owner_name: (f.owner_name as string) || null,
+          technical_responsible: (f.technical_responsible as string) || null,
+          city: (f.city as string) || null,
+          state: (f.state as string) || null,
+          properties: [],
+        }));
+      }
+    } catch {
+      // ignore
+    }
     return cachedFarms ?? [];
   }
 
@@ -2520,6 +2621,28 @@ export async function recordDirectDG(params: {
   expected_parturition_date?: string | null;
   management_id?: string | null;
 }): Promise<{ success: boolean; error?: string }> {
+  const isOffline = typeof window !== 'undefined' && !navigator.onLine;
+  if (isOffline) {
+    try {
+      const offlineId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'mgmt_' + Date.now();
+      await syncEngine.recordOfflineManagement({
+        id: offlineId,
+        lot_id: params.lot_id || '',
+        animal_id: params.animal_id,
+        farm_id: params.farm_id,
+        step_code: 'DG',
+        date: params.dg_date,
+        diagnosis_result: params.pregnancy_status === 'inconclusivo' ? 'duvidosa' : params.pregnancy_status,
+        notes: params.notes || 'Diagnóstico de Gestação (Modo Curral)',
+        created_at: new Date().toISOString(),
+      });
+      return { success: true };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Falha ao registrar DG offline';
+      return { success: false, error: msg };
+    }
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return { success: false, error: 'Sessão inválida.' };
 

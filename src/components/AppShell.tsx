@@ -34,17 +34,42 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      // Modo Curral: Se estiver offline, mantém a sessão do operador sem redirecionar
+      const isOffline = typeof window !== 'undefined' && !navigator.onLine;
       const hasTabSession = typeof window !== 'undefined' ? sessionStorage.getItem('iatf_tab_session') : null;
-      const supabase = createClient();
-      const { data: { session } } = await supabase.auth.getSession();
+      const hasOfflineSession = typeof window !== 'undefined' ? localStorage.getItem('iatf_offline_session_active') : null;
 
-      if (!session || !hasTabSession) {
-        if (typeof window !== 'undefined') {
-          sessionStorage.removeItem('iatf_tab_session');
-        }
-        await supabase.auth.signOut();
-        router.push('/login');
+      if (isOffline && (hasTabSession || hasOfflineSession)) {
+        if (mounted) setCheckingAuth(false);
         return;
+      }
+
+      const supabase = createClient();
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+
+        if (!session || !hasTabSession) {
+          if (!isOffline) {
+            if (typeof window !== 'undefined') {
+              sessionStorage.removeItem('iatf_tab_session');
+              localStorage.removeItem('iatf_offline_session_active');
+            }
+            await supabase.auth.signOut();
+            router.push('/login');
+            return;
+          }
+        }
+
+        if (session && typeof window !== 'undefined') {
+          localStorage.setItem('iatf_offline_session_active', 'true');
+        }
+      } catch (err) {
+        // Se falhou por erro de rede ao checar sessão, permite prosseguir se offline
+        if (isOffline && (hasTabSession || hasOfflineSession)) {
+          if (mounted) setCheckingAuth(false);
+          return;
+        }
+        console.warn('[AppShell] Erro de rede ao verificar sessão:', err);
       }
 
       if (mounted) setCheckingAuth(false);
