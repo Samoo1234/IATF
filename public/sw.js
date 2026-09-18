@@ -1,11 +1,11 @@
 const CACHE_NAME = 'iatf-pwa-v1';
 
 const STATIC_PRECACHE = [
-  '/',
   '/manifest.json',
-  '/icons/icon-192.svg',
-  '/icons/icon-512.svg',
-  '/icons/icon-maskable-512.svg'
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/icons/icon-maskable-512.png',
+  '/icons/apple-touch-icon.png'
 ];
 
 self.addEventListener('install', (event) => {

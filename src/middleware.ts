@@ -3,6 +3,17 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
+
+  // Bypass para arquivos públicos essenciais do PWA (Service Worker, Manifest e Ícones)
+  if (
+    pathname === '/manifest.json' ||
+    pathname === '/sw.js' ||
+    pathname.startsWith('/icons/') ||
+    pathname === '/favicon.ico'
+  ) {
+    return NextResponse.next();
+  }
+
   const isLoginPage = pathname === '/login' || pathname.startsWith('/login/');
   const isAuthCallback = pathname.startsWith('/auth');
 
