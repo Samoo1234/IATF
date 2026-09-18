@@ -51,7 +51,7 @@ const NAV_SECTIONS: NavSection[] = [
     title: 'Técnico & Protocolos',
     items: [
       { name: 'Protocolos Hormonais', href: '/protocols', icon: ClipboardList },
-      { name: 'Estoque de Sêmen & Doses', href: '/inputs', icon: Package },
+      { name: 'Estoque de Sêmen & Doses', href: '/estoque-semen', icon: Package },
     ],
   },
   {

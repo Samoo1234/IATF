@@ -576,7 +576,10 @@ export interface ManagementEvent {
   notes: string | null;
   iatf_lots: {
     code: string;
-    properties: { name: string } | null;
+    name?: string | null;
+    farm_id?: string;
+    farms?: { id: string; name: string } | null;
+    properties?: { name: string } | null;
   } | null;
 }
 
@@ -595,7 +598,13 @@ export async function getManagementEvents(forceRefresh = false, farmId?: string)
     .from('management_events')
     .select(`
       *,
-      iatf_lots!inner (code, farm_id, properties(name))
+      iatf_lots!inner (
+        code,
+        name,
+        farm_id,
+        properties (name),
+        farms (id, name)
+      )
     `)
     .eq('organization_id', orgId);
 
@@ -2343,11 +2352,12 @@ export async function executeStepIA(
   if (data.semen_batch_id) {
     const { data: batch } = await supabase
       .from('semen_batches')
-      .select('used_quantity')
+      .select('id, batch_number, bull_id, used_quantity')
       .eq('id', data.semen_batch_id)
       .maybeSingle();
 
     if (batch) {
+      // 3.1 Atualização legada
       await supabase
         .from('semen_batches')
         .update({
@@ -2355,6 +2365,58 @@ export async function executeStepIA(
           updated_at: new Date().toISOString(),
         })
         .eq('id', data.semen_batch_id);
+
+      // 3.2 Integração com o novo módulo de Estoque Genético
+      try {
+        const { data: mgmtRec } = await supabase
+          .from('animal_managements')
+          .select('organization_id, farm_id')
+          .eq('id', managementId)
+          .maybeSingle();
+
+        if (mgmtRec?.farm_id) {
+          // Localizar o lote correspondente no novo módulo
+          const { data: genBatches } = await supabase
+            .from('genetic_material_batches')
+            .select('id')
+            .eq('farm_id', mgmtRec.farm_id)
+            .ilike('batch_number', batch.batch_number)
+            .limit(1);
+
+          const genBatchId = genBatches?.[0]?.id;
+          if (genBatchId) {
+            // Localizar uma caneca/botijão com saldo deste lote
+            const { data: activeBalances } = await supabase
+              .from('genetic_inventory_balances')
+              .select('id, tank_id, canister_id, owner_client_id, quantity_available')
+              .eq('farm_id', mgmtRec.farm_id)
+              .eq('batch_id', genBatchId)
+              .gt('quantity_available', 0)
+              .limit(1);
+
+            if (activeBalances && activeBalances.length > 0) {
+              const bal = activeBalances[0];
+              await supabase.rpc('fn_process_genetic_usage_iatf', {
+                p_organization_id: mgmtRec.organization_id,
+                p_farm_id: mgmtRec.farm_id,
+                p_batch_id: genBatchId,
+                p_tank_id: bal.tank_id,
+                p_canister_id: bal.canister_id,
+                p_owner_client_id: bal.owner_client_id || null,
+                p_quantity: 1,
+                p_reference_type: 'animal_managements',
+                p_reference_id: managementId,
+                p_inseminator_name: data.inseminator_name || null,
+                p_notes: `Baixa automática IA da matriz em animal_managements`,
+                p_created_by: data.inseminator_name || 'Sistema IATF',
+                p_idempotency_key: `ia_mgmt_${managementId}`,
+              });
+            }
+          }
+        }
+      } catch (genErr) {
+        console.warn('Integração com estoque genético na IA:', genErr);
+      }
     }
   }
 
@@ -2579,6 +2641,303 @@ export async function deleteAnimalManagement(managementId: string): Promise<bool
   invalidateCache('animals');
   return true;
 }
+
+// ============================================================
+// RELATÓRIOS POR LOTE E CATEGORIA ANIMAL
+// ============================================================
+
+export interface LotCategoryStat {
+  lot_id: string;
+  lot_code: string;
+  lot_name: string | null;
+  farm_id: string;
+  farm_name: string;
+  season_id: string;
+  property_name: string | null;
+  protocol_name: string;
+  ia_date: string | null;
+  dg_date: string | null;
+  category_id: string;
+  category_name: string;
+  total_females: number;
+  inseminated_qty: number;
+  pregnant_qty: number;
+  empty_qty: number;
+  pregnancy_rate: number;
+  avg_ecc_ia: number | null;
+  avg_ecc_dg: number | null;
+}
+
+export interface CategorySummaryStat {
+  category_id: string;
+  category_name: string;
+  total_females: number;
+  inseminated_qty: number;
+  pregnant_qty: number;
+  empty_qty: number;
+  pregnancy_rate: number;
+  avg_ecc_ia: number | null;
+  lots_count: number;
+}
+
+interface RawLotAnimalJoin {
+  id: string;
+  lot_id: string;
+  ecc_ia: number | null;
+  ecc_dg: number | null;
+  pregnancy_status: string | null;
+  bull_id: string | null;
+  semen_batch_id: string | null;
+  inseminator_name: string | null;
+  iatf_lots: {
+    id: string;
+    code: string;
+    name: string | null;
+    farm_id: string;
+    season_id: string;
+    ia_planned_date: string | null;
+    dg_planned_date: string | null;
+    protocols: { name: string } | null;
+    properties: { name: string } | null;
+    farms: { id: string; name: string } | null;
+  } | null;
+  animals: {
+    id: string;
+    tag_number: string;
+    animal_categories: { id: string; name: string } | null;
+  } | null;
+}
+
+export async function getLotCategoryReports(
+  forceRefresh = false,
+  farmId?: string,
+  seasonId?: string
+): Promise<LotCategoryStat[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+
+  const cacheKey = `lot_cat_report_${orgId}_${farmId || 'all'}_${seasonId || 'all'}`;
+  if (!forceRefresh) {
+    const cached = getCached<LotCategoryStat[]>(cacheKey);
+    if (cached) return cached;
+  }
+
+  const supabase = createClient();
+  let query = supabase
+    .from('iatf_lot_animals')
+    .select(`
+      id,
+      lot_id,
+      ecc_ia,
+      ecc_dg,
+      pregnancy_status,
+      bull_id,
+      semen_batch_id,
+      inseminator_name,
+      iatf_lots!inner (
+        id,
+        code,
+        name,
+        farm_id,
+        season_id,
+        ia_planned_date,
+        dg_planned_date,
+        protocols (name),
+        properties (name),
+        farms (id, name)
+      ),
+      animals!inner (
+        id,
+        tag_number,
+        animal_categories (id, name)
+      )
+    `);
+
+  if (farmId && farmId !== 'all') {
+    query = query.eq('iatf_lots.farm_id', farmId);
+  }
+  if (seasonId && seasonId !== 'all') {
+    query = query.eq('iatf_lots.season_id', seasonId);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    console.error('getLotCategoryReports error:', error);
+    return getCached<LotCategoryStat[]>(cacheKey) ?? [];
+  }
+
+  const rawList = (data || []) as unknown as RawLotAnimalJoin[];
+  
+  // Agrupar por lot_id + category_id
+  const groupMap = new Map<string, {
+    stat: LotCategoryStat;
+    eccIaSum: number;
+    eccIaCount: number;
+    eccDgSum: number;
+    eccDgCount: number;
+  }>();
+
+  for (const item of rawList) {
+    if (!item.iatf_lots) continue;
+
+    const lot = item.iatf_lots;
+    const cat = item.animals?.animal_categories;
+    const catId = cat?.id || '00000000-0000-0000-0000-000000000000';
+    const catName = cat?.name || 'Não Definida';
+    const groupKey = `${lot.id}_${catId}`;
+
+    if (!groupMap.has(groupKey)) {
+      groupMap.set(groupKey, {
+        stat: {
+          lot_id: lot.id,
+          lot_code: lot.code,
+          lot_name: lot.name || null,
+          farm_id: lot.farm_id,
+          farm_name: lot.farms?.name || 'Fazenda',
+          season_id: lot.season_id,
+          property_name: lot.properties?.name || null,
+          protocol_name: lot.protocols?.name || 'Protocolo Padrão',
+          ia_date: lot.ia_planned_date || null,
+          dg_date: lot.dg_planned_date || null,
+          category_id: catId,
+          category_name: catName,
+          total_females: 0,
+          inseminated_qty: 0,
+          pregnant_qty: 0,
+          empty_qty: 0,
+          pregnancy_rate: 0,
+          avg_ecc_ia: null,
+          avg_ecc_dg: null,
+        },
+        eccIaSum: 0,
+        eccIaCount: 0,
+        eccDgSum: 0,
+        eccDgCount: 0,
+      });
+    }
+
+    const entry = groupMap.get(groupKey)!;
+    entry.stat.total_females += 1;
+
+    const isInseminated = !!(item.bull_id || item.semen_batch_id || item.inseminator_name || item.pregnancy_status);
+    if (isInseminated) {
+      entry.stat.inseminated_qty += 1;
+    }
+
+    if (item.pregnancy_status === 'prenha') {
+      entry.stat.pregnant_qty += 1;
+    } else if (item.pregnancy_status === 'vazia') {
+      entry.stat.empty_qty += 1;
+    }
+
+    if (item.ecc_ia !== null && item.ecc_ia !== undefined) {
+      entry.eccIaSum += Number(item.ecc_ia);
+      entry.eccIaCount += 1;
+    }
+
+    if (item.ecc_dg !== null && item.ecc_dg !== undefined) {
+      entry.eccDgSum += Number(item.ecc_dg);
+      entry.eccDgCount += 1;
+    }
+  }
+
+  const result: LotCategoryStat[] = Array.from(groupMap.values()).map((entry) => {
+    const { stat, eccIaSum, eccIaCount, eccDgSum, eccDgCount } = entry;
+    const rate = stat.inseminated_qty > 0 ? (stat.pregnant_qty / stat.inseminated_qty) * 100 : 0;
+    return {
+      ...stat,
+      pregnancy_rate: Number(rate.toFixed(2)),
+      avg_ecc_ia: eccIaCount > 0 ? Number((eccIaSum / eccIaCount).toFixed(2)) : null,
+      avg_ecc_dg: eccDgCount > 0 ? Number((eccDgSum / eccDgCount).toFixed(2)) : null,
+    };
+  });
+
+  // Ordenar por código do lote e nome da categoria
+  result.sort((a, b) => {
+    if (a.lot_code !== b.lot_code) return a.lot_code.localeCompare(b.lot_code);
+    return a.category_name.localeCompare(b.category_name);
+  });
+
+  setCached(cacheKey, result);
+  return result;
+}
+
+export async function getCategorySummaryReports(
+  forceRefresh = false,
+  farmId?: string,
+  seasonId?: string
+): Promise<CategorySummaryStat[]> {
+  const lotCatStats = await getLotCategoryReports(forceRefresh, farmId, seasonId);
+
+  const catMap = new Map<string, {
+    stat: CategorySummaryStat;
+    eccIaSum: number;
+    eccIaCount: number;
+    uniqueLots: Set<string>;
+  }>();
+
+  for (const item of lotCatStats) {
+    if (!catMap.has(item.category_name)) {
+      catMap.set(item.category_name, {
+        stat: {
+          category_id: item.category_id,
+          category_name: item.category_name,
+          total_females: 0,
+          inseminated_qty: 0,
+          pregnant_qty: 0,
+          empty_qty: 0,
+          pregnancy_rate: 0,
+          avg_ecc_ia: null,
+          lots_count: 0,
+        },
+        eccIaSum: 0,
+        eccIaCount: 0,
+        uniqueLots: new Set(),
+      });
+    }
+
+    const entry = catMap.get(item.category_name)!;
+    entry.stat.total_females += item.total_females;
+    entry.stat.inseminated_qty += item.inseminated_qty;
+    entry.stat.pregnant_qty += item.pregnant_qty;
+    entry.stat.empty_qty += item.empty_qty;
+    entry.uniqueLots.add(item.lot_id);
+
+    if (item.avg_ecc_ia !== null) {
+      entry.eccIaSum += item.avg_ecc_ia * item.total_females;
+      entry.eccIaCount += item.total_females;
+    }
+  }
+
+  const result: CategorySummaryStat[] = Array.from(catMap.values()).map((entry) => {
+    const { stat, eccIaSum, eccIaCount, uniqueLots } = entry;
+    const rate = stat.inseminated_qty > 0 ? (stat.pregnant_qty / stat.inseminated_qty) * 100 : 0;
+    return {
+      ...stat,
+      pregnancy_rate: Number(rate.toFixed(2)),
+      avg_ecc_ia: eccIaCount > 0 ? Number((eccIaSum / eccIaCount).toFixed(2)) : null,
+      lots_count: uniqueLots.size,
+    };
+  });
+
+  // Ordenar para colocar Novilha -> Primípara -> Secundípara -> Multípara
+  const orderRank: Record<string, number> = {
+    'Novilha': 1,
+    'Primípara': 2,
+    'Secundípara': 3,
+    'Multípara': 4,
+  };
+
+  result.sort((a, b) => {
+    const rankA = orderRank[a.category_name] || 99;
+    const rankB = orderRank[b.category_name] || 99;
+    if (rankA !== rankB) return rankA - rankB;
+    return a.category_name.localeCompare(b.category_name);
+  });
+
+  return result;
+}
+
 
 
 

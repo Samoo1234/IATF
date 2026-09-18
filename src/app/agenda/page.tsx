@@ -13,22 +13,25 @@ import {
 import { useActiveFarm } from '@/context/FarmContext';
 import { 
   CheckCircle2, 
-  AlertCircle, 
-  Check, 
   RefreshCw, 
   X, 
   ChevronLeft, 
   ChevronRight, 
   Plus, 
-  SlidersHorizontal, 
   Trash2, 
-  Search
+  Search,
+  Calendar,
+  Layers,
+  Clock,
+  User,
+  Building2,
+  Syringe,
+  Microscope,
+  Check
 } from 'lucide-react';
 
-type CalendarView = 'month' | 'week' | 'day' | 'list';
-
 const STEP_COLORS: Record<string, { bg: string; text: string; border: string; label: string; badge: string }> = {
-  'D0': { bg: 'bg-sky-500/15 hover:bg-sky-500/25', text: 'text-sky-400', border: 'border-sky-500/40', label: 'D0 - Início / Implante', badge: 'bg-sky-500 text-slate-950' },
+  'D0': { bg: 'bg-sky-500/15 hover:bg-sky-500/25', text: 'text-sky-400', border: 'border-sky-500/40', label: 'D0 - Implante / Início', badge: 'bg-sky-500 text-slate-950' },
   'D7': { bg: 'bg-indigo-500/15 hover:bg-indigo-500/25', text: 'text-indigo-400', border: 'border-indigo-500/40', label: 'D7 - Retirada PGF', badge: 'bg-indigo-500 text-white' },
   'D8': { bg: 'bg-purple-500/15 hover:bg-purple-500/25', text: 'text-purple-400', border: 'border-purple-500/40', label: 'D8 - Retirada / Indutor', badge: 'bg-purple-500 text-white' },
   'D9': { bg: 'bg-fuchsia-500/15 hover:bg-fuchsia-500/25', text: 'text-fuchsia-400', border: 'border-fuchsia-500/40', label: 'D9 - Retirada / Indutor', badge: 'bg-fuchsia-500 text-white' },
@@ -41,34 +44,40 @@ const STEP_COLORS: Record<string, { bg: string; text: string; border: string; la
   'OUTRO': { bg: 'bg-slate-500/15 hover:bg-slate-500/25', text: 'text-slate-300', border: 'border-slate-500/40', label: 'Outro Manejo Operacional', badge: 'bg-slate-400 text-slate-950' },
 };
 
+const FARM_COLOR_PALETTES = [
+  { text: 'text-emerald-300', bg: 'bg-emerald-500/15', border: 'border-emerald-500/30' },
+  { text: 'text-amber-300', bg: 'bg-amber-500/15', border: 'border-amber-500/30' },
+  { text: 'text-cyan-300', bg: 'bg-cyan-500/15', border: 'border-cyan-500/30' },
+  { text: 'text-purple-300', bg: 'bg-purple-500/15', border: 'border-purple-500/30' },
+  { text: 'text-rose-300', bg: 'bg-rose-500/15', border: 'border-rose-500/30' },
+  { text: 'text-blue-300', bg: 'bg-blue-500/15', border: 'border-blue-500/30' },
+];
+
 const MONTH_NAMES = [
   'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
   'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
 ];
 
-const WEEKDAY_NAMES_SHORT = ['DOM.', 'SEG.', 'TER.', 'QUA.', 'QUI.', 'SEX.', 'SÁB.'];
-const WEEKDAY_NAMES_MINI = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'];
-
-const HOURS = Array.from({ length: 15 }, (_, i) => i + 6); // 06:00 to 20:00
+const WEEKDAY_NAMES_SHORT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
 export default function AgendaPage() {
-  const { activeFarmId, activeFarm } = useActiveFarm();
+  const { farms } = useActiveFarm();
   const [events, setEvents] = useState<ManagementEvent[]>([]);
   const [lots, setLots] = useState<LotStat[]>([]);
   const [loading, setLoading] = useState(true);
-  
-  // Date State
-  const [currentDate, setCurrentDate] = useState<Date>(new Date());
-  const [selectedDateStr, setSelectedDateStr] = useState<string | null>(null);
-  const [view, setView] = useState<CalendarView>('month');
-  
-  // Filters
-  const [selectedTypes, setSelectedTypes] = useState<string[]>(['D0', 'D7', 'D8', 'D9', 'IA', 'DG', 'DG1', 'DG2', 'VAC', 'PES', 'OUTRO']);
-  const [selectedStatuses, setSelectedStatuses] = useState<string[]>(['pendente', 'proximo', 'atrasado', 'concluido']);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [showSidebar, setShowSidebar] = useState(true);
 
-  // Modals
+  // Filtro de Fazenda: 'all' = Integrada (Todas as Fazendas)
+  const [selectedFarmId, setSelectedFarmId] = useState<string>('all');
+  
+  // Date State - Foco exclusivo no Mês
+  const [currentDate, setCurrentDate] = useState<Date>(new Date());
+  
+  // Filtros rápidos
+  const [filterStep, setFilterStep] = useState<string>('ALL');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'pendente' | 'concluido'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Modais
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createDate, setCreateDate] = useState(new Date().toISOString().split('T')[0]);
   const [createTime, setCreateTime] = useState('08:00');
@@ -78,13 +87,13 @@ export default function AgendaPage() {
   const [createNotes, setCreateNotes] = useState('');
   const [creating, setCreating] = useState(false);
 
-  // View / Complete Modal
+  // Modal Ver/Concluir Manejo
   const [selectedEvent, setSelectedEvent] = useState<ManagementEvent | null>(null);
   const [completing, setCompleting] = useState(false);
   const [animalsWorked, setAnimalsWorked] = useState('');
   const [lossesCount, setLossesCount] = useState('0');
   
-  // Feedback toast
+  // Toast feedback
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
@@ -92,80 +101,82 @@ export default function AgendaPage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  const loadData = useCallback(async () => {
+  // Carregar dados de todas as fazendas ou da fazenda selecionada
+  const loadData = useCallback(async (forceRefresh = false) => {
     setLoading(true);
-    const [eventsData, lotsData] = await Promise.all([
-      getManagementEvents(false, activeFarmId || undefined),
-      getLots(false, activeFarmId || undefined)
-    ]);
-    setEvents(eventsData);
-    setLots(lotsData);
-    if (lotsData.length > 0 && !createLotId) {
-      setCreateLotId(lotsData[0].id);
+    try {
+      const targetFarm = selectedFarmId === 'all' ? undefined : selectedFarmId;
+      const [eventsData, lotsData] = await Promise.all([
+        getManagementEvents(forceRefresh, targetFarm),
+        getLots(forceRefresh, targetFarm)
+      ]);
+      setEvents(eventsData);
+      setLots(lotsData);
+      if (lotsData.length > 0 && !createLotId) {
+        setCreateLotId(lotsData[0].id);
+      }
+    } catch (err) {
+      console.error('Erro ao carregar dados da agenda integrada:', err);
+      showToast('Falha ao carregar eventos da agenda.');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  }, [activeFarmId, createLotId]);
+  }, [selectedFarmId, createLotId]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  // Capturar parâmetros da URL quando o veterinário vem da tela de Lotes (Mobile/Desktop)
+  // Capturar parâmetros da URL quando o veterinário vem da tela de Lotes
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
     const dateParam = params.get('date');
     const lotParam = params.get('lot');
-    const viewParam = params.get('view') as CalendarView | null;
 
     if (dateParam) {
       const parsedDate = new Date(dateParam + 'T00:00:00');
       if (!isNaN(parsedDate.getTime())) {
         setCurrentDate(parsedDate);
-        setSelectedDateStr(dateParam);
       }
     }
 
     if (lotParam) {
       setSearchQuery(lotParam);
     }
-
-    // Em dispositivos móveis no campo (< 768px), foca na visualização de 'day' (Dia) para ergonomia
-    if (viewParam && ['month', 'week', 'day', 'list'].includes(viewParam)) {
-      setView(viewParam);
-    } else if (dateParam) {
-      const isMobile = window.innerWidth < 768;
-      setView(isMobile ? 'day' : 'month');
-    }
   }, []);
 
-  // Quick navigation
+  // Mapear cores para cada fazenda
+  const farmColorMap = useMemo(() => {
+    const map = new Map<string, { text: string; bg: string; border: string }>();
+    farms.forEach((f, idx) => {
+      map.set(f.id, FARM_COLOR_PALETTES[idx % FARM_COLOR_PALETTES.length]);
+    });
+    return map;
+  }, [farms]);
+
+  // Navegação de Mês
   const goToday = () => setCurrentDate(new Date());
   
-  const goPrev = () => {
+  const goPrevMonth = () => {
     const d = new Date(currentDate);
-    if (view === 'month') d.setMonth(d.getMonth() - 1);
-    else if (view === 'week') d.setDate(d.getDate() - 7);
-    else if (view === 'day') d.setDate(d.getDate() - 1);
+    d.setMonth(d.getMonth() - 1);
     setCurrentDate(d);
   };
 
-  const goNext = () => {
+  const goNextMonth = () => {
     const d = new Date(currentDate);
-    if (view === 'month') d.setMonth(d.getMonth() + 1);
-    else if (view === 'week') d.setDate(d.getDate() + 7);
-    else if (view === 'day') d.setDate(d.getDate() + 1);
+    d.setMonth(d.getMonth() + 1);
     setCurrentDate(d);
   };
 
-  // Open Create Modal for specific date/time
-  const openCreateForDate = (dateStr: string, timeStr?: string) => {
+  // Abrir Modal de Criação para um dia específico
+  const openCreateForDate = (dateStr: string) => {
     setCreateDate(dateStr);
-    if (timeStr) setCreateTime(timeStr);
     setShowCreateModal(true);
   };
 
-  // Submit new event
+  // Submeter Novo Manejo
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!createLotId || !createDate) return;
@@ -183,18 +194,18 @@ export default function AgendaPage() {
 
     if (ok) {
       showToast('Manejo agendado com sucesso!');
-      await loadData();
+      await loadData(true);
       setShowCreateModal(false);
       setCreateNotes('');
     } else {
-      showToast('Erro ao agendar manejo. Tente novamente.');
+      showToast('Erro ao agendar manejo.');
     }
     setCreating(false);
   };
 
-  // Complete Event
+  // Concluir Manejo
   const handleCompleteSubmit = async () => {
-    if (!selectedEvent || !animalsWorked) return;
+    if (!selectedEvent) return;
     setCompleting(true);
     const ok = await completeManagementEvent(
       selectedEvent.id,
@@ -203,53 +214,36 @@ export default function AgendaPage() {
     );
     if (ok) {
       showToast('Manejo concluído com sucesso!');
-      await loadData();
+      await loadData(true);
       setSelectedEvent(null);
+      setAnimalsWorked('');
+      setLossesCount('0');
     } else {
       showToast('Erro ao concluir manejo.');
     }
     setCompleting(false);
   };
 
-  // Delete Event
+  // Excluir Manejo
   const handleDeleteEvent = async (id: string) => {
     if (!confirm('Deseja realmente remover este manejo agendado?')) return;
     const ok = await deleteManagementEvent(id);
     if (ok) {
       showToast('Manejo removido com sucesso!');
       setSelectedEvent(null);
-      setEvents(prev => prev.filter(e => e.id !== id));
-      await loadData();
+      await loadData(true);
     } else {
-      showToast('Erro ao remover manejo no banco de dados.');
+      showToast('Erro ao remover manejo.');
     }
   };
 
-  // Filtered Events
-  const filteredEvents = useMemo(() => {
-    return events.filter(ev => {
-      // Step Type Filter
-      const stepMatch = selectedTypes.includes(ev.step_code) || selectedTypes.includes('OUTRO');
-      // Status Filter
-      const statusMatch = selectedStatuses.includes(ev.status || 'pendente');
-      // Search
-      const searchMatch = !searchQuery || 
-        ev.iatf_lots?.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        ev.step_code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (ev.responsible_name && ev.responsible_name.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (ev.iatf_lots?.properties?.name && ev.iatf_lots.properties.name.toLowerCase().includes(searchQuery.toLowerCase()));
-
-      return stepMatch && statusMatch && searchMatch;
-    });
-  }, [events, selectedTypes, selectedStatuses, searchQuery]);
-
-  // Calendar Calculation Helpers
+  // Cálculo dos dias do mês
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
-
   const formattedMonthYear = `${MONTH_NAMES[month]} de ${year}`;
+  const todayStr = new Date().toISOString().split('T')[0];
 
-  // Month Grid Days
+  // Grid de dias do mês (com preenchimento de semanas completas)
   const monthGridDays = useMemo(() => {
     const firstDayIndex = new Date(year, month, 1).getDay();
     const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
@@ -257,1087 +251,762 @@ export default function AgendaPage() {
     
     const days: { date: Date; isCurrentMonth: boolean; dateStr: string; dayNum: number }[] = [];
 
-    // Prev month padding
+    // Preenchimento do mês anterior
     for (let i = firstDayIndex - 1; i >= 0; i--) {
       const d = new Date(year, month - 1, prevMonthLastDay - i);
       const yyyy = d.getFullYear();
       const mm = String(d.getMonth() + 1).padStart(2, '0');
       const dd = String(d.getDate()).padStart(2, '0');
-      const dateStr = `${yyyy}-${mm}-${dd}`;
-      days.push({ date: d, isCurrentMonth: false, dateStr, dayNum: prevMonthLastDay - i });
+      days.push({ date: d, isCurrentMonth: false, dateStr: `${yyyy}-${mm}-${dd}`, dayNum: prevMonthLastDay - i });
     }
 
-    // Current month days
+    // Dias do mês atual
     for (let i = 1; i <= totalDaysInMonth; i++) {
       const d = new Date(year, month, i);
       const yyyy = d.getFullYear();
       const mm = String(d.getMonth() + 1).padStart(2, '0');
       const dd = String(d.getDate()).padStart(2, '0');
-      const dateStr = `${yyyy}-${mm}-${dd}`;
-      days.push({ date: d, isCurrentMonth: true, dateStr, dayNum: i });
+      days.push({ date: d, isCurrentMonth: true, dateStr: `${yyyy}-${mm}-${dd}`, dayNum: i });
     }
 
-    // Next month padding to fill complete grid (multiples of 7)
+    // Preenchimento do próximo mês
     const remaining = (7 - (days.length % 7)) % 7;
     for (let i = 1; i <= remaining; i++) {
       const d = new Date(year, month + 1, i);
       const yyyy = d.getFullYear();
       const mm = String(d.getMonth() + 1).padStart(2, '0');
       const dd = String(d.getDate()).padStart(2, '0');
-      const dateStr = `${yyyy}-${mm}-${dd}`;
-      days.push({ date: d, isCurrentMonth: false, dateStr, dayNum: i });
+      days.push({ date: d, isCurrentMonth: false, dateStr: `${yyyy}-${mm}-${dd}`, dayNum: i });
     }
 
     return days;
   }, [year, month]);
 
-  // Week Grid Days
-  const weekGridDays = useMemo(() => {
-    const d = new Date(currentDate);
-    const dayOfWeek = d.getDay(); // 0 is Sunday
-    const sunday = new Date(d);
-    sunday.setDate(d.getDate() - dayOfWeek);
+  // Filtragem dos eventos
+  const filteredEvents = useMemo(() => {
+    return events.filter(ev => {
+      // Filtro de etapa
+      if (filterStep !== 'ALL') {
+        if (filterStep === 'RETIRADA') {
+          if (!['D7', 'D8', 'D9'].includes(ev.step_code)) return false;
+        } else if (ev.step_code !== filterStep) {
+          return false;
+        }
+      }
 
-    const weekDays: { date: Date; dateStr: string; dayNum: number; dayName: string; isToday: boolean }[] = [];
-    const today = new Date();
-    const yyyyToday = today.getFullYear();
-    const mmToday = String(today.getMonth() + 1).padStart(2, '0');
-    const ddToday = String(today.getDate()).padStart(2, '0');
-    const todayStr = `${yyyyToday}-${mmToday}-${ddToday}`;
+      // Filtro de status
+      if (filterStatus === 'pendente' && ev.status === 'concluido') return false;
+      if (filterStatus === 'concluido' && ev.status !== 'concluido') return false;
 
-    for (let i = 0; i < 7; i++) {
-      const day = new Date(sunday);
-      day.setDate(sunday.getDate() + i);
-      const yyyy = day.getFullYear();
-      const mm = String(day.getMonth() + 1).padStart(2, '0');
-      const dd = String(day.getDate()).padStart(2, '0');
-      const dateStr = `${yyyy}-${mm}-${dd}`;
-      weekDays.push({
-        date: day,
-        dateStr,
-        dayNum: day.getDate(),
-        dayName: WEEKDAY_NAMES_SHORT[i],
-        isToday: dateStr === todayStr
-      });
-    }
-    return weekDays;
-  }, [currentDate]);
+      // Busca de texto
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const lotCode = ev.iatf_lots?.code?.toLowerCase() || '';
+        const farmName = ev.iatf_lots?.farms?.name?.toLowerCase() || '';
+        const resp = ev.responsible_name?.toLowerCase() || '';
+        const notes = ev.notes?.toLowerCase() || '';
+        const step = ev.step_code?.toLowerCase() || '';
 
-  // Today string for highlighting
-  const todayStr = useMemo(() => {
-    const d = new Date();
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
-  }, []);
+        const match = lotCode.includes(q) || farmName.includes(q) || resp.includes(q) || notes.includes(q) || step.includes(q);
+        if (!match) return false;
+      }
 
-  // Events map by dateStr for ultra fast lookup
+      return true;
+    });
+  }, [events, filterStep, filterStatus, searchQuery]);
+
+  // Agrupamento de eventos por data
   const eventsByDate = useMemo(() => {
-    const map: Record<string, ManagementEvent[]> = {};
+    const map = new Map<string, ManagementEvent[]>();
     filteredEvents.forEach(ev => {
-      const d = ev.planned_date;
-      if (!map[d]) map[d] = [];
-      map[d].push(ev);
+      const list = map.get(ev.planned_date) || [];
+      list.push(ev);
+      map.set(ev.planned_date, list);
     });
     return map;
   }, [filteredEvents]);
 
-  // Toggle helper for filters
-  const toggleType = (code: string) => {
-    setSelectedTypes(prev => 
-      prev.includes(code) ? prev.filter(c => c !== code) : [...prev, code]
-    );
-  };
+  // Totais analíticos do mês atual
+  const monthStats = useMemo(() => {
+    const currentMonthPrefix = `${year}-${String(month + 1).padStart(2, '0')}`;
+    const monthEvents = filteredEvents.filter(ev => ev.planned_date.startsWith(currentMonthPrefix));
 
-  const toggleStatus = (st: string) => {
-    setSelectedStatuses(prev => 
-      prev.includes(st) ? prev.filter(s => s !== st) : [...prev, st]
-    );
-  };
+    const total = monthEvents.length;
+    const iaCount = monthEvents.filter(ev => ev.step_code === 'IA').length;
+    const dgCount = monthEvents.filter(ev => ['DG', 'DG1', 'DG2'].includes(ev.step_code)).length;
+    const d0Count = monthEvents.filter(ev => ev.step_code === 'D0').length;
+    const concludedCount = monthEvents.filter(ev => ev.status === 'concluido').length;
+    const totalAnimalsWorked = monthEvents.reduce((acc, ev) => acc + (ev.animals_worked_count || 0), 0);
+
+    return {
+      total,
+      iaCount,
+      dgCount,
+      d0Count,
+      concludedCount,
+      totalAnimalsWorked,
+    };
+  }, [filteredEvents, year, month]);
 
   return (
-    <div className="flex flex-col min-h-[calc(100vh-8rem)] text-slate-100 bg-slate-950 select-none rounded-2xl border border-slate-800/80 shadow-2xl overflow-hidden">
-      
-      {/* ========================================================================= */}
-      {/* 1. TOP HEADER (Google Calendar style) */}
-      {/* ========================================================================= */}
-      <header className="flex items-center justify-between px-6 py-3 border-b border-slate-800/80 bg-slate-900/90 backdrop-blur-md z-20">
-        
-        {/* Left: Brand + Date Controls */}
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-linear-to-tr from-emerald-600 to-teal-400 flex items-center justify-center font-black text-slate-950 shadow-md shadow-emerald-500/20">
-              {new Date().getDate()}
-            </div>
-            <span className="text-xl font-bold text-white tracking-tight hidden sm:inline">Agenda IATF</span>
-          </div>
+    <div className="space-y-5 pb-12">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 bg-emerald-600 text-slate-950 font-bold px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-2 border border-emerald-400 animate-in fade-in slide-in-from-bottom-4">
+          <Check className="w-5 h-5" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
 
-          <button
-            onClick={goToday}
-            className="px-4 py-1.5 rounded-xl border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-xs font-semibold text-slate-200 transition-all shadow-sm"
-          >
-            Hoje
-          </button>
-
-          <div className="flex items-center gap-1">
-            <button
-              onClick={goPrev}
-              className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
-              title="Anterior"
-            >
-              <ChevronLeft className="w-5 h-5" />
-            </button>
-            <button
-              onClick={goNext}
-              className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
-              title="Próximo"
-            >
-              <ChevronRight className="w-5 h-5" />
-            </button>
-          </div>
-
+      {/* 1. Header Integrado com Navegação de Mês e Seletor de Fazenda */}
+      <div className="glass-card bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
-            <h2 className="text-lg sm:text-xl font-bold text-slate-100 capitalize">
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center font-black shadow-inner">
+                <Calendar className="w-5 h-5" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-white flex items-center gap-2">
+                  Agenda Integrada de Manejos
+                  <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    Visão Mensal
+                  </span>
+                </h1>
+                <p className="text-xs text-slate-400">
+                  Planejamento unificado de protocolos e serviços de campo entre todas as fazendas.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Controles de Navegação de Mês */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Seletor de Fazenda */}
+            <div className="flex items-center gap-1.5 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800 text-xs">
+              <Building2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <select
+                value={selectedFarmId}
+                onChange={(e) => setSelectedFarmId(e.target.value)}
+                className="bg-transparent text-slate-200 font-semibold focus:outline-none cursor-pointer"
+              >
+                <option value="all">Todas as Fazendas (Integrada)</option>
+                {farms.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Navegador de Mês */}
+            <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
+              <button
+                onClick={goPrevMonth}
+                title="Mês Anterior"
+                className="p-1.5 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition-colors cursor-pointer"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              
+              <button
+                onClick={goToday}
+                title="Ir para o mês atual"
+                className="px-3 py-1 text-xs font-bold text-slate-200 hover:text-emerald-400 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+              >
+                Hoje
+              </button>
+
+              <button
+                onClick={goNextMonth}
+                title="Próximo Mês"
+                className="p-1.5 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition-colors cursor-pointer"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Mês e Ano Atual em Destaque */}
+            <span className="text-base font-extrabold text-white px-2 tracking-wide font-sans">
               {formattedMonthYear}
-            </h2>
-            {activeFarm && (
-              <span className="text-[11px] text-emerald-400 font-semibold block -mt-0.5">
-                {activeFarm.name}
-              </span>
-            )}
+            </span>
+
+            {/* Botão Novo Agendamento */}
+            <button
+              onClick={() => openCreateForDate(todayStr)}
+              className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-md ml-auto lg:ml-0"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Novo Manejo</span>
+            </button>
           </div>
         </div>
 
-        {/* Right: Search, Filter Toggle, View Selector */}
-        <div className="flex items-center gap-3">
-          {/* Search Box */}
-          <div className="relative hidden md:block">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+        {/* 2. Resumo KPI do Mês Consolidado */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 pt-2 border-t border-slate-800/80">
+          <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800/70 flex items-center justify-between">
+            <div>
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Manejos no Mês</span>
+              <p className="text-xl font-black text-white font-mono mt-0.5">{monthStats.total}</p>
+            </div>
+            <div className="w-8 h-8 rounded-lg bg-slate-800 text-slate-300 flex items-center justify-center">
+              <Calendar className="w-4 h-4" />
+            </div>
+          </div>
+
+          <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800/70 flex items-center justify-between">
+            <div>
+              <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">Inseminações (IA)</span>
+              <p className="text-xl font-black text-emerald-400 font-mono mt-0.5">{monthStats.iaCount}</p>
+            </div>
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/15 text-emerald-400 flex items-center justify-center">
+              <Syringe className="w-4 h-4" />
+            </div>
+          </div>
+
+          <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800/70 flex items-center justify-between">
+            <div>
+              <span className="text-[10px] uppercase font-bold text-amber-400 tracking-wider">Diagnósticos (DG)</span>
+              <p className="text-xl font-black text-amber-400 font-mono mt-0.5">{monthStats.dgCount}</p>
+            </div>
+            <div className="w-8 h-8 rounded-lg bg-amber-500/15 text-amber-400 flex items-center justify-center">
+              <Microscope className="w-4 h-4" />
+            </div>
+          </div>
+
+          <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800/70 flex items-center justify-between">
+            <div>
+              <span className="text-[10px] uppercase font-bold text-sky-400 tracking-wider">Implantes (D0)</span>
+              <p className="text-xl font-black text-sky-400 font-mono mt-0.5">{monthStats.d0Count}</p>
+            </div>
+            <div className="w-8 h-8 rounded-lg bg-sky-500/15 text-sky-400 flex items-center justify-center">
+              <Layers className="w-4 h-4" />
+            </div>
+          </div>
+
+          <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800/70 col-span-2 sm:col-span-1 flex items-center justify-between">
+            <div>
+              <span className="text-[10px] uppercase font-bold text-teal-400 tracking-wider">Animais Trabalhados</span>
+              <p className="text-xl font-black text-teal-300 font-mono mt-0.5">{monthStats.totalAnimalsWorked}</p>
+            </div>
+            <div className="w-8 h-8 rounded-lg bg-teal-500/15 text-teal-400 flex items-center justify-center">
+              <CheckCircle2 className="w-4 h-4" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 3. Barra de Filtros Rápidos */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/60 p-3 rounded-xl border border-slate-800 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Busca por texto */}
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="Buscar lote, manejo, responsável..."
+              placeholder="Buscar lote, fazenda, responsável..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-56 lg:w-72 bg-slate-950/80 border border-slate-800 text-slate-200 text-xs pl-9 pr-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 transition-all placeholder:text-slate-500"
+              className="bg-slate-950 border border-slate-800 text-white pl-8 pr-3 py-1.5 rounded-lg text-xs focus:outline-none focus:border-emerald-500 w-52 sm:w-64"
             />
             {searchQuery && (
-              <button 
+              <button
                 onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
 
-          {/* Toggle Sidebar */}
-          <button
-            onClick={() => setShowSidebar(!showSidebar)}
-            className={`p-2 rounded-xl border border-slate-800 transition-all ${
-              showSidebar ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-slate-900 text-slate-400 hover:text-white'
-            }`}
-            title="Alternar barra lateral"
-          >
-            <SlidersHorizontal className="w-4 h-4" />
-          </button>
+          {/* Filtro de Etapa */}
+          <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+            <button
+              onClick={() => setFilterStep('ALL')}
+              className={`px-2.5 py-1 rounded-md font-semibold transition-all ${filterStep === 'ALL' ? 'bg-emerald-500 text-slate-950' : 'text-slate-400 hover:text-white'}`}
+            >
+              Todos
+            </button>
+            <button
+              onClick={() => setFilterStep('D0')}
+              className={`px-2 py-1 rounded-md font-semibold transition-all ${filterStep === 'D0' ? 'bg-sky-500 text-slate-950' : 'text-slate-400 hover:text-sky-300'}`}
+            >
+              D0
+            </button>
+            <button
+              onClick={() => setFilterStep('RETIRADA')}
+              className={`px-2 py-1 rounded-md font-semibold transition-all ${filterStep === 'RETIRADA' ? 'bg-purple-500 text-white' : 'text-slate-400 hover:text-purple-300'}`}
+            >
+              D8/D9
+            </button>
+            <button
+              onClick={() => setFilterStep('IA')}
+              className={`px-2 py-1 rounded-md font-semibold transition-all ${filterStep === 'IA' ? 'bg-emerald-500 text-slate-950' : 'text-slate-400 hover:text-emerald-300'}`}
+            >
+              IA
+            </button>
+            <button
+              onClick={() => setFilterStep('DG')}
+              className={`px-2 py-1 rounded-md font-semibold transition-all ${filterStep === 'DG' ? 'bg-amber-500 text-slate-950' : 'text-slate-400 hover:text-amber-300'}`}
+            >
+              DG
+            </button>
+          </div>
 
-          {/* Refresh */}
-          <button
-            onClick={loadData}
-            disabled={loading}
-            className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white transition-colors"
-            title="Atualizar dados"
+          {/* Filtro de Status */}
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value as 'all' | 'pendente' | 'concluido')}
+            className="bg-slate-950 border border-slate-800 text-slate-300 px-2.5 py-1.5 rounded-lg focus:outline-none focus:border-emerald-500 cursor-pointer"
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-emerald-400' : ''}`} />
-          </button>
+            <option value="all">Todos os Status</option>
+            <option value="pendente">Apenas Pendentes / Próximos</option>
+            <option value="concluido">Apenas Concluídos</option>
+          </select>
+        </div>
 
-          {/* View Dropdown / Pills */}
-          <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
-            {(['month', 'week', 'day', 'list'] as CalendarView[]).map((v) => (
-              <button
-                key={v}
-                onClick={() => setView(v)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize transition-all ${
-                  view === v 
-                    ? 'bg-emerald-500 text-slate-950 shadow-md font-bold' 
-                    : 'text-slate-400 hover:text-slate-200'
+        <button
+          onClick={() => loadData(true)}
+          className="text-slate-400 hover:text-white flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+          title="Atualizar agenda"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-emerald-400' : ''}`} />
+          <span>Atualizar</span>
+        </button>
+      </div>
+
+      {/* 4. Grade do Calendário Mensal */}
+      <div className="glass-card bg-slate-900/90 rounded-2xl border border-slate-800 overflow-hidden shadow-xl">
+        {/* Cabeçalho dos Dias da Semana */}
+        <div className="grid grid-cols-7 border-b border-slate-800 bg-slate-950/80 text-center">
+          {WEEKDAY_NAMES_SHORT.map((dayName, idx) => (
+            <div
+              key={dayName}
+              className={`py-2.5 text-xs font-bold tracking-wider uppercase ${idx === 0 || idx === 6 ? 'text-slate-500' : 'text-slate-300'}`}
+            >
+              {dayName}
+            </div>
+          ))}
+        </div>
+
+        {/* Células de Dias do Mês */}
+        <div className="grid grid-cols-7 divide-x divide-y divide-slate-800/60 bg-slate-950/40 min-h-160">
+          {monthGridDays.map((dayItem) => {
+            const isToday = dayItem.dateStr === todayStr;
+            const dayEvents = eventsByDate.get(dayItem.dateStr) || [];
+
+            return (
+              <div
+                key={dayItem.dateStr}
+                onClick={() => openCreateForDate(dayItem.dateStr)}
+                className={`min-h-27.5 sm:min-h-32.5 p-1.5 sm:p-2 flex flex-col justify-between transition-colors relative group cursor-pointer ${
+                  dayItem.isCurrentMonth
+                    ? isToday
+                      ? 'bg-emerald-500/4 ring-1 ring-inset ring-emerald-500/40'
+                      : 'hover:bg-slate-850/50'
+                    : 'bg-slate-950/70 text-slate-600 opacity-60 hover:opacity-100'
                 }`}
               >
-                {v === 'month' ? 'Mês' : v === 'week' ? 'Semana' : v === 'day' ? 'Dia' : 'Lista'}
-              </button>
-            ))}
-          </div>
-        </div>
-      </header>
-
-      {/* Active Filter Chip Bar (Mobile & Desktop) */}
-      {searchQuery && (
-        <div className="bg-emerald-950/50 border-b border-emerald-500/20 px-4 py-2 flex items-center justify-between text-xs text-emerald-300">
-          <span className="flex items-center gap-2 font-medium">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            Filtrando agenda para: <strong className="text-white font-bold">{searchQuery}</strong>
-          </span>
-          <button
-            onClick={() => setSearchQuery('')}
-            className="text-[11px] bg-emerald-500/20 hover:bg-emerald-500/30 px-2.5 py-0.5 rounded-lg border border-emerald-500/40 flex items-center gap-1 cursor-pointer transition-colors text-emerald-200"
-          >
-            Limpar filtro <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 2. BODY: SIDEBAR + CALENDAR MAIN GRID */}
-      {/* ========================================================================= */}
-      <div className="flex flex-1 relative flex-col lg:flex-row">
-
-        {/* --- LEFT SIDEBAR --- */}
-        {showSidebar && (
-          <aside className="w-full lg:w-72 shrink-0 border-b lg:border-b-0 lg:border-r border-slate-800 bg-slate-900/50 p-4 flex flex-col gap-6">
-            
-            {/* Create Button */}
-            <button
-              onClick={() => openCreateForDate(todayStr, '08:00')}
-              className="w-full flex items-center justify-center gap-3 bg-linear-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold py-3 px-4 rounded-2xl shadow-lg shadow-emerald-500/10 hover:shadow-emerald-500/25 transition-all text-sm group"
-            >
-              <div className="w-6 h-6 rounded-lg bg-slate-950/20 flex items-center justify-center group-hover:rotate-90 transition-transform duration-300">
-                <Plus className="w-4 h-4 text-slate-950 font-black stroke-3" />
-              </div>
-              <span>Criar Manejo / Evento</span>
-            </button>
-
-            {/* Mini Calendar */}
-            <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800/80">
-              <div className="flex items-center justify-between mb-3 px-1">
-                <span className="text-xs font-bold text-slate-200 capitalize">
-                  {formattedMonthYear}
-                </span>
-                <div className="flex items-center gap-1">
-                  <button onClick={goPrev} className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white">
-                    <ChevronLeft className="w-3.5 h-3.5" />
-                  </button>
-                  <button onClick={goNext} className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white">
-                    <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Mini Calendar Grid */}
-              <div className="grid grid-cols-7 gap-1 text-center text-[10px]">
-                {WEEKDAY_NAMES_MINI.map((w, idx) => (
-                  <span key={idx} className="text-slate-500 font-semibold py-1">{w}</span>
-                ))}
-                {monthGridDays.map((d, idx) => {
-                  const isToday = d.dateStr === todayStr;
-                  const isSelected = d.date.toDateString() === currentDate.toDateString();
-                  const hasEvents = (eventsByDate[d.dateStr]?.length || 0) > 0;
-
-                  return (
-                    <button
-                      key={idx}
-                      onClick={() => {
-                        setCurrentDate(d.date);
-                        if (view === 'month') setView('day');
-                      }}
-                      className={`h-7 w-7 mx-auto rounded-full flex items-center justify-center relative font-medium transition-all ${
-                        isSelected
-                          ? 'bg-emerald-500 text-slate-950 font-bold'
-                          : isToday
-                          ? 'bg-sky-500/20 text-sky-400 font-bold border border-sky-500/40'
-                          : d.isCurrentMonth
-                          ? 'text-slate-300 hover:bg-slate-800'
-                          : 'text-slate-600 hover:bg-slate-900'
-                      }`}
-                    >
-                      {d.dayNum}
-                      {hasEvents && !isSelected && (
-                        <span className="w-1 h-1 rounded-full bg-emerald-400 absolute bottom-0.5" />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Filter: Tipos de Manejo */}
-            <div className="space-y-2.5">
-              <div className="flex items-center justify-between text-xs font-bold text-slate-300 uppercase tracking-wider px-1">
-                <span>Tipos de Manejo</span>
-                <span className="text-[10px] text-slate-500 lowercase">({filteredEvents.length} eventos)</span>
-              </div>
-              
-              <div className="space-y-1 text-xs">
-                {Object.entries(STEP_COLORS).map(([code, style]) => {
-                  const isChecked = selectedTypes.includes(code);
-                  return (
-                    <button
-                      key={code}
-                      onClick={() => toggleType(code)}
-                      className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl hover:bg-slate-800/60 transition-colors text-left group"
-                    >
-                      <div className={`w-4 h-4 rounded-md border flex items-center justify-center transition-all ${
-                        isChecked 
-                          ? `${style.border} ${style.bg} ${style.text}` 
-                          : 'border-slate-700 bg-slate-900 text-transparent'
-                      }`}>
-                        <Check className="w-3 h-3 stroke-3" />
-                      </div>
-                      <span className={`flex-1 font-medium transition-colors ${isChecked ? 'text-slate-200' : 'text-slate-500'}`}>
-                        {style.label}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Filter: Status */}
-            <div className="space-y-2.5 pt-2 border-t border-slate-800/80">
-              <span className="text-xs font-bold text-slate-300 uppercase tracking-wider px-1 block">
-                Status Operacional
-              </span>
-              
-              <div className="space-y-1 text-xs">
-                {[
-                  { id: 'proximo', label: 'Próximos Manejos', color: 'text-amber-400 border-amber-500/40 bg-amber-500/20' },
-                  { id: 'atrasado', label: 'Atrasados / Pendentes', color: 'text-rose-400 border-rose-500/40 bg-rose-500/20' },
-                  { id: 'concluido', label: 'Concluídos', color: 'text-emerald-400 border-emerald-500/40 bg-emerald-500/20' },
-                ].map((st) => {
-                  const isChecked = selectedStatuses.includes(st.id);
-                  return (
-                    <button
-                      key={st.id}
-                      onClick={() => toggleStatus(st.id)}
-                      className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl hover:bg-slate-800/60 transition-colors text-left"
-                    >
-                      <div className={`w-4 h-4 rounded-md border flex items-center justify-center transition-all ${
-                        isChecked 
-                          ? st.color
-                          : 'border-slate-700 bg-slate-900 text-transparent'
-                      }`}>
-                        <Check className="w-3 h-3 stroke-3" />
-                      </div>
-                      <span className={`font-medium ${isChecked ? 'text-slate-200' : 'text-slate-500'}`}>
-                        {st.label}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-          </aside>
-        )}
-
-        {/* --- MAIN CALENDAR VIEW --- */}
-        <main className="flex-1 flex flex-col bg-slate-950 min-w-0">
-
-          {/* ========================================================================= */}
-          {/* VIEW: MONTH */}
-          {/* ========================================================================= */}
-          {view === 'month' && (
-            <div className="flex-1 flex flex-col">
-              
-              {/* Day Headers (DOM, SEG, TER...) */}
-              <div className="grid grid-cols-7 border-b border-slate-800 bg-slate-900/60 text-center text-xs font-bold text-slate-400 py-2.5">
-                {WEEKDAY_NAMES_SHORT.map((name, i) => (
-                  <div key={i} className="tracking-wider">
-                    {name}
-                  </div>
-                ))}
-              </div>
-
-              {/* Month Grid Cells */}
-              <div className="flex-1 grid grid-cols-7 auto-rows-fr border-collapse">
-                {monthGridDays.map((d, idx) => {
-                  const dayEvents = eventsByDate[d.dateStr] || [];
-                  const isToday = d.dateStr === todayStr;
-                  const isSelectedDate = d.dateStr === selectedDateStr;
-
-                  return (
-                    <div
-                      key={idx}
-                      onClick={() => {
-                        setSelectedDateStr(d.dateStr);
-                        setCurrentDate(d.date);
-                        if (window.innerWidth < 768) {
-                          setView('day');
-                        } else {
-                          openCreateForDate(d.dateStr, '08:00');
-                        }
-                      }}
-                      className={`min-h-27.5 p-1.5 border-b border-r border-slate-800/60 transition-all flex flex-col justify-between group relative cursor-pointer ${
-                        isSelectedDate
-                          ? 'ring-2 ring-emerald-400 bg-emerald-950/40 z-10'
-                          : d.isCurrentMonth
-                          ? 'bg-slate-950/40 hover:bg-slate-900/50'
-                          : 'bg-slate-950/90 opacity-40 hover:opacity-60'
-                      }`}
-                    >
-                      {/* Top Day Number */}
-                      <div className="flex items-center justify-between mb-1">
-                        <span
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setCurrentDate(d.date);
-                            setSelectedDateStr(d.dateStr);
-                            setView('day');
-                          }}
-                          className={`text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center transition-transform hover:scale-110 cursor-pointer ${
-                            isToday
-                              ? 'bg-emerald-500 text-slate-950 font-black shadow-sm'
-                              : isSelectedDate
-                              ? 'bg-emerald-400 text-slate-950 font-extrabold ring-2 ring-emerald-300'
-                              : d.isCurrentMonth
-                              ? 'text-slate-300 hover:text-white hover:bg-slate-800'
-                              : 'text-slate-600'
-                          }`}
-                          title="Toque para abrir a visão deste Dia"
-                        >
-                          {d.dayNum}
-                        </span>
-
-                        <span className="opacity-0 group-hover:opacity-100 text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded transition-opacity flex items-center gap-0.5">
-                          <Plus className="w-2.5 h-2.5" /> Adicionar
-                        </span>
-                      </div>
-
-                      {/* Event Cards inside Day Cell */}
-                      <div className="space-y-1" onClick={(e) => e.stopPropagation()}>
-                        {dayEvents.slice(0, 3).map((ev) => {
-                          const style = STEP_COLORS[ev.step_code] || STEP_COLORS['OUTRO'];
-                          const isConcluido = ev.status === 'concluido';
-                          const isAtrasado = ev.status === 'atrasado';
-
-                          return (
-                            <div
-                              key={ev.id}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedEvent(ev);
-                                setAnimalsWorked(ev.animals_worked_count?.toString() || '');
-                                setLossesCount(ev.losses_count?.toString() || '0');
-                              }}
-                              className={`px-2 py-1 rounded-lg border text-[11px] font-medium transition-all cursor-pointer flex items-center justify-between gap-1 shadow-sm ${
-                                isConcluido
-                                  ? 'bg-slate-900/80 border-slate-800 text-slate-400 line-through opacity-75'
-                                  : isAtrasado
-                                  ? 'bg-rose-950/40 border-rose-500/40 text-rose-300 hover:bg-rose-900/40'
-                                  : `${style.bg} ${style.border} ${style.text}`
-                              }`}
-                              title={`${ev.step_code} - ${ev.iatf_lots?.code} (${ev.responsible_name || 'Sem responsável'})`}
-                            >
-                              <div className="flex items-center gap-1.5 truncate">
-                                <span className={`px-1 rounded text-[9px] font-bold ${style.badge}`}>
-                                  {ev.step_code}
-                                </span>
-                                <span className="truncate font-semibold text-white">
-                                  {ev.iatf_lots?.code || 'Manejo'}
-                                </span>
-                              </div>
-
-                              {isConcluido ? (
-                                <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
-                              ) : isAtrasado ? (
-                                <AlertCircle className="w-3 h-3 text-rose-400 shrink-0" />
-                              ) : ev.start_time ? (
-                                <span className="text-[9px] text-slate-400 font-mono shrink-0">
-                                  {ev.start_time.slice(0, 5)}
-                                </span>
-                              ) : null}
-                            </div>
-                          );
-                        })}
-
-                        {/* More events indicator */}
-                        {dayEvents.length > 3 && (
-                          <div 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setCurrentDate(d.date);
-                              setView('day');
-                            }}
-                            className="text-[10px] font-bold text-emerald-400 hover:underline px-1 cursor-pointer"
-                          >
-                            +{dayEvents.length - 3} mais manejos
-                          </div>
-                        )}
-                      </div>
-
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* ========================================================================= */}
-          {/* VIEW: WEEK */}
-          {/* ========================================================================= */}
-          {view === 'week' && (
-            <div className="flex-1 flex flex-col">
-              {/* Header Days of the Week */}
-              <div className="grid grid-cols-[60px_repeat(7,1fr)] border-b border-slate-800 bg-slate-900/80">
-                <div className="p-3 text-center text-xs font-bold text-slate-500 border-r border-slate-800">
-                  GMT-03
-                </div>
-                {weekGridDays.map((wd, i) => (
-                  <div 
-                    key={i} 
-                    onClick={() => { setCurrentDate(wd.date); setView('day'); }}
-                    className="p-3 text-center border-r border-slate-800 cursor-pointer hover:bg-slate-850 transition-colors"
+                {/* Header do Dia */}
+                <div className="flex items-center justify-between mb-1">
+                  <span
+                    className={`text-xs font-mono font-bold w-6 h-6 rounded-full flex items-center justify-center transition-all ${
+                      isToday
+                        ? 'bg-emerald-500 text-slate-950 font-black shadow-md shadow-emerald-500/20'
+                        : dayItem.isCurrentMonth
+                        ? 'text-slate-300 group-hover:text-white'
+                        : 'text-slate-600'
+                    }`}
                   >
-                    <div className="text-[11px] font-semibold text-slate-400">{wd.dayName}</div>
-                    <div className={`text-lg font-extrabold w-8 h-8 rounded-full flex items-center justify-center mx-auto mt-0.5 ${
-                      wd.isToday ? 'bg-emerald-500 text-slate-950 shadow-md' : 'text-slate-200'
-                    }`}>
-                      {wd.dayNum}
-                    </div>
-                  </div>
-                ))}
-              </div>
+                    {dayItem.dayNum}
+                  </span>
 
-              {/* Time Slots Grid */}
-              <div className="flex-1 overflow-y-auto">
-                <div className="grid grid-cols-[60px_repeat(7,1fr)] auto-rows-15">
-                  {HOURS.map((hour) => {
-                    const hourStr = `${String(hour).padStart(2, '0')}:00`;
+                  {dayEvents.length > 0 && (
+                    <span className="text-[10px] font-bold text-slate-400 font-mono px-1 rounded bg-slate-900 border border-slate-800">
+                      {dayEvents.length} {dayEvents.length === 1 ? 'manejo' : 'manejos'}
+                    </span>
+                  )}
+                </div>
+
+                {/* Lista de Eventos no Dia */}
+                <div className="space-y-1 flex-1 overflow-hidden">
+                  {dayEvents.slice(0, 3).map((ev) => {
+                    const stepConf = STEP_COLORS[ev.step_code] || STEP_COLORS.OUTRO;
+                    const isConcluded = ev.status === 'concluido';
+                    const farmName = ev.iatf_lots?.farms?.name || 'Fazenda';
+                    const farmColors = farmColorMap.get(ev.iatf_lots?.farm_id || '') || {
+                      text: 'text-emerald-300',
+                      bg: 'bg-emerald-500/15',
+                      border: 'border-emerald-500/30'
+                    };
+
                     return (
-                      <div key={hour} className="contents">
-                        {/* Hour Label */}
-                        <div className="border-b border-r border-slate-800/80 text-[11px] text-slate-500 font-mono pr-2 text-right pt-2 select-none">
-                          {hourStr}
+                      <div
+                        key={ev.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedEvent(ev);
+                        }}
+                        className={`text-[11px] p-1.5 rounded-lg border transition-all cursor-pointer shadow-sm hover:scale-[1.02] ${stepConf.bg} ${stepConf.border} flex flex-col gap-0.5`}
+                      >
+                        {/* Linha 1: Tag da Fazenda + Etapa */}
+                        <div className="flex items-center justify-between gap-1">
+                          <span
+                            className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.2 rounded border truncate max-w-22.5 ${farmColors.bg} ${farmColors.text} ${farmColors.border}`}
+                            title={`Fazenda: ${farmName}`}
+                          >
+                            {farmName}
+                          </span>
+
+                          <span className={`text-[10px] font-extrabold font-mono shrink-0 px-1 rounded ${stepConf.badge}`}>
+                            {ev.step_code}
+                          </span>
                         </div>
 
-                        {/* Day Slots */}
-                        {weekGridDays.map((wd, i) => {
-                          const slotEvents = (eventsByDate[wd.dateStr] || []).filter(ev => {
-                            if (!ev.start_time) return hour === 8;
-                            const evHour = parseInt(ev.start_time.split(':')[0]);
-                            return evHour === hour;
-                          });
+                        {/* Linha 2: Lote + Status */}
+                        <div className="flex items-center justify-between gap-1 text-[10px] text-slate-300 pt-0.5">
+                          <span className="truncate font-medium text-slate-200" title={ev.iatf_lots?.code}>
+                            {ev.iatf_lots?.code || 'Lote'}
+                          </span>
 
-                          return (
-                            <div
-                              key={i}
-                              onClick={() => openCreateForDate(wd.dateStr, hourStr)}
-                              className="border-b border-r border-slate-800/60 p-1 hover:bg-slate-900/40 transition-colors relative group cursor-pointer"
-                            >
-                              {slotEvents.map(ev => {
-                                const style = STEP_COLORS[ev.step_code] || STEP_COLORS['OUTRO'];
-                                return (
-                                  <div
-                                    key={ev.id}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setSelectedEvent(ev);
-                                      setAnimalsWorked(ev.animals_worked_count?.toString() || '');
-                                      setLossesCount(ev.losses_count?.toString() || '0');
-                                    }}
-                                    className={`p-1.5 rounded-lg border text-xs font-semibold cursor-pointer shadow-sm truncate ${style.bg} ${style.border} ${style.text}`}
-                                  >
-                                    <div className="flex items-center gap-1">
-                                      <span className={`px-1 rounded text-[9px] font-bold ${style.badge}`}>{ev.step_code}</span>
-                                      <span className="truncate">{ev.iatf_lots?.code}</span>
-                                    </div>
-                                    <div className="text-[10px] text-slate-300 truncate mt-0.5">
-                                      {ev.step_name || ev.responsible_name}
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          );
-                        })}
+                          {isConcluded ? (
+                            <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                          ) : (
+                            <Clock className="w-3 h-3 text-slate-400 shrink-0" />
+                          )}
+                        </div>
                       </div>
                     );
                   })}
-                </div>
-              </div>
-            </div>
-          )}
 
-          {/* ========================================================================= */}
-          {/* VIEW: DAY */}
-          {/* ========================================================================= */}
-          {view === 'day' && (
-            <div className="flex-1 flex flex-col">
-              {/* Day Header */}
-              <div className="p-4 border-b border-slate-800 bg-slate-900/80 flex items-center justify-between">
-                <div>
-                  <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                    <span className="px-3 py-1 rounded-xl bg-emerald-500 text-slate-950 font-black text-sm">
-                      {currentDate.getDate()}
-                    </span>
-                    {WEEKDAY_NAMES_SHORT[currentDate.getDay()]} — {currentDate.toLocaleDateString('pt-BR', { dateStyle: 'long' })}
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    {eventsByDate[currentDate.toISOString().split('T')[0]]?.length || 0} manejos agendados para este dia
-                  </p>
-                </div>
-
-                <button
-                  onClick={() => openCreateForDate(currentDate.toISOString().split('T')[0], '08:00')}
-                  className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs shadow-md transition-all"
-                >
-                  <Plus className="w-4 h-4 stroke-3" /> Adicionar Manejo
-                </button>
-              </div>
-
-              {/* Day Time Slots */}
-              <div className="flex-1 p-4 space-y-2">
-                {HOURS.map((hour) => {
-                  const hourStr = `${String(hour).padStart(2, '0')}:00`;
-                  const d = currentDate;
-                  const yyyy = d.getFullYear();
-                  const mm = String(d.getMonth() + 1).padStart(2, '0');
-                  const dd = String(d.getDate()).padStart(2, '0');
-                  const dayStr = `${yyyy}-${mm}-${dd}`;
-
-                  const slotEvents = (eventsByDate[dayStr] || []).filter(ev => {
-                    if (!ev.start_time) return hour === 8;
-                    return parseInt(ev.start_time.split(':')[0]) === hour;
-                  });
-
-                  return (
-                    <div
-                      key={hour}
-                      onClick={() => openCreateForDate(dayStr, hourStr)}
-                      className="group flex items-start gap-4 p-3 rounded-xl border border-slate-800/80 bg-slate-900/30 hover:bg-slate-900/70 hover:border-slate-700 transition-all cursor-pointer"
-                    >
-                      <div className="w-16 font-mono text-xs text-slate-500 font-bold pt-1">
-                        {hourStr}
-                      </div>
-
-                      <div className="flex-1 flex flex-wrap gap-2">
-                        {slotEvents.length === 0 ? (
-                          <span className="text-xs text-slate-600 italic group-hover:text-slate-500 pt-1">
-                            Disponível (clique para agendar)
-                          </span>
-                        ) : (
-                          slotEvents.map(ev => {
-                            const style = STEP_COLORS[ev.step_code] || STEP_COLORS['OUTRO'];
-                            return (
-                              <div
-                                key={ev.id}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedEvent(ev);
-                                  setAnimalsWorked(ev.animals_worked_count?.toString() || '');
-                                  setLossesCount(ev.losses_count?.toString() || '0');
-                                }}
-                                className={`p-3 rounded-xl border flex-1 min-w-70 shadow-md transition-all ${style.bg} ${style.border}`}
-                              >
-                                <div className="flex items-center justify-between">
-                                  <span className={`px-2 py-0.5 rounded-lg text-xs font-bold ${style.badge}`}>
-                                    {ev.step_code}
-                                  </span>
-                                  <p className="text-xs text-slate-300">
-                                    {ev.step_name || style.label} — Resp: <strong>{ev.responsible_name}</strong>
-                                  </p>
-                                </div>
-
-                                <div className="flex items-center gap-2 mt-2">
-                                  {ev.status === 'concluido' ? (
-                                    <span className="text-xs font-bold text-emerald-400 flex items-center gap-1 bg-emerald-500/10 px-3 py-1.5 rounded-lg border border-emerald-500/20">
-                                      <CheckCircle2 className="w-4 h-4" /> Concluído ({ev.animals_worked_count} animais)
-                                    </span>
-                                  ) : (
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setSelectedEvent(ev);
-                                      }}
-                                      className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-sm"
-                                    >
-                                      <Check className="w-3.5 h-3.5 stroke-3" /> Concluir
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
+                  {/* Indicador se houver mais de 3 eventos */}
+                  {dayEvents.length > 3 && (
+                    <div className="text-[10px] text-center font-bold text-emerald-400 bg-slate-900/90 py-0.5 rounded border border-slate-800">
+                      + {dayEvents.length - 3} mais
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* ========================================================================= */}
-          {/* VIEW: LIST */}
-          {/* ========================================================================= */}
-          {view === 'list' && (
-            <div className="flex-1 p-6 space-y-4">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-lg font-bold text-white">Todos os Manejos Agendados</h3>
-                <span className="text-xs text-slate-400">{filteredEvents.length} registros encontrados</span>
-              </div>
-
-              {filteredEvents.length === 0 ? (
-                <div className="text-center py-16 text-slate-400">
-                  Nenhum manejo agendado corresponde aos filtros selecionados.
+                  )}
                 </div>
-              ) : (
-                filteredEvents.map(ev => {
-                  const style = STEP_COLORS[ev.step_code] || STEP_COLORS['OUTRO'];
-                  return (
-                    <div
-                      key={ev.id}
-                      onClick={() => {
-                        setSelectedEvent(ev);
-                        setAnimalsWorked(ev.animals_worked_count?.toString() || '');
-                        setLossesCount(ev.losses_count?.toString() || '0');
-                      }}
-                      className={`p-4 rounded-2xl border transition-all cursor-pointer flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-900/60 hover:bg-slate-900 border-slate-800`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-black text-sm shrink-0 ${style.badge}`}>
-                          {ev.step_code}
-                        </div>
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-bold text-white text-base">{ev.iatf_lots?.code}</span>
-                            {ev.iatf_lots?.properties?.name && (
-                              <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
-                                {ev.iatf_lots.properties.name}
-                              </span>
-                            )}
-                            <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
-                              📅 {ev.planned_date} {ev.start_time ? `às ${ev.start_time.slice(0, 5)}` : ''}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-300 mt-1">{ev.step_name || style.label}</p>
-                          <p className="text-xs text-slate-400">Responsável: {ev.responsible_name}</p>
-                        </div>
-                      </div>
 
-                      <div className="flex items-center gap-3">
-                        {ev.status === 'concluido' ? (
-                          <div className="text-right">
-                            <span className="text-xs text-emerald-400 font-bold block">✓ Concluído</span>
-                            <span className="text-[11px] text-slate-400">{ev.animals_worked_count} animais</span>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedEvent(ev);
-                            }}
-                            className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-md"
-                          >
-                            <Check className="w-3.5 h-3.5 stroke-3" /> Concluir Manejo
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          )}
-
-        </main>
+                {/* Dica de clique para agendar */}
+                <div className="opacity-0 group-hover:opacity-100 transition-opacity text-[9px] text-slate-500 text-center pt-0.5">
+                  + agendar
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* 3. MODAL: CRIAR NOVO MANEJO / EVENTO (Direct cell click) */}
-      {/* ========================================================================= */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="glass-card w-full max-w-lg rounded-3xl border border-slate-700 bg-slate-900 p-6 space-y-5 shadow-2xl animate-in fade-in zoom-in duration-200">
-            
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
-                  <Plus className="w-5 h-5 stroke-3" />
-                </div>
+      {/* ======================================================== */}
+      {/* MODAL: DETALHES & CONCLUSÃO DO MANEJO */}
+      {/* ======================================================== */}
+      {selectedEvent && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+          <div className="glass-card w-full max-w-lg rounded-3xl border border-slate-700 bg-slate-900 shadow-2xl overflow-hidden animate-in fade-in my-auto">
+            {/* Header Modal */}
+            <div className="px-6 py-4 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className={`text-xs font-extrabold px-2.5 py-1 rounded-lg ${STEP_COLORS[selectedEvent.step_code]?.badge || 'bg-slate-700 text-white'}`}>
+                  {selectedEvent.step_code}
+                </span>
                 <div>
-                  <h3 className="text-lg font-bold text-white">Agendar Novo Manejo</h3>
-                  <p className="text-xs text-slate-400">Insira as informações do protocolo ou atividade de campo</p>
+                  <h3 className="text-base font-bold text-white">
+                    {STEP_COLORS[selectedEvent.step_code]?.label || 'Manejo Operacional'}
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Lote: <strong className="text-emerald-400 font-mono">{selectedEvent.iatf_lots?.code}</strong>
+                  </p>
                 </div>
               </div>
-              <button 
-                onClick={() => setShowCreateModal(false)}
-                className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
+              <button
+                onClick={() => setSelectedEvent(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
               >
-                <X className="w-4 h-4" />
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateSubmit} className="space-y-4">
-              
-              {/* Lote */}
+            {/* Corpo dos Detalhes */}
+            <div className="p-6 space-y-4">
+              {/* Informações Gerais */}
+              <div className="grid grid-cols-2 gap-3 text-xs bg-slate-950/70 p-4 rounded-2xl border border-slate-800">
+                <div>
+                  <span className="text-slate-400 block text-[11px]">Propriedade / Fazenda</span>
+                  <p className="font-semibold text-white flex items-center gap-1.5 mt-0.5">
+                    <Building2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    {selectedEvent.iatf_lots?.farms?.name || 'Fazenda'}
+                  </p>
+                </div>
+
+                <div>
+                  <span className="text-slate-400 block text-[11px]">Data Planejada</span>
+                  <p className="font-semibold text-white font-mono mt-0.5">
+                    {selectedEvent.planned_date.split('-').reverse().join('/')}
+                    {selectedEvent.start_time && ` às ${selectedEvent.start_time.slice(0, 5)}`}
+                  </p>
+                </div>
+
+                <div>
+                  <span className="text-slate-400 block text-[11px]">Status Operacional</span>
+                  <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full mt-1 ${
+                    selectedEvent.status === 'concluido' 
+                      ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30' 
+                      : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                  }`}>
+                    {selectedEvent.status === 'concluido' ? <CheckCircle2 className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                    {selectedEvent.status === 'concluido' ? 'Concluído' : 'Pendente / Agendado'}
+                  </span>
+                </div>
+
+                <div>
+                  <span className="text-slate-400 block text-[11px]">Responsável</span>
+                  <p className="font-semibold text-white flex items-center gap-1.5 mt-0.5">
+                    <User className="w-3.5 h-3.5 text-slate-400" />
+                    {selectedEvent.responsible_name || 'Equipe de Campo'}
+                  </p>
+                </div>
+              </div>
+
+              {selectedEvent.notes && (
+                <div className="p-3 bg-slate-950/50 rounded-xl border border-slate-800/80 text-xs text-slate-300">
+                  <span className="text-[10px] text-slate-400 font-bold block mb-0.5">Observações:</span>
+                  {selectedEvent.notes}
+                </div>
+              )}
+
+              {/* Se o evento estiver pendente: Formulário para concluir */}
+              {selectedEvent.status !== 'concluido' ? (
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
+                  <h4 className="text-xs font-bold text-white flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    Registrar Execução no Curral
+                  </h4>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">
+                        Fêmeas Trabalhadas *
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="Ex: 85"
+                        value={animalsWorked}
+                        onChange={(e) => setAnimalsWorked(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">
+                        Perdas / Falhas
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="0"
+                        value={lossesCount}
+                        onChange={(e) => setLossesCount(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleCompleteSubmit}
+                    disabled={completing || !animalsWorked}
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md"
+                  >
+                    {completing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                    {completing ? 'Salvando...' : 'Confirmar Conclusão do Manejo'}
+                  </button>
+                </div>
+              ) : (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-300 flex items-center justify-between">
+                  <span>Manejo já finalizado com {selectedEvent.animals_worked_count} fêmeas trabalhadas.</span>
+                  {selectedEvent.execution_date && (
+                    <span className="font-mono text-[11px]">
+                      Executado em {selectedEvent.execution_date.split('-').reverse().join('/')}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Botões do Rodapé */}
+              <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => handleDeleteEvent(selectedEvent.id)}
+                  className="text-xs text-rose-400 hover:text-rose-300 flex items-center gap-1.5 p-2 rounded-lg hover:bg-rose-500/10 transition-colors cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Excluir Agendamento</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedEvent(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-700 text-slate-300 hover:text-white text-xs cursor-pointer"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* MODAL: NOVO AGENDAMENTO DE MANEJO */}
+      {/* ======================================================== */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+          <div className="glass-card w-full max-w-md rounded-3xl border border-slate-700 bg-slate-900 shadow-2xl overflow-hidden animate-in fade-in my-auto">
+            {/* Header Modal */}
+            <div className="px-6 py-4 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <Plus className="w-5 h-5 text-emerald-400" />
+                Agendar Novo Manejo
+              </h3>
+              <button
+                onClick={() => setShowCreateModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateSubmit} className="p-6 space-y-4">
+              {/* Lote Alvo */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                  Lote de IATF <span className="text-rose-400">*</span>
+                <label className="block text-xs font-semibold text-slate-400 mb-1">
+                  Lote de IATF *
+                </label>
+                {lots.length === 0 ? (
+                  <p className="text-xs text-amber-400 bg-amber-500/10 p-2 rounded-lg border border-amber-500/20">
+                    Nenhum lote ativo cadastrado nesta seleção. Crie um lote primeiro na tela de Lotes.
+                  </p>
+                ) : (
+                  <select
+                    required
+                    value={createLotId}
+                    onChange={(e) => setCreateLotId(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500 cursor-pointer"
+                  >
+                    {lots.map((l) => {
+                      const lotFarm = farms.find((f) => f.id === l.farm_id);
+                      return (
+                        <option key={l.id} value={l.id}>
+                          {l.code} {lotFarm ? `— (${lotFarm.name})` : ''} • {l.worked_qty || 0} fêmeas
+                        </option>
+                      );
+                    })}
+                  </select>
+                )}
+              </div>
+
+              {/* Etapa */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1">
+                  Etapa do Protocolo *
                 </label>
                 <select
-                  value={createLotId}
-                  onChange={(e) => setCreateLotId(e.target.value)}
-                  required
-                  className="w-full bg-slate-950 border border-slate-700 text-white text-xs sm:text-sm px-3.5 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500"
+                  value={createStepCode}
+                  onChange={(e) => setCreateStepCode(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500 cursor-pointer"
                 >
-                  <option value="">Selecione o Lote...</option>
-                  {lots.map(l => (
-                    <option key={l.id} value={l.id}>
-                      {l.code} {l.property_name ? `(${l.property_name})` : ''} — {l.protocol_name || 'Protocolo Padrão'}
-                    </option>
-                  ))}
+                  <option value="D0">D0 - Início do Protocolo / Implante de Progesterona</option>
+                  <option value="D7">D7 - Retirada PGF</option>
+                  <option value="D8">D8 - Retirada de Implante + Indutor de Ovulação</option>
+                  <option value="D9">D9 - Retirada de Implante (Protocolo 9 dias)</option>
+                  <option value="IA">IA - Inseminação Artificial em Tempo Fixo</option>
+                  <option value="DG">DG - Diagnóstico de Gestação (30-45 dias)</option>
+                  <option value="DG1">DG 1 - Diagnóstico Precoce</option>
+                  <option value="DG2">DG 2 - Confirmação de Perda / Sexagem Fetal</option>
+                  <option value="VAC">VAC - Vacinação Reprodutiva / Sanitária</option>
+                  <option value="PES">PES - Pesagem e Avaliação de ECC</option>
+                  <option value="OUTRO">OUTRO - Outro Manejo Operacional</option>
                 </select>
               </div>
 
-              {/* Tipo de Manejo / Step Code */}
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                  Tipo de Manejo / Etapa <span className="text-rose-400">*</span>
-                </label>
-                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                  {Object.entries(STEP_COLORS).map(([code, style]) => (
-                    <button
-                      type="button"
-                      key={code}
-                      onClick={() => setCreateStepCode(code)}
-                      className={`p-2 rounded-xl border text-xs font-bold transition-all flex flex-col items-center gap-1 ${
-                        createStepCode === code
-                          ? `${style.badge} ring-2 ring-emerald-400`
-                          : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
-                      }`}
-                    >
-                      <span>{code}</span>
-                      <span className="text-[9px] font-normal truncate w-full text-center">{code === 'IA' ? 'Inseminação' : code === 'DG' ? 'Diagnóstico' : style.label.split('-')[1]?.trim() || code}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Data & Horário */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Data e Hora */}
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                    Data Planejada <span className="text-rose-400">*</span>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">
+                    Data Planejada *
                   </label>
                   <input
-                    type="date"
                     required
+                    type="date"
                     value={createDate}
                     onChange={(e) => setCreateDate(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 text-white text-xs sm:text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 font-mono"
                   />
                 </div>
+
                 <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                    Horário Previsto
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">
+                    Horário de Início
                   </label>
                   <input
                     type="time"
                     value={createTime}
                     onChange={(e) => setCreateTime(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 text-white text-xs sm:text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 font-mono"
                   />
                 </div>
               </div>
 
               {/* Responsável */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                  Responsável / Inseminador
+                <label className="block text-xs font-semibold text-slate-400 mb-1">
+                  Veterinário / Responsável Técnico
                 </label>
                 <input
                   type="text"
                   value={createResponsible}
                   onChange={(e) => setCreateResponsible(e.target.value)}
-                  placeholder="Ex: Dr. Roberto / Equipe Fazenda"
-                  className="w-full bg-slate-950 border border-slate-700 text-white text-xs sm:text-sm px-3.5 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500"
+                  placeholder="Ex: Dr. Samoel Duarte"
+                  className="w-full bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
                 />
               </div>
 
               {/* Observações */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                  Observações / Recomendações
+                <label className="block text-xs font-semibold text-slate-400 mb-1">
+                  Observações Adicionais
                 </label>
                 <textarea
                   rows={2}
                   value={createNotes}
                   onChange={(e) => setCreateNotes(e.target.value)}
-                  placeholder="Ex: Separar vacas com ECC baixo, checar botijão..."
-                  className="w-full bg-slate-950 border border-slate-700 text-white text-xs sm:text-sm px-3.5 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500 resize-none"
+                  placeholder="Ex: Verificar palhetas na caneca 2 antes de iniciar o curral."
+                  className="w-full bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 resize-none"
                 />
               </div>
 
-              {/* Buttons */}
+              {/* Botões */}
               <div className="flex gap-3 pt-2">
                 <button
                   type="submit"
-                  disabled={creating}
-                  className="flex-1 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg"
+                  disabled={creating || !createLotId}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md"
                 >
-                  {creating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4 stroke-3" />}
-                  Confirmar Agendamento
+                  {creating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  {creating ? 'Salvando...' : 'Salvar Agendamento'}
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white"
+                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-xs cursor-pointer"
                 >
                   Cancelar
                 </button>
               </div>
-
             </form>
-
           </div>
         </div>
       )}
-
-      {/* ========================================================================= */}
-      {/* 4. MODAL: DETALHES & CONCLUIR MANEJO */}
-      {/* ========================================================================= */}
-      {selectedEvent && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="glass-card w-full max-w-md rounded-3xl border border-slate-700 bg-slate-900 p-6 space-y-5 shadow-2xl animate-in fade-in zoom-in duration-200">
-            
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-black text-sm ${
-                  STEP_COLORS[selectedEvent.step_code]?.badge || 'bg-emerald-500 text-slate-950'
-                }`}>
-                  {selectedEvent.step_code}
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-white">{selectedEvent.iatf_lots?.code}</h3>
-                  <p className="text-xs text-slate-400">{selectedEvent.step_name || STEP_COLORS[selectedEvent.step_code]?.label}</p>
-                </div>
-              </div>
-              <button 
-                onClick={() => setSelectedEvent(null)}
-                className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Info Summary */}
-            <div className="bg-slate-950 rounded-2xl border border-slate-800 p-3.5 space-y-2 text-xs">
-              <div className="flex justify-between">
-                <span className="text-slate-500">Data Planejada:</span>
-                <span className="font-bold text-slate-200">{selectedEvent.planned_date} {selectedEvent.start_time ? `às ${selectedEvent.start_time.slice(0, 5)}` : ''}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Responsável:</span>
-                <span className="font-bold text-slate-200">{selectedEvent.responsible_name || 'Não informado'}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Status:</span>
-                <span className={`font-bold capitalize ${
-                  selectedEvent.status === 'concluido' ? 'text-emerald-400' : selectedEvent.status === 'atrasado' ? 'text-rose-400' : 'text-amber-400'
-                }`}>
-                  {selectedEvent.status}
-                </span>
-              </div>
-              {selectedEvent.notes && (
-                <div className="pt-2 border-t border-slate-800 text-slate-400">
-                  <strong>Observação:</strong> {selectedEvent.notes}
-                </div>
-              )}
-            </div>
-
-            {/* Complete Section */}
-            {selectedEvent.status !== 'concluido' ? (
-              <div className="space-y-3 pt-1">
-                <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-wider">Registrar Execução do Manejo</h4>
-                
-                <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">
-                    Animais Trabalhados no Tronco <span className="text-rose-400">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={animalsWorked}
-                    onChange={(e) => setAnimalsWorked(e.target.value)}
-                    placeholder="Ex: 120"
-                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3.5 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500 font-bold"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">
-                    Perdas de Dispositivos / Implantes
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={lossesCount}
-                    onChange={(e) => setLossesCount(e.target.value)}
-                    placeholder="0"
-                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3.5 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-
-                <div className="flex gap-3 pt-2">
-                  <button
-                    onClick={handleCompleteSubmit}
-                    disabled={!animalsWorked || completing}
-                    className="flex-1 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg"
-                  >
-                    {completing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4 stroke-3" />}
-                    Concluir Manejo
-                  </button>
-
-                  <button
-                    onClick={() => handleDeleteEvent(selectedEvent.id)}
-                    className="p-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 transition-colors"
-                    title="Excluir Manejo"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <div className="bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-2xl text-center space-y-1">
-                  <span className="text-xs text-emerald-400 font-bold flex items-center justify-center gap-1.5">
-                    <CheckCircle2 className="w-4 h-4" /> Manejo Executado com Sucesso
-                  </span>
-                  <p className="text-2xl font-black text-white">{selectedEvent.animals_worked_count} animais</p>
-                  {selectedEvent.losses_count > 0 && (
-                    <p className="text-xs text-amber-400">{selectedEvent.losses_count} perdas registradas</p>
-                  )}
-                  {selectedEvent.execution_date && (
-                    <p className="text-[11px] text-slate-500">Executado em: {selectedEvent.execution_date}</p>
-                  )}
-                </div>
-
-                <button
-                  onClick={() => setSelectedEvent(null)}
-                  className="w-full py-2.5 rounded-xl border border-slate-700 text-slate-300 hover:text-white text-xs font-semibold"
-                >
-                  Fechar
-                </button>
-              </div>
-            )}
-
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 5. TOAST NOTIFICATION (BOTTOM BAR) */}
-      {/* ========================================================================= */}
-      {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 border border-emerald-500/40 text-emerald-400 px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs font-bold animate-in fade-in slide-in-from-bottom-3 duration-200">
-          <CheckCircle2 className="w-4 h-4" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
-
     </div>
   );
 }

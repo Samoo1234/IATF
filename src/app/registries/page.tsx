@@ -27,7 +27,7 @@ type TabType = 'matrizes' | 'bulls' | 'farms' | 'breeds' | 'seasons' | 'veterina
 export default function RegistriesPage() {
   const { activeFarmId, activeFarm } = useActiveFarm();
   const { seasons, refreshSeasons, setAsGlobalActiveSeason } = useActiveSeason();
-  const [activeTab, setActiveTab] = useState<TabType>('matrizes');
+  const [activeTab, setActiveTab] = useState<TabType>('farms');
   const [loading, setLoading] = useState(true);
 
   // Season states
@@ -567,6 +567,26 @@ export default function RegistriesPage() {
       {/* Tabs */}
       <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-2">
         <button
+          onClick={() => setActiveTab('farms')}
+          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
+            activeTab === 'farms'
+              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Building2 className="w-4 h-4" /> Fazendas & Retiros ({farms.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('seasons')}
+          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
+            activeTab === 'seasons'
+              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Calendar className="w-4 h-4" /> Estações de Monta ({seasons.length})
+        </button>
+        <button
           onClick={() => setActiveTab('matrizes')}
           className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
             activeTab === 'matrizes'
@@ -587,16 +607,6 @@ export default function RegistriesPage() {
           <Award className="w-4 h-4" /> Touros & Centrais ({bulls.length})
         </button>
         <button
-          onClick={() => setActiveTab('farms')}
-          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
-            activeTab === 'farms'
-              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Building2 className="w-4 h-4" /> Fazendas & Retiros ({farms.length})
-        </button>
-        <button
           onClick={() => setActiveTab('breeds')}
           className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
             activeTab === 'breeds'
@@ -605,16 +615,6 @@ export default function RegistriesPage() {
           }`}
         >
           <Dna className="w-4 h-4" /> Raças & Categorias ({breeds.length + categories.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('seasons')}
-          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
-            activeTab === 'seasons'
-              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Calendar className="w-4 h-4" /> Estações de Monta ({seasons.length})
         </button>
         <button
           onClick={() => setActiveTab('veterinarians')}

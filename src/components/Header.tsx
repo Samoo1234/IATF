@@ -10,8 +10,7 @@ import {
   Calendar,
   CalendarDays,
   ChevronDown,
-  Check,
-  Sparkles
+  Check
 } from 'lucide-react';
 import { getOrgMetadata, type OrgMetadata } from '@/lib/db';
 import { useActiveFarm } from '@/context/FarmContext';
@@ -29,6 +28,7 @@ const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   '/agenda': { title: 'Agenda de Manejos', subtitle: 'Cronograma dinâmico de aplicações hormonais e desmames' },
   '/reports': { title: 'Relatórios & Desempenho', subtitle: 'Exportação executiva de taxas de prenhez e indicadores' },
   '/inputs': { title: 'Estoque de Insumos', subtitle: 'Controle de botijões de sêmen, partidas e perdas' },
+  '/estoque-semen': { title: 'Estoque de Sêmen, Doses & Embriões', subtitle: 'Gestão Criogênica de Botijões, Movimentações e Rastreabilidade' },
   '/protocols': { title: 'Protocolos Reprodutivos', subtitle: 'Modelos de sincronização de cio (D0, D8, D10, DG)' },
   '/import': { title: 'Importação de Planilhas', subtitle: 'Importe dados de matrizes e lotes em Excel (.xlsx)' },
   '/registries': { title: 'Cadastros Gerais', subtitle: 'Fazendas, Retiros, Raças e Categorias' },
