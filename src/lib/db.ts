@@ -1513,24 +1513,28 @@ export interface Farm {
   technical_responsible: string | null;
   city: string | null;
   state: string | null;
+  status?: 'active' | 'frozen';
   properties?: Property[];
 }
 
-export async function getFarms(forceRefresh = false): Promise<Farm[]> {
+export async function getFarms(forceRefresh = false, includeFrozen = false): Promise<Farm[]> {
   const isOffline = typeof window !== 'undefined' && !navigator.onLine;
   if (isOffline) {
     try {
       const offlineFarms = await offlineDb.farms.toArray();
       if (offlineFarms.length > 0) {
-        return offlineFarms.map((f) => ({
-          id: f.id,
-          name: f.name,
-          owner_name: (f.owner_name as string) || null,
-          technical_responsible: (f.technical_responsible as string) || null,
-          city: (f.city as string) || null,
-          state: (f.state as string) || null,
-          properties: [],
-        }));
+        return offlineFarms
+          .filter((f) => includeFrozen || (f as { status?: string }).status !== 'frozen')
+          .map((f) => ({
+            id: f.id,
+            name: f.name,
+            owner_name: (f.owner_name as string) || null,
+            technical_responsible: (f.technical_responsible as string) || null,
+            city: (f.city as string) || null,
+            state: (f.state as string) || null,
+            status: ((f as { status?: string }).status as 'active' | 'frozen') || 'active',
+            properties: [],
+          }));
       }
     } catch (e) {
       console.warn('Falha ao carregar fazendas offline:', e);
@@ -1538,7 +1542,7 @@ export async function getFarms(forceRefresh = false): Promise<Farm[]> {
   }
 
   const now = Date.now();
-  if (!forceRefresh && cachedFarms && now - cachedFarmsTimestamp < CACHE_TTL_MS) {
+  if (!forceRefresh && cachedFarms && !includeFrozen && now - cachedFarmsTimestamp < CACHE_TTL_MS) {
     return cachedFarms;
   }
 
@@ -1546,26 +1550,34 @@ export async function getFarms(forceRefresh = false): Promise<Farm[]> {
   if (!orgId) return [];
 
   const supabase = createClient();
-  const { data, error } = await supabase
+  let query = supabase
     .from('farms')
     .select('*, properties(*)')
-    .eq('organization_id', orgId)
-    .order('name');
+    .eq('organization_id', orgId);
+
+  if (!includeFrozen) {
+    query = query.neq('status', 'frozen');
+  }
+
+  const { data, error } = await query.order('name');
 
   if (error) {
     console.error('getFarms error:', error);
     try {
       const offlineFarms = await offlineDb.farms.toArray();
       if (offlineFarms.length > 0) {
-        return offlineFarms.map((f) => ({
-          id: f.id,
-          name: f.name,
-          owner_name: (f.owner_name as string) || null,
-          technical_responsible: (f.technical_responsible as string) || null,
-          city: (f.city as string) || null,
-          state: (f.state as string) || null,
-          properties: [],
-        }));
+        return offlineFarms
+          .filter((f) => includeFrozen || (f as { status?: string }).status !== 'frozen')
+          .map((f) => ({
+            id: f.id,
+            name: f.name,
+            owner_name: (f.owner_name as string) || null,
+            technical_responsible: (f.technical_responsible as string) || null,
+            city: (f.city as string) || null,
+            state: (f.state as string) || null,
+            status: ((f as { status?: string }).status as 'active' | 'frozen') || 'active',
+            properties: [],
+          }));
       }
     } catch {
       // ignore
@@ -1573,9 +1585,54 @@ export async function getFarms(forceRefresh = false): Promise<Farm[]> {
     return cachedFarms ?? [];
   }
 
-  cachedFarms = (data ?? []) as Farm[];
-  cachedFarmsTimestamp = now;
-  return cachedFarms;
+  const farmsList = (data ?? []) as Farm[];
+  if (!includeFrozen) {
+    cachedFarms = farmsList;
+    cachedFarmsTimestamp = now;
+  }
+  return farmsList;
+}
+
+export async function freezeFarm(farmId: string): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+  const supabase = createClient();
+  const { error } = await supabase.rpc('freeze_farm', { p_farm_id: farmId, p_org_id: orgId });
+  if (error) {
+    console.error('freezeFarm rpc error, attempting direct update:', error);
+    const { error: err2 } = await supabase
+      .from('farms')
+      .update({ status: 'frozen' })
+      .eq('id', farmId)
+      .eq('organization_id', orgId);
+    if (err2) {
+      console.error('freezeFarm direct update error:', err2);
+      return false;
+    }
+  }
+  cachedFarms = null;
+  return true;
+}
+
+export async function unfreezeFarm(farmId: string): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+  const supabase = createClient();
+  const { error } = await supabase.rpc('unfreeze_farm', { p_farm_id: farmId, p_org_id: orgId });
+  if (error) {
+    console.error('unfreezeFarm rpc error, attempting direct update:', error);
+    const { error: err2 } = await supabase
+      .from('farms')
+      .update({ status: 'active' })
+      .eq('id', farmId)
+      .eq('organization_id', orgId);
+    if (err2) {
+      console.error('unfreezeFarm direct update error:', err2);
+      return false;
+    }
+  }
+  cachedFarms = null;
+  return true;
 }
 
 export async function createFarm(farm: {
@@ -3061,6 +3118,87 @@ export async function getCategorySummaryReports(
   return result;
 }
 
+// ============================================================
+// GESTÃO DE EQUIPE & MEMBROS DA ORGANIZAÇÃO
+// ============================================================
 
+export interface TeamMember {
+  id: string;
+  organization_id: string;
+  user_id: string;
+  role: 'admin' | 'veterinarian' | 'operator' | string;
+  display_name: string | null;
+  email: string | null;
+  status: 'active' | 'inactive' | string;
+  created_at: string;
+}
 
+export async function getTeamMembers(): Promise<TeamMember[]> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
 
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('organization_members')
+    .select('*')
+    .eq('organization_id', orgId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('getTeamMembers error:', error);
+    return [];
+  }
+  return (data || []) as TeamMember[];
+}
+
+export async function createTeamMemberDirect(input: {
+  name: string;
+  email: string;
+  password: string;
+  role: string;
+}): Promise<{ success: boolean; error?: string; user_id?: string }> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return { success: false, error: 'Organização ativa não encontrada' };
+
+  const supabase = createClient();
+  const { data, error } = await supabase.rpc('create_team_member_user', {
+    p_org_id: orgId,
+    p_name: input.name,
+    p_email: input.email,
+    p_password: input.password,
+    p_role: input.role,
+  });
+
+  if (error) {
+    console.error('createTeamMemberDirect error:', error);
+    return { success: false, error: error.message };
+  }
+
+  if (data && typeof data === 'object') {
+    const res = data as { success: boolean; error?: string; user_id?: string };
+    if (!res.success) {
+      return { success: false, error: res.error || 'Erro ao cadastrar usuário' };
+    }
+    return { success: true, user_id: res.user_id };
+  }
+
+  return { success: true };
+}
+
+export async function updateTeamMemberRole(memberId: string, role: string): Promise<boolean> {
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('organization_members')
+    .update({ role })
+    .eq('id', memberId);
+  return !error;
+}
+
+export async function toggleTeamMemberStatus(memberId: string, status: 'active' | 'inactive'): Promise<boolean> {
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('organization_members')
+    .update({ status })
+    .eq('id', memberId);
+  return !error;
+}

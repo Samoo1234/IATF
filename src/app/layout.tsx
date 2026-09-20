@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import AppShell from '@/components/AppShell';
 import PWARegistration from '@/components/PWARegistration';
 import PWAInstallPrompt from '@/components/PWAInstallPrompt';
+import { ThemeProvider } from '@/context/ThemeContext';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -38,16 +39,41 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="pt-BR" className="dark" suppressHydrationWarning>
+    <html lang="pt-BR" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              try {
+                const t = localStorage.getItem('iatf_theme') || 'dark';
+                const isDark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+                if (isDark) {
+                  document.documentElement.classList.add('dark');
+                  document.documentElement.classList.remove('light');
+                  document.documentElement.setAttribute('data-theme', 'dark');
+                  document.documentElement.style.colorScheme = 'dark';
+                } else {
+                  document.documentElement.classList.remove('dark');
+                  document.documentElement.classList.add('light');
+                  document.documentElement.setAttribute('data-theme', 'light');
+                  document.documentElement.style.colorScheme = 'light';
+                }
+              } catch (_) {}
+            `,
+          }}
+        />
+      </head>
       <body 
-        className="bg-slate-950 text-slate-100 min-h-screen font-sans antialiased selection:bg-emerald-500 selection:text-slate-950"
+        className="bg-slate-950 text-slate-100 min-h-screen font-sans antialiased selection:bg-emerald-500 selection:text-slate-950 transition-colors duration-200"
         suppressHydrationWarning
       >
-        <PWARegistration />
-        <PWAInstallPrompt />
-        <AppShell>
-          {children}
-        </AppShell>
+        <ThemeProvider>
+          <PWARegistration />
+          <PWAInstallPrompt />
+          <AppShell>
+            {children}
+          </AppShell>
+        </ThemeProvider>
       </body>
     </html>
   );

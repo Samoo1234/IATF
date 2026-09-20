@@ -17,6 +17,7 @@ import { useActiveFarm } from '@/context/FarmContext';
 import { useActiveSeason } from '@/context/SeasonContext';
 import SyncStatusBadge from '@/components/offline/SyncStatusBadge';
 import CurralPrepModal from '@/components/offline/CurralPrepModal';
+import ThemeToggle from '@/components/ThemeToggle';
 
 interface HeaderProps {
   onOpenMobileMenu?: () => void;
@@ -34,6 +35,7 @@ const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   '/protocols': { title: 'Protocolos Reprodutivos', subtitle: 'Modelos de sincronização de cio (D0, D8, D10, DG)' },
   '/import': { title: 'Importação de Planilhas', subtitle: 'Importe dados de matrizes e lotes em Excel (.xlsx)' },
   '/registries': { title: 'Cadastros Gerais', subtitle: 'Fazendas, Retiros, Raças e Categorias' },
+  '/team': { title: 'Equipe & Acessos', subtitle: 'Cadastro direto de colaboradores e controle de permissões' },
 };
 
 export default function Header({ onOpenMobileMenu }: HeaderProps) {
@@ -256,8 +258,10 @@ export default function Header({ onOpenMobileMenu }: HeaderProps) {
         {/* Offline / Curral Sync Badge */}
         <SyncStatusBadge onOpenPrepModal={() => setPrepModalOpen(true)} />
 
-        {/* Quick Links */}
+        {/* Quick Links & Theme Toggle */}
         <div className="flex items-center gap-1.5">
+          <ThemeToggle />
+
           <Link
             href="/agenda"
             className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-emerald-400 hover:border-slate-700 transition-colors"

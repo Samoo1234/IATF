@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { 
   getBulls, createBull, 
-  getFarms, createFarm, createProperty, 
+  getFarms, createFarm, createProperty, freezeFarm, unfreezeFarm,
   getBreeds, createBreed, 
   getAnimalCategories, createAnimalCategory,
   getAnimals, createAnimal,
@@ -14,7 +14,7 @@ import {
 import { 
   FolderTree, Plus, RefreshCw, X,
   Dna, MapPin, Tag, Building2, Award, Syringe, CheckCircle2, AlertCircle,
-  Calendar, Edit2, Trash2, Star,
+  Calendar, Edit2, Trash2, Star, Snowflake,
   GraduationCap, Phone, Mail, ArrowRight
 } from 'lucide-react';
 import Link from 'next/link';
@@ -25,9 +25,10 @@ import { useActiveSeason } from '@/context/SeasonContext';
 type TabType = 'matrizes' | 'bulls' | 'farms' | 'breeds' | 'seasons' | 'veterinarians';
 
 export default function RegistriesPage() {
-  const { activeFarmId, activeFarm } = useActiveFarm();
+  const { activeFarmId, activeFarm, refreshFarms } = useActiveFarm();
   const { seasons, refreshSeasons, setAsGlobalActiveSeason } = useActiveSeason();
   const [activeTab, setActiveTab] = useState<TabType>('farms');
+  const [farmStatusFilter, setFarmStatusFilter] = useState<'active' | 'frozen'>('active');
   const [loading, setLoading] = useState(true);
 
   // Season states
@@ -123,7 +124,7 @@ export default function RegistriesPage() {
     const [a, b, f, br, c, v] = await Promise.all([
       getAnimals(100, false, activeFarmId || undefined),
       getBulls(),
-      getFarms(),
+      getFarms(true, true),
       getBreeds(),
       getAnimalCategories(),
       getVeterinarians(),
@@ -259,6 +260,24 @@ export default function RegistriesPage() {
       setShowPropertyModal(false);
       setPropertyForm({ farm_id: '', name: '', code: '' });
       await loadAllData();
+    }
+  };
+
+  const handleFreezeFarm = async (farm: Farm) => {
+    if (confirm(`Deseja realmente congelar a fazenda "${farm.name}"?\n\nEla será retirada dos seletores operacionais do topo e de novos lotes, mas todo o histórico será preservado.`)) {
+      const ok = await freezeFarm(farm.id);
+      if (ok) {
+        await loadAllData();
+        await refreshFarms();
+      }
+    }
+  };
+
+  const handleUnfreezeFarm = async (farm: Farm) => {
+    const ok = await unfreezeFarm(farm.id);
+    if (ok) {
+      await loadAllData();
+      await refreshFarms();
     }
   };
 
@@ -761,45 +780,148 @@ export default function RegistriesPage() {
         </div>
       ) : activeTab === 'farms' ? (
         /* ===== TAB: FAZENDAS & RETIROS ===== */
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {farms.map((f) => (
-              <div key={f.id} className="glass-card p-5 rounded-2xl border border-slate-800 space-y-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <Building2 className="w-5 h-5 text-emerald-400" /> {f.name}
-                  </h3>
-                  <span className="text-[10px] font-bold text-slate-400 bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-700">
-                    {f.properties?.length || 0} retiros
-                  </span>
-                </div>
+        <div className="space-y-4">
+          {/* Sub-filtro de Status de Fazendas */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/60 p-4 rounded-2xl border border-slate-800">
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Building2 className="w-4 h-4 text-emerald-400" /> Propriedades Rurais & Retiros Operacionais
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Fazendas congeladas são removidas dos seletores rápidos do topo e de novos lotes, preservando integralmente seu histórico.
+              </p>
+            </div>
 
-                <div className="text-xs text-slate-400 space-y-1 bg-slate-950/60 p-3 rounded-xl border border-slate-800/60">
-                  <p><strong>Proprietário:</strong> {f.owner_name || '-'}</p>
-                  <p><strong>Responsável Técnico:</strong> {f.technical_responsible || '-'}</p>
-                  <p><strong>Localização:</strong> {f.city ? `${f.city}/${f.state}` : '-'}</p>
-                </div>
-
-                <div>
-                  <h4 className="text-xs font-bold text-slate-300 mb-2 flex items-center gap-1.5">
-                    <MapPin className="w-3.5 h-3.5 text-emerald-400" /> Retiros / Piquetes Cadastrados
-                  </h4>
-                  <div className="space-y-1.5">
-                    {!f.properties || f.properties.length === 0 ? (
-                      <p className="text-slate-500 text-xs italic">Nenhum retiro cadastrado para esta fazenda.</p>
-                    ) : (
-                      f.properties.map((p) => (
-                        <div key={p.id} className="flex items-center justify-between p-2 rounded-lg bg-slate-900 border border-slate-800 text-xs">
-                          <span className="font-medium text-slate-200">{p.name}</span>
-                          {p.code && <span className="font-mono text-emerald-400 text-[10px]">{p.code}</span>}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
+            <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={() => setFarmStatusFilter('active')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  farmStatusFilter === 'active'
+                    ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Ativas ({farms.filter(f => f.status !== 'frozen').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFarmStatusFilter('frozen')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  farmStatusFilter === 'frozen'
+                    ? 'bg-sky-500 text-slate-950 shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Snowflake className="w-3.5 h-3.5" />
+                <span>Congeladas ({farms.filter(f => f.status === 'frozen').length})</span>
+              </button>
+            </div>
           </div>
+
+          {/* Grid de Fazendas */}
+          {farms.filter(f => farmStatusFilter === 'active' ? f.status !== 'frozen' : f.status === 'frozen').length === 0 ? (
+            <div className="glass-card p-12 text-center rounded-2xl border border-slate-800 space-y-3">
+              {farmStatusFilter === 'active' ? (
+                <>
+                  <Building2 className="w-10 h-10 text-slate-600 mx-auto" />
+                  <p className="text-slate-400 text-sm">Nenhuma fazenda ativa no momento.</p>
+                </>
+              ) : (
+                <>
+                  <Snowflake className="w-10 h-10 text-sky-400/40 mx-auto" />
+                  <p className="text-slate-400 text-sm">Nenhuma fazenda congelada. Todas as propriedades estão ativas.</p>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {farms
+                .filter(f => farmStatusFilter === 'active' ? f.status !== 'frozen' : f.status === 'frozen')
+                .map((f) => {
+                  const isFrozen = f.status === 'frozen';
+                  return (
+                    <div 
+                      key={f.id} 
+                      className={`glass-card p-5 rounded-2xl border space-y-4 transition-all ${
+                        isFrozen ? 'border-sky-500/30 opacity-90' : 'border-slate-800'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 overflow-hidden">
+                          <h3 className="text-base font-bold text-white truncate flex items-center gap-2">
+                            <Building2 className={`w-5 h-5 shrink-0 ${isFrozen ? 'text-sky-400' : 'text-emerald-400'}`} /> 
+                            <span className="truncate">{f.name}</span>
+                          </h3>
+                          {isFrozen ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/10 text-sky-400 border border-sky-500/30 flex items-center gap-1 shrink-0">
+                              <Snowflake className="w-3 h-3" /> Congelada
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shrink-0">
+                              Ativa
+                            </span>
+                          )}
+                        </div>
+
+                        <span className="text-[10px] font-bold text-slate-400 bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-700 shrink-0">
+                          {f.properties?.length || 0} retiros
+                        </span>
+                      </div>
+
+                      <div className="text-xs text-slate-400 space-y-1 bg-slate-950/60 p-3 rounded-xl border border-slate-800/60">
+                        <p><strong>Proprietário:</strong> {f.owner_name || '-'}</p>
+                        <p><strong>Responsável Técnico:</strong> {f.technical_responsible || '-'}</p>
+                        <p><strong>Localização:</strong> {f.city ? `${f.city}/${f.state || 'MT'}` : '-'}</p>
+                      </div>
+
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-300 mb-2 flex items-center gap-1.5">
+                          <MapPin className="w-3.5 h-3.5 text-emerald-400" /> Retiros / Piquetes Cadastrados
+                        </h4>
+                        <div className="space-y-1.5">
+                          {!f.properties || f.properties.length === 0 ? (
+                            <p className="text-slate-500 text-xs italic">Nenhum retiro cadastrado para esta fazenda.</p>
+                          ) : (
+                            f.properties.map((p) => (
+                              <div key={p.id} className="flex items-center justify-between p-2 rounded-lg bg-slate-900 border border-slate-800 text-xs">
+                                <span className="font-medium text-slate-200">{p.name}</span>
+                                {p.code && <span className="font-mono text-emerald-400 text-[10px]">{p.code}</span>}
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Botões de Ação: Congelar / Descongelar */}
+                      <div className="pt-3 border-t border-slate-800/80 flex items-center justify-end gap-2">
+                        {isFrozen ? (
+                          <button
+                            type="button"
+                            onClick={() => handleUnfreezeFarm(f)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 text-xs font-bold transition-all cursor-pointer"
+                            title="Reativar fazenda nos seletores e operações"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Descongelar / Reativar Fazenda</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleFreezeFarm(f)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700/80 hover:border-sky-500/40 text-slate-400 hover:text-sky-400 text-xs font-semibold transition-colors cursor-pointer"
+                            title="Congelar fazenda (retirar da lista operacional sem excluir dados)"
+                          >
+                            <Snowflake className="w-3.5 h-3.5" />
+                            <span>Congelar Fazenda</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          )}
         </div>
       ) : activeTab === 'breeds' ? (
         /* ===== TAB: RAÇAS & CATEGORIAS ===== */

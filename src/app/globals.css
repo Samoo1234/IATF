@@ -1,28 +1,68 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @layer base {
   :root {
-    --background: #0f172a;
+    --background: #020617;
     --foreground: #f8fafc;
-    --card: #1e293b;
+    --card: #0f172a;
     --card-foreground: #f8fafc;
     --primary: #10b981;
     --primary-foreground: #022c22;
-    --secondary: #334155;
+    --secondary: #1e293b;
     --secondary-foreground: #f8fafc;
-    --muted: #475569;
+    --muted: #334155;
     --muted-foreground: #94a3b8;
     --accent: #059669;
     --accent-foreground: #ffffff;
     --destructive: #ef4444;
     --destructive-foreground: #ffffff;
-    --border: #334155;
+    --border: #1e293b;
     --radius: 0.75rem;
   }
 
   html {
     scroll-behavior: smooth;
     color-scheme: dark;
+  }
+
+  /* Modo Claro - Configuração Semântica de Alta Fidelidade */
+  html:not(.dark),
+  html.light {
+    color-scheme: light;
+    --background: #f8fafc;
+    --foreground: #0f172a;
+    --card: #ffffff;
+    --card-foreground: #0f172a;
+    --secondary: #f1f5f9;
+    --secondary-foreground: #0f172a;
+    --muted: #e2e8f0;
+    --muted-foreground: #64748b;
+    --border: #e2e8f0;
+
+    /* Remapeamento inteligente da paleta white e slate para contraste premium */
+    --color-white: #0f172a;
+    --color-slate-950: #f8fafc;
+    --color-slate-900: #ffffff;
+    --color-slate-850: #f8fafc;
+    --color-slate-800: #f1f5f9;
+    --color-slate-700: #e2e8f0;
+    --color-slate-600: #cbd5e1;
+    --color-slate-500: #64748b;
+    --color-slate-400: #64748b;
+    --color-slate-300: #475569;
+    --color-slate-200: #334155;
+    --color-slate-100: #0f172a;
+    --color-slate-50: #020617;
+
+    /* Tonalidades de fundo coloridas suaves no modo claro */
+    --color-emerald-950: #ecfdf5;
+    --color-amber-950: #fffbeb;
+    --color-blue-950: #eff6ff;
+    --color-indigo-950: #eef2ff;
+    --color-rose-950: #fff1f2;
+    --color-cyan-950: #ecfeff;
   }
 }
 
@@ -32,21 +72,62 @@ body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   min-height: 100vh;
   overflow-x: hidden;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
+/* Glass Card adaptativo */
 .glass-card {
-  background: rgba(30, 41, 59, 0.85);
+  background: rgba(15, 23, 42, 0.85);
   backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
+html:not(.dark) .glass-card,
+html.light .glass-card {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.06), 0 1px 3px 0 rgba(15, 23, 42, 0.04);
+}
+
+/* Exceções: botões e badges sólidos coloridos devem manter texto e ícones brancos */
+html:not(.dark) button[class*="bg-emerald-6"],
+html:not(.dark) a[class*="bg-emerald-6"],
+html:not(.dark) button[class*="bg-rose-"],
+html:not(.dark) button[class*="bg-red-"],
+html:not(.dark) button[class*="bg-blue-"],
+html:not(.dark) button[class*="bg-indigo-"],
+html:not(.dark) .keep-white,
+html.light button[class*="bg-emerald-6"],
+html.light a[class*="bg-emerald-6"],
+html.light button[class*="bg-rose-"],
+html.light button[class*="bg-red-"],
+html.light button[class*="bg-blue-"],
+html.light button[class*="bg-indigo-"],
+html.light .keep-white {
+  --color-white: #ffffff !important;
+  color: #ffffff !important;
+}
+
+/* Glows adaptativos */
 .glow-emerald {
   box-shadow: 0 0 25px -5px rgba(16, 185, 129, 0.3);
 }
 
+html:not(.dark) .glow-emerald,
+html.light .glow-emerald {
+  box-shadow: 0 4px 15px -3px rgba(16, 185, 129, 0.25);
+}
+
 .glow-amber {
   box-shadow: 0 0 25px -5px rgba(245, 158, 11, 0.3);
+}
+
+html:not(.dark) .glow-amber,
+html.light .glow-amber {
+  box-shadow: 0 4px 15px -3px rgba(245, 158, 11, 0.25);
 }
 
 /* Modern, ultra-slim non-intrusive scrollbar */
@@ -64,6 +145,11 @@ body {
   border-radius: 9999px;
 }
 
+html:not(.dark) ::-webkit-scrollbar-thumb,
+html.light ::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.25);
+}
+
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(16, 185, 129, 0.5);
 }
@@ -72,6 +158,10 @@ body {
 * {
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
+}
+
+html:not(.dark) * {
+  scrollbar-color: rgba(100, 116, 139, 0.25) transparent;
 }
 
 .custom-scrollbar::-webkit-scrollbar {

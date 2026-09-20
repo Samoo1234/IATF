@@ -20,11 +20,13 @@ import {
   ShieldCheck, 
   Building2, 
   ChevronDown,
-  X
+  X,
+  Users
 } from 'lucide-react';
 import { getOrgMetadata, type OrgMetadata } from '@/lib/db';
 import { createClient } from '@/lib/supabase/client';
 import { useActiveFarm } from '@/context/FarmContext';
+import ThemeToggle from '@/components/ThemeToggle';
 
 interface NavSection {
   title: string;
@@ -59,6 +61,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { name: 'Relatórios & Gráficos', href: '/reports', icon: FileText },
       { name: 'Importação de Dados', href: '/import', icon: Upload },
+      { name: 'Equipe & Acessos', href: '/team', icon: Users },
     ],
   },
 ];
@@ -321,6 +324,10 @@ export default function Sidebar({
                 <FolderTree className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Gerenciar Cadastros</span>
               </Link>
+
+              <div className="pt-1">
+                <ThemeToggle variant="full" />
+              </div>
             </div>
 
             <div className="pt-2 border-t border-slate-800">
