@@ -3,18 +3,18 @@
 import { useEffect, useState, useCallback } from 'react';
 import { 
   getBulls, createBull, 
-  getFarms, createFarm, createProperty, freezeFarm, unfreezeFarm,
+  getFarms, createFarm, updateFarm, deleteFarm, createProperty, updateProperty, deleteProperty, freezeFarm, unfreezeFarm,
   getBreeds, createBreed, 
   getAnimalCategories, createAnimalCategory,
   getAnimals, createAnimal,
   createReproductiveSeason, updateReproductiveSeason, deleteReproductiveSeason,
   getVeterinarians, createVeterinarian, updateVeterinarian, deleteVeterinarian, setDefaultVeterinarian,
-  type Bull, type Farm, type Breed, type AnimalCategory, type Animal, type ReproductiveSeason, type Veterinarian
+  type Bull, type Farm, type Property, type Breed, type AnimalCategory, type Animal, type ReproductiveSeason, type Veterinarian
 } from '@/lib/db';
 import { 
   FolderTree, Plus, RefreshCw, X,
   Dna, MapPin, Tag, Building2, Award, Syringe, CheckCircle2, AlertCircle,
-  Calendar, Edit2, Trash2, Star, Snowflake,
+  Calendar, Edit2, Trash2, Star, Snowflake, Search,
   GraduationCap, Phone, Mail, ArrowRight
 } from 'lucide-react';
 import Link from 'next/link';
@@ -25,10 +25,11 @@ import { useActiveSeason } from '@/context/SeasonContext';
 type TabType = 'matrizes' | 'bulls' | 'farms' | 'breeds' | 'seasons' | 'veterinarians';
 
 export default function RegistriesPage() {
-  const { activeFarmId, activeFarm, refreshFarms } = useActiveFarm();
+  const { activeFarmId, activeFarm, refreshFarms, setActiveFarmId } = useActiveFarm();
   const { seasons, refreshSeasons, setAsGlobalActiveSeason } = useActiveSeason();
   const [activeTab, setActiveTab] = useState<TabType>('farms');
-  const [farmStatusFilter, setFarmStatusFilter] = useState<'active' | 'frozen'>('active');
+  const [farmStatusFilter, setFarmStatusFilter] = useState<'active' | 'frozen' | 'all'>('active');
+  const [farmSearchQuery, setFarmSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
 
   // Season states
@@ -77,7 +78,9 @@ export default function RegistriesPage() {
   const [showAnimalModal, setShowAnimalModal] = useState(false);
   const [showBullModal, setShowBullModal] = useState(false);
   const [showFarmModal, setShowFarmModal] = useState(false);
+  const [editingFarmId, setEditingFarmId] = useState<string | null>(null);
   const [showPropertyModal, setShowPropertyModal] = useState(false);
+  const [editingPropertyId, setEditingPropertyId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -227,39 +230,170 @@ export default function RegistriesPage() {
     }
   };
 
-  const handleCreateFarm = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!farmForm.name) return;
-    setSaving(true);
-    const newId = await createFarm({
-      name: farmForm.name,
-      owner_name: farmForm.owner_name || undefined,
-      technical_responsible: farmForm.technical_responsible || undefined,
-      city: farmForm.city || undefined,
-      state: farmForm.state || undefined,
+  const handleOpenCreateFarm = () => {
+    setEditingFarmId(null);
+    const defaultVet = veterinarians.find((vet) => vet.is_default);
+    setFarmForm({
+      name: '',
+      owner_name: '',
+      technical_responsible: defaultVet ? (defaultVet.crmv ? `${defaultVet.name} (${defaultVet.crmv})` : defaultVet.name) : 'MV. DR. SAMOEL DUARTE',
+      city: '',
+      state: 'MT',
     });
+    setShowFarmModal(true);
+  };
+
+  const handleOpenEditFarm = (farm: Farm) => {
+    setEditingFarmId(farm.id);
+    setFarmForm({
+      name: farm.name,
+      owner_name: farm.owner_name || '',
+      technical_responsible: farm.technical_responsible || '',
+      city: farm.city || '',
+      state: farm.state || 'MT',
+    });
+    setShowFarmModal(true);
+  };
+
+  const handleSaveFarm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!farmForm.name.trim()) {
+      setFeedbackMsg({ type: 'error', text: 'Informe o nome da fazenda.' });
+      return;
+    }
+
+    setSaving(true);
+    let success = false;
+
+    if (editingFarmId) {
+      success = await updateFarm(editingFarmId, {
+        name: farmForm.name,
+        owner_name: farmForm.owner_name || null,
+        technical_responsible: farmForm.technical_responsible || null,
+        city: farmForm.city || null,
+        state: farmForm.state || null,
+      });
+    } else {
+      const newId = await createFarm({
+        name: farmForm.name,
+        owner_name: farmForm.owner_name || undefined,
+        technical_responsible: farmForm.technical_responsible || undefined,
+        city: farmForm.city || undefined,
+        state: farmForm.state || undefined,
+      });
+      success = !!newId;
+    }
     setSaving(false);
-    if (newId) {
+
+    if (success) {
       setShowFarmModal(false);
+      setEditingFarmId(null);
       setFarmForm({ name: '', owner_name: '', technical_responsible: 'MV. DR. SAMOEL DUARTE', city: '', state: 'MT' });
+      setFeedbackMsg({
+        type: 'success',
+        text: editingFarmId ? 'Fazenda atualizada com sucesso!' : 'Fazenda cadastrada com sucesso!',
+      });
       await loadAllData();
+      await refreshFarms();
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: 'Erro ao salvar informações da fazenda.' });
     }
   };
 
-  const handleCreateProperty = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!propertyForm.name || !propertyForm.farm_id) return;
+  const handleDeleteFarm = async (farm: Farm) => {
+    if (!confirm(`Deseja realmente excluir a fazenda "${farm.name}"?\n\nEsta ação só poderá ser concluída se não houver animais ou lotes vinculados a ela.`)) {
+      return;
+    }
+
     setSaving(true);
-    const ok = await createProperty({
-      farm_id: propertyForm.farm_id,
-      name: propertyForm.name,
-      code: propertyForm.code || undefined,
-    });
+    const res = await deleteFarm(farm.id);
     setSaving(false);
-    if (ok) {
-      setShowPropertyModal(false);
-      setPropertyForm({ farm_id: '', name: '', code: '' });
+
+    if (res.success) {
+      setFeedbackMsg({ type: 'success', text: `Fazenda "${farm.name}" excluída com sucesso!` });
       await loadAllData();
+      await refreshFarms();
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao excluir fazenda.' });
+    }
+  };
+
+  const handleOpenCreateProperty = (farmId?: string) => {
+    setEditingPropertyId(null);
+    setPropertyForm({
+      farm_id: farmId || (farms.length > 0 ? farms[0].id : ''),
+      name: '',
+      code: '',
+    });
+    setShowPropertyModal(true);
+  };
+
+  const handleOpenEditProperty = (prop: Property) => {
+    setEditingPropertyId(prop.id);
+    setPropertyForm({
+      farm_id: prop.farm_id,
+      name: prop.name,
+      code: prop.code || '',
+    });
+    setShowPropertyModal(true);
+  };
+
+  const handleSaveProperty = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!propertyForm.name.trim() || !propertyForm.farm_id) {
+      setFeedbackMsg({ type: 'error', text: 'Informe o nome do retiro e selecione a fazenda.' });
+      return;
+    }
+
+    setSaving(true);
+    let success = false;
+
+    if (editingPropertyId) {
+      success = await updateProperty(editingPropertyId, {
+        name: propertyForm.name,
+        code: propertyForm.code || null,
+      });
+    } else {
+      success = await createProperty({
+        farm_id: propertyForm.farm_id,
+        name: propertyForm.name,
+        code: propertyForm.code || undefined,
+      });
+    }
+    setSaving(false);
+
+    if (success) {
+      setShowPropertyModal(false);
+      setEditingPropertyId(null);
+      setPropertyForm({ farm_id: '', name: '', code: '' });
+      setFeedbackMsg({
+        type: 'success',
+        text: editingPropertyId ? 'Retiro atualizado com sucesso!' : 'Retiro cadastrado com sucesso!',
+      });
+      await loadAllData();
+      await refreshFarms();
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: 'Erro ao salvar retiro.' });
+    }
+  };
+
+  const handleDeleteProperty = async (prop: Property) => {
+    if (!confirm(`Deseja realmente excluir o retiro "${prop.name}"?`)) return;
+
+    setSaving(true);
+    const res = await deleteProperty(prop.id);
+    setSaving(false);
+
+    if (res.success) {
+      setFeedbackMsg({ type: 'success', text: `Retiro "${prop.name}" excluído com sucesso!` });
+      await loadAllData();
+      await refreshFarms();
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao excluir retiro.' });
     }
   };
 
@@ -475,6 +609,22 @@ export default function RegistriesPage() {
   const selectedFarmObj = farms.find((f) => f.id === animalForm.farm_id);
   const availableProperties = selectedFarmObj?.properties || [];
 
+  const filteredFarms = farms.filter((f) => {
+    if (farmStatusFilter === 'active' && f.status === 'frozen') return false;
+    if (farmStatusFilter === 'frozen' && f.status !== 'frozen') return false;
+
+    if (farmSearchQuery.trim()) {
+      const q = farmSearchQuery.toLowerCase();
+      const matchName = f.name.toLowerCase().includes(q);
+      const matchOwner = f.owner_name?.toLowerCase().includes(q) ?? false;
+      const matchRt = f.technical_responsible?.toLowerCase().includes(q) ?? false;
+      const matchCity = f.city?.toLowerCase().includes(q) ?? false;
+      const matchState = f.state?.toLowerCase().includes(q) ?? false;
+      return matchName || matchOwner || matchRt || matchCity || matchState;
+    }
+    return true;
+  });
+
   return (
     <div className="space-y-6">
       {/* Toast Feedback */}
@@ -527,19 +677,14 @@ export default function RegistriesPage() {
           {activeTab === 'farms' && (
             <div className="flex gap-2">
               <button
-                onClick={() => setShowFarmModal(true)}
-                className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
+                onClick={handleOpenCreateFarm}
+                className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20 cursor-pointer"
               >
                 <Plus className="w-4 h-4" /> Nova Fazenda
               </button>
               <button
-                onClick={() => {
-                  if (farms.length > 0) {
-                    setPropertyForm((f) => ({ ...f, farm_id: farms[0].id }));
-                  }
-                  setShowPropertyModal(true);
-                }}
-                className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium px-4 py-2 rounded-xl border border-slate-700 text-xs sm:text-sm transition-all flex items-center gap-1.5"
+                onClick={() => handleOpenCreateProperty()}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium px-4 py-2 rounded-xl border border-slate-700 text-xs sm:text-sm transition-all flex items-center gap-1.5 cursor-pointer"
               >
                 <Plus className="w-4 h-4" /> Novo Retiro
               </button>
@@ -781,78 +926,120 @@ export default function RegistriesPage() {
       ) : activeTab === 'farms' ? (
         /* ===== TAB: FAZENDAS & RETIROS ===== */
         <div className="space-y-4">
-          {/* Sub-filtro de Status de Fazendas */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/60 p-4 rounded-2xl border border-slate-800">
+          {/* Sub-filtro de Status de Fazendas e Busca */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-900/60 p-4 rounded-2xl border border-slate-800">
             <div>
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <Building2 className="w-4 h-4 text-emerald-400" /> Propriedades Rurais & Retiros Operacionais
               </h3>
               <p className="text-xs text-slate-400 mt-0.5">
-                Fazendas congeladas são removidas dos seletores rápidos do topo e de novos lotes, preservando integralmente seu histórico.
+                Cadastre, edite e gerencie as fazendas e seus retiros. Fazendas congeladas saem dos seletores sem perder o histórico.
               </p>
             </div>
 
-            <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 self-start sm:self-auto">
-              <button
-                type="button"
-                onClick={() => setFarmStatusFilter('active')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                  farmStatusFilter === 'active'
-                    ? 'bg-emerald-500 text-slate-950 shadow-sm'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                Ativas ({farms.filter(f => f.status !== 'frozen').length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setFarmStatusFilter('frozen')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                  farmStatusFilter === 'frozen'
-                    ? 'bg-sky-500 text-slate-950 shadow-sm'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Snowflake className="w-3.5 h-3.5" />
-                <span>Congeladas ({farms.filter(f => f.status === 'frozen').length})</span>
-              </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Barra de Pesquisa */}
+              <div className="relative min-w-[220px]">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
+                <input
+                  type="text"
+                  placeholder="Buscar por fazenda, RT, cidade..."
+                  value={farmSearchQuery}
+                  onChange={(e) => setFarmSearchQuery(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 text-xs text-slate-200 pl-8 pr-7 py-1.5 rounded-xl focus:outline-none focus:border-emerald-500 placeholder:text-slate-600"
+                />
+                {farmSearchQuery && (
+                  <button
+                    onClick={() => setFarmSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Botões de Filtro de Status */}
+              <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setFarmStatusFilter('active')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    farmStatusFilter === 'active'
+                      ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Ativas ({farms.filter((f) => f.status !== 'frozen').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFarmStatusFilter('frozen')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    farmStatusFilter === 'frozen'
+                      ? 'bg-sky-500 text-slate-950 shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <Snowflake className="w-3.5 h-3.5" />
+                  <span>Congeladas ({farms.filter((f) => f.status === 'frozen').length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFarmStatusFilter('all')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    farmStatusFilter === 'all'
+                      ? 'bg-slate-700 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Todas ({farms.length})
+                </button>
+              </div>
             </div>
           </div>
 
           {/* Grid de Fazendas */}
-          {farms.filter(f => farmStatusFilter === 'active' ? f.status !== 'frozen' : f.status === 'frozen').length === 0 ? (
+          {filteredFarms.length === 0 ? (
             <div className="glass-card p-12 text-center rounded-2xl border border-slate-800 space-y-3">
-              {farmStatusFilter === 'active' ? (
-                <>
-                  <Building2 className="w-10 h-10 text-slate-600 mx-auto" />
-                  <p className="text-slate-400 text-sm">Nenhuma fazenda ativa no momento.</p>
-                </>
-              ) : (
-                <>
-                  <Snowflake className="w-10 h-10 text-sky-400/40 mx-auto" />
-                  <p className="text-slate-400 text-sm">Nenhuma fazenda congelada. Todas as propriedades estão ativas.</p>
-                </>
+              <Building2 className="w-10 h-10 text-slate-600 mx-auto" />
+              <p className="text-slate-400 text-sm font-medium">Nenhuma fazenda encontrada com os filtros selecionados.</p>
+              {farmSearchQuery && (
+                <button
+                  onClick={() => setFarmSearchQuery('')}
+                  className="text-xs text-emerald-400 hover:underline cursor-pointer"
+                >
+                  Limpar busca
+                </button>
               )}
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {farms
-                .filter(f => farmStatusFilter === 'active' ? f.status !== 'frozen' : f.status === 'frozen')
-                .map((f) => {
-                  const isFrozen = f.status === 'frozen';
-                  return (
-                    <div 
-                      key={f.id} 
-                      className={`glass-card p-5 rounded-2xl border space-y-4 transition-all ${
-                        isFrozen ? 'border-sky-500/30 opacity-90' : 'border-slate-800'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 overflow-hidden">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {filteredFarms.map((f) => {
+                const isFrozen = f.status === 'frozen';
+                const isActiveGlobal = f.id === activeFarmId;
+                return (
+                  <div
+                    key={f.id}
+                    className={`glass-card p-5 rounded-2xl border space-y-4 transition-all ${
+                      isActiveGlobal
+                        ? 'border-emerald-500/40 ring-1 ring-emerald-500/20'
+                        : isFrozen
+                        ? 'border-sky-500/30 opacity-90'
+                        : 'border-slate-800'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1 overflow-hidden">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <h3 className="text-base font-bold text-white truncate flex items-center gap-2">
-                            <Building2 className={`w-5 h-5 shrink-0 ${isFrozen ? 'text-sky-400' : 'text-emerald-400'}`} /> 
+                            <Building2 className={`w-5 h-5 shrink-0 ${isFrozen ? 'text-sky-400' : 'text-emerald-400'}`} />
                             <span className="truncate">{f.name}</span>
                           </h3>
+                          {isActiveGlobal && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shrink-0">
+                              Fazenda Selecionada
+                            </span>
+                          )}
                           {isFrozen ? (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/10 text-sky-400 border border-sky-500/30 flex items-center gap-1 shrink-0">
                               <Snowflake className="w-3 h-3" /> Congelada
@@ -863,38 +1050,110 @@ export default function RegistriesPage() {
                             </span>
                           )}
                         </div>
-
-                        <span className="text-[10px] font-bold text-slate-400 bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-700 shrink-0">
-                          {f.properties?.length || 0} retiros
-                        </span>
+                        <p className="text-xs text-slate-400">
+                          {f.city ? `${f.city}/${f.state || 'MT'}` : 'Localização não informada'}
+                        </p>
                       </div>
 
-                      <div className="text-xs text-slate-400 space-y-1 bg-slate-950/60 p-3 rounded-xl border border-slate-800/60">
-                        <p><strong>Proprietário:</strong> {f.owner_name || '-'}</p>
-                        <p><strong>Responsável Técnico:</strong> {f.technical_responsible || '-'}</p>
-                        <p><strong>Localização:</strong> {f.city ? `${f.city}/${f.state || 'MT'}` : '-'}</p>
+                      {/* Ações do Card da Fazenda: Editar & Excluir */}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEditFarm(f)}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer border border-slate-700/60"
+                          title="Editar dados da fazenda"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteFarm(f)}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-slate-700/60 hover:border-rose-800/60 transition-colors cursor-pointer"
+                          title="Excluir fazenda"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
+                    </div>
 
-                      <div>
-                        <h4 className="text-xs font-bold text-slate-300 mb-2 flex items-center gap-1.5">
-                          <MapPin className="w-3.5 h-3.5 text-emerald-400" /> Retiros / Piquetes Cadastrados
+                    {/* Informações da Fazenda */}
+                    <div className="text-xs text-slate-300 space-y-1.5 bg-slate-950/60 p-3 rounded-xl border border-slate-800/60">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Proprietário:</span>
+                        <span className="font-medium text-right text-slate-200">{f.owner_name || '-'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Responsável Técnico (RT):</span>
+                        <span className="font-medium text-right text-slate-200">{f.technical_responsible || '-'}</span>
+                      </div>
+                    </div>
+
+                    {/* Retiros / Piquetes */}
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                          <MapPin className="w-3.5 h-3.5 text-emerald-400" /> Retiros / Piquetes ({f.properties?.length || 0})
                         </h4>
-                        <div className="space-y-1.5">
-                          {!f.properties || f.properties.length === 0 ? (
-                            <p className="text-slate-500 text-xs italic">Nenhum retiro cadastrado para esta fazenda.</p>
-                          ) : (
-                            f.properties.map((p) => (
-                              <div key={p.id} className="flex items-center justify-between p-2 rounded-lg bg-slate-900 border border-slate-800 text-xs">
-                                <span className="font-medium text-slate-200">{p.name}</span>
-                                {p.code && <span className="font-mono text-emerald-400 text-[10px]">{p.code}</span>}
-                              </div>
-                            ))
-                          )}
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenCreateProperty(f.id)}
+                          className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 hover:underline cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" /> Adicionar Retiro
+                        </button>
                       </div>
 
-                      {/* Botões de Ação: Congelar / Descongelar */}
-                      <div className="pt-3 border-t border-slate-800/80 flex items-center justify-end gap-2">
+                      <div className="space-y-1.5 max-h-36 overflow-y-auto pr-0.5">
+                        {!f.properties || f.properties.length === 0 ? (
+                          <p className="text-slate-500 text-xs italic bg-slate-900/40 p-2 rounded-lg border border-slate-800/40">
+                            Nenhum retiro cadastrado para esta fazenda.
+                          </p>
+                        ) : (
+                          f.properties.map((p) => (
+                            <div
+                              key={p.id}
+                              className="group flex items-center justify-between p-2 rounded-lg bg-slate-900 border border-slate-800 text-xs hover:border-slate-700 transition-colors"
+                            >
+                              <div className="flex items-center gap-2 overflow-hidden">
+                                <span className="font-medium text-slate-200 truncate">{p.name}</span>
+                                {p.code && <span className="font-mono text-emerald-400 text-[10px] bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">{p.code}</span>}
+                              </div>
+                              <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditProperty(p)}
+                                  className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+                                  title="Editar retiro"
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteProperty(p)}
+                                  className="p-1 rounded hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 cursor-pointer"
+                                  title="Excluir retiro"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Botões do Rodapé do Card */}
+                    <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2 flex-wrap">
+                      {!isActiveGlobal && !isFrozen && (
+                        <button
+                          type="button"
+                          onClick={() => setActiveFarmId(f.id)}
+                          className="text-xs font-semibold text-slate-400 hover:text-emerald-400 flex items-center gap-1 transition-colors cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Selecionar como ativa
+                        </button>
+                      )}
+                      <div className="ml-auto flex items-center gap-2">
                         {isFrozen ? (
                           <button
                             type="button"
@@ -903,7 +1162,7 @@ export default function RegistriesPage() {
                             title="Reativar fazenda nos seletores e operações"
                           >
                             <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Descongelar / Reativar Fazenda</span>
+                            <span>Descongelar / Reativar</span>
                           </button>
                         ) : (
                           <button
@@ -918,8 +1177,9 @@ export default function RegistriesPage() {
                         )}
                       </div>
                     </div>
-                  );
-                })}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -1476,20 +1736,27 @@ export default function RegistriesPage() {
         </div>
       )}
 
-      {/* ===== MODAL NOVA FAZENDA ===== */}
+      {/* ===== MODAL FAZENDA (CRIAR & EDITAR) ===== */}
       {showFarmModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="glass-card w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 space-y-5">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                <Building2 className="w-5 h-5 text-emerald-400" /> Cadastrar Nova Fazenda
+                <Building2 className="w-5 h-5 text-emerald-400" />
+                {editingFarmId ? 'Editar Fazenda' : 'Cadastrar Nova Fazenda'}
               </h3>
-              <button onClick={() => setShowFarmModal(false)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white">
+              <button
+                onClick={() => {
+                  setShowFarmModal(false);
+                  setEditingFarmId(null);
+                }}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateFarm} className="space-y-4">
+            <form onSubmit={handleSaveFarm} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-400 mb-1.5">Nome da Fazenda *</label>
                 <input
@@ -1514,7 +1781,7 @@ export default function RegistriesPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1.5">Responsável Técnico</label>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">Responsável Técnico (RT)</label>
                 {veterinarians.length > 0 ? (
                   <select
                     value={farmForm.technical_responsible}
@@ -1567,15 +1834,24 @@ export default function RegistriesPage() {
                 <button
                   type="submit"
                   disabled={saving}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm"
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm cursor-pointer"
                 >
-                  {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                  {saving ? 'Cadastrando...' : 'Cadastrar Fazenda'}
+                  {saving ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : editingFarmId ? (
+                    <CheckCircle2 className="w-4 h-4" />
+                  ) : (
+                    <Plus className="w-4 h-4" />
+                  )}
+                  {saving ? (editingFarmId ? 'Salvando...' : 'Cadastrando...') : editingFarmId ? 'Salvar Alterações' : 'Cadastrar Fazenda'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowFarmModal(false)}
-                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm"
+                  onClick={() => {
+                    setShowFarmModal(false);
+                    setEditingFarmId(null);
+                  }}
+                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm cursor-pointer"
                 >
                   Cancelar
                 </button>
@@ -1585,20 +1861,27 @@ export default function RegistriesPage() {
         </div>
       )}
 
-      {/* ===== MODAL NOVO RETIRO ===== */}
+      {/* ===== MODAL RETIRO (CRIAR & EDITAR) ===== */}
       {showPropertyModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="glass-card w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 space-y-5">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                <MapPin className="w-5 h-5 text-emerald-400" /> Cadastrar Retiro / Piquete
+                <MapPin className="w-5 h-5 text-emerald-400" />
+                {editingPropertyId ? 'Editar Retiro / Piquete' : 'Cadastrar Retiro / Piquete'}
               </h3>
-              <button onClick={() => setShowPropertyModal(false)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white">
+              <button
+                onClick={() => {
+                  setShowPropertyModal(false);
+                  setEditingPropertyId(null);
+                }}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateProperty} className="space-y-4">
+            <form onSubmit={handleSaveProperty} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-400 mb-1.5">Fazenda Pertencente *</label>
                 <select
@@ -1641,15 +1924,24 @@ export default function RegistriesPage() {
                 <button
                   type="submit"
                   disabled={saving}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm"
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm cursor-pointer"
                 >
-                  {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                  {saving ? 'Cadastrando...' : 'Cadastrar Retiro'}
+                  {saving ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : editingPropertyId ? (
+                    <CheckCircle2 className="w-4 h-4" />
+                  ) : (
+                    <Plus className="w-4 h-4" />
+                  )}
+                  {saving ? (editingPropertyId ? 'Salvando...' : 'Cadastrando...') : editingPropertyId ? 'Salvar Alterações' : 'Cadastrar Retiro'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowPropertyModal(false)}
-                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm"
+                  onClick={() => {
+                    setShowPropertyModal(false);
+                    setEditingPropertyId(null);
+                  }}
+                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm cursor-pointer"
                 >
                   Cancelar
                 </button>

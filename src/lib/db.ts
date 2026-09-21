@@ -1130,23 +1130,27 @@ export interface Protocol {
   }[];
 }
 
-export async function getProtocols(forceRefresh = false): Promise<Protocol[]> {
+export async function getProtocols(forceRefresh = false, includeArchived = false): Promise<Protocol[]> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
 
-  const cacheKey = `protocols_${orgId}`;
+  const cacheKey = `protocols_${orgId}_${includeArchived ? 'all' : 'active'}`;
   if (!forceRefresh) {
     const cached = getCached<Protocol[]>(cacheKey);
     if (cached) return cached;
   }
 
   const supabase = createClient();
-  const { data, error } = await supabase
+  let query = supabase
     .from('protocols')
     .select('*, protocol_steps(*)')
-    .eq('organization_id', orgId)
-    .eq('status', 'active')
-    .order('name');
+    .eq('organization_id', orgId);
+
+  if (!includeArchived) {
+    query = query.eq('status', 'active');
+  }
+
+  const { data, error } = await query.order('name');
 
   if (error) {
     console.error('getProtocols error:', error);
@@ -1176,8 +1180,8 @@ export async function createProtocol(protocol: {
     .from('protocols')
     .insert({
       organization_id: orgId,
-      name: protocol.name,
-      description: protocol.description,
+      name: protocol.name.trim(),
+      description: protocol.description?.trim() || null,
       number_of_managements: protocol.number_of_managements,
       status: 'active',
     })
@@ -1192,10 +1196,10 @@ export async function createProtocol(protocol: {
   const stepsToInsert = protocol.steps.map((step, idx) => ({
     protocol_id: created.id,
     step_order: idx + 1,
-    code: step.code,
-    name: step.name,
-    day_offset: step.day_offset,
-    dosage_instruction: step.dosage_instruction,
+    code: step.code.trim(),
+    name: step.name.trim(),
+    day_offset: Number(step.day_offset) || 0,
+    dosage_instruction: step.dosage_instruction?.trim() || null,
   }));
 
   const { error: stepsErr } = await supabase
@@ -1204,6 +1208,166 @@ export async function createProtocol(protocol: {
 
   if (stepsErr) {
     console.error('createProtocol steps error:', stepsErr);
+    return false;
+  }
+
+  invalidateCache('protocols');
+  return true;
+}
+
+export async function updateProtocol(
+  id: string,
+  protocol: {
+    name: string;
+    description?: string | null;
+    number_of_managements: number;
+    status?: string;
+    steps?: {
+      code: string;
+      name: string;
+      day_offset: number;
+      dosage_instruction?: string | null;
+    }[];
+  }
+): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+
+  const supabase = createClient();
+
+  // 1. Atualizar dados do cabeçalho do protocolo
+  const { error: protoErr } = await supabase
+    .from('protocols')
+    .update({
+      name: protocol.name.trim(),
+      description: protocol.description?.trim() || null,
+      number_of_managements: protocol.number_of_managements,
+      status: protocol.status || 'active',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id)
+    .eq('organization_id', orgId);
+
+  if (protoErr) {
+    console.error('updateProtocol error:', protoErr);
+    return false;
+  }
+
+  // 2. Se etapas foram fornecidas, sincronizar as etapas
+  if (protocol.steps && protocol.steps.length > 0) {
+    const { error: delErr } = await supabase
+      .from('protocol_steps')
+      .delete()
+      .eq('protocol_id', id);
+
+    if (delErr) {
+      console.error('updateProtocol delete steps error:', delErr);
+      return false;
+    }
+
+    const stepsToInsert = protocol.steps.map((step, idx) => ({
+      protocol_id: id,
+      step_order: idx + 1,
+      code: step.code.trim(),
+      name: step.name.trim(),
+      day_offset: Number(step.day_offset) || 0,
+      dosage_instruction: step.dosage_instruction?.trim() || null,
+    }));
+
+    const { error: stepsErr } = await supabase
+      .from('protocol_steps')
+      .insert(stepsToInsert);
+
+    if (stepsErr) {
+      console.error('updateProtocol insert steps error:', stepsErr);
+      return false;
+    }
+  }
+
+  try {
+    const existing = await offlineDb.protocols.get(id);
+    if (existing) {
+      await offlineDb.protocols.update(id, {
+        name: protocol.name.trim(),
+        description: protocol.description?.trim() || undefined,
+        updated_at: new Date().toISOString(),
+      });
+    }
+  } catch (err) {
+    console.warn('Offline protocol update warning:', err);
+  }
+
+  invalidateCache('protocols');
+  return true;
+}
+
+export async function deleteProtocol(id: string): Promise<{ success: boolean; error?: string }> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return { success: false, error: 'Sessão inválida' };
+
+  const supabase = createClient();
+
+  // 1. Verificar se existem lotes de IATF vinculados a este protocolo
+  const { count: lotsCount, error: countErr } = await supabase
+    .from('iatf_lots')
+    .select('id', { count: 'exact', head: true })
+    .eq('protocol_id', id);
+
+  if (countErr) {
+    console.error('deleteProtocol check lots error:', countErr);
+  }
+
+  if (lotsCount && lotsCount > 0) {
+    return {
+      success: false,
+      error: `Não é possível excluir este protocolo pois existem ${lotsCount} lote(s) de IATF vinculados a ele. Você pode arquivá-lo para preservar os históricos operacionais.`,
+    };
+  }
+
+  // 2. Excluir etapas do protocolo
+  await supabase
+    .from('protocol_steps')
+    .delete()
+    .eq('protocol_id', id);
+
+  // 3. Excluir protocolo
+  const { error } = await supabase
+    .from('protocols')
+    .delete()
+    .eq('id', id)
+    .eq('organization_id', orgId);
+
+  if (error) {
+    console.error('deleteProtocol error:', error);
+    return { success: false, error: 'Erro ao excluir protocolo no banco de dados.' };
+  }
+
+  try {
+    await offlineDb.protocols.delete(id);
+  } catch (e) {
+    console.warn('Offline protocol delete warning:', e);
+  }
+
+  invalidateCache('protocols');
+  return { success: true };
+}
+
+export async function toggleProtocolStatus(id: string, newStatus: 'active' | 'archived'): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('protocols')
+    .update({
+      status: newStatus,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id)
+    .eq('organization_id', orgId);
+
+  if (error) {
+    console.error('toggleProtocolStatus error:', error);
     return false;
   }
 
@@ -1661,6 +1825,112 @@ export async function createFarm(farm: {
   return data?.id ?? null;
 }
 
+export async function updateFarm(
+  id: string,
+  farm: {
+    name: string;
+    owner_name?: string | null;
+    technical_responsible?: string | null;
+    city?: string | null;
+    state?: string | null;
+  }
+): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('farms')
+    .update({
+      name: farm.name.trim(),
+      owner_name: farm.owner_name?.trim() || null,
+      technical_responsible: farm.technical_responsible?.trim() || null,
+      city: farm.city?.trim() || null,
+      state: farm.state?.trim() ? farm.state.trim().toUpperCase() : null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id)
+    .eq('organization_id', orgId);
+
+  if (error) {
+    console.error('updateFarm error:', error);
+    return false;
+  }
+
+  try {
+    const existing = await offlineDb.farms.get(id);
+    if (existing) {
+      await offlineDb.farms.update(id, {
+        name: farm.name.trim(),
+        owner_name: farm.owner_name?.trim() || null,
+        technical_responsible: farm.technical_responsible?.trim() || null,
+        city: farm.city?.trim() || null,
+        state: farm.state?.trim() ? farm.state.trim().toUpperCase() : null,
+        updated_at: new Date().toISOString(),
+      });
+    }
+  } catch (err) {
+    console.warn('Offline farm update warning:', err);
+  }
+
+  clearFarmsCache();
+  return true;
+}
+
+export async function deleteFarm(id: string): Promise<{ success: boolean; error?: string }> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return { success: false, error: 'Sessão inválida' };
+
+  const supabase = createClient();
+
+  // 1. Verificar se existem lotes vinculados à fazenda
+  const { count: lotsCount, error: lotsErr } = await supabase
+    .from('iatf_lots')
+    .select('id', { count: 'exact', head: true })
+    .eq('farm_id', id);
+
+  if (!lotsErr && lotsCount && lotsCount > 0) {
+    return {
+      success: false,
+      error: `Não é possível excluir esta fazenda pois existem ${lotsCount} lote(s) de IATF vinculados a ela. Você pode congelá-la para desativar sem perder os dados.`,
+    };
+  }
+
+  // 2. Verificar se existem animais vinculados à fazenda
+  const { count: animalsCount, error: animalsErr } = await supabase
+    .from('animals')
+    .select('id', { count: 'exact', head: true })
+    .eq('farm_id', id);
+
+  if (!animalsErr && animalsCount && animalsCount > 0) {
+    return {
+      success: false,
+      error: `Não é possível excluir esta fazenda pois existem ${animalsCount} animal(is) vinculados a ela. Você pode congelá-la para desativar com segurança.`,
+    };
+  }
+
+  // 3. Excluir a fazenda
+  const { error } = await supabase
+    .from('farms')
+    .delete()
+    .eq('id', id)
+    .eq('organization_id', orgId);
+
+  if (error) {
+    console.error('deleteFarm error:', error);
+    return { success: false, error: 'Erro ao excluir a fazenda no banco de dados.' };
+  }
+
+  try {
+    await offlineDb.farms.delete(id);
+  } catch (e) {
+    console.warn('Offline farm delete warning:', e);
+  }
+
+  clearFarmsCache();
+  return { success: true };
+}
+
 export interface Property {
   id: string;
   name: string;
@@ -1720,6 +1990,71 @@ export async function createProperty(prop: {
   invalidateCache('properties');
   clearFarmsCache();
   return true;
+}
+
+export async function updateProperty(
+  id: string,
+  prop: {
+    name: string;
+    code?: string | null;
+  }
+): Promise<boolean> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return false;
+
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('properties')
+    .update({
+      name: prop.name.trim(),
+      code: prop.code?.trim() || null,
+    })
+    .eq('id', id)
+    .eq('organization_id', orgId);
+
+  if (error) {
+    console.error('updateProperty error:', error);
+    return false;
+  }
+
+  invalidateCache('properties');
+  clearFarmsCache();
+  return true;
+}
+
+export async function deleteProperty(id: string): Promise<{ success: boolean; error?: string }> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return { success: false, error: 'Sessão inválida' };
+
+  const supabase = createClient();
+
+  // Verificar se há animais vinculados a este retiro
+  const { count: animalsCount } = await supabase
+    .from('animals')
+    .select('id', { count: 'exact', head: true })
+    .eq('property_id', id);
+
+  if (animalsCount && animalsCount > 0) {
+    return {
+      success: false,
+      error: `Não é possível excluir este retiro pois existem ${animalsCount} animal(is) alocados nele.`,
+    };
+  }
+
+  const { error } = await supabase
+    .from('properties')
+    .delete()
+    .eq('id', id)
+    .eq('organization_id', orgId);
+
+  if (error) {
+    console.error('deleteProperty error:', error);
+    return { success: false, error: 'Erro ao excluir retiro no banco de dados.' };
+  }
+
+  invalidateCache('properties');
+  clearFarmsCache();
+  return { success: true };
 }
 
 // ============================================================
