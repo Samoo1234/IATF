@@ -27,7 +27,8 @@ import {
   Building2,
   Syringe,
   Microscope,
-  Check
+  Check,
+  Stethoscope
 } from 'lucide-react';
 
 const STEP_COLORS: Record<string, { bg: string; text: string; border: string; label: string; badge: string }> = {
@@ -41,6 +42,9 @@ const STEP_COLORS: Record<string, { bg: string; text: string; border: string; la
   'DG2': { bg: 'bg-orange-500/15 hover:bg-orange-500/25', text: 'text-orange-400', border: 'border-orange-500/40', label: 'DG 2 - Confirmação', badge: 'bg-orange-500 text-slate-950' },
   'VAC': { bg: 'bg-rose-500/15 hover:bg-rose-500/25', text: 'text-rose-400', border: 'border-rose-500/40', label: 'Vacinação / Sanitário', badge: 'bg-rose-500 text-white' },
   'PES': { bg: 'bg-teal-500/15 hover:bg-teal-500/25', text: 'text-teal-400', border: 'border-teal-500/40', label: 'Pesagem / Avaliação', badge: 'bg-teal-500 text-slate-950' },
+  'SRV': { bg: 'bg-violet-500/15 hover:bg-violet-500/25', text: 'text-violet-400', border: 'border-violet-500/40', label: 'Serviço Veterinário Avulso', badge: 'bg-violet-500 text-white' },
+  'ANDR': { bg: 'bg-blue-500/15 hover:bg-blue-500/25', text: 'text-blue-400', border: 'border-blue-500/40', label: 'Exame Andrológico', badge: 'bg-blue-500 text-white' },
+  'VISITA': { bg: 'bg-amber-500/15 hover:bg-amber-500/25', text: 'text-amber-400', border: 'border-amber-500/40', label: 'Visita Técnica / Consultoria', badge: 'bg-amber-500 text-slate-950' },
   'OUTRO': { bg: 'bg-slate-500/15 hover:bg-slate-500/25', text: 'text-slate-300', border: 'border-slate-500/40', label: 'Outro Manejo Operacional', badge: 'bg-slate-400 text-slate-950' },
 };
 
@@ -79,6 +83,9 @@ export default function AgendaPage() {
 
   // Modais
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createMode, setCreateMode] = useState<'lote' | 'avulso'>('lote');
+  const [createFarmId, setCreateFarmId] = useState('');
+  const [createTitle, setCreateTitle] = useState('');
   const [createDate, setCreateDate] = useState(new Date().toISOString().split('T')[0]);
   const [createTime, setCreateTime] = useState('08:00');
   const [createLotId, setCreateLotId] = useState('');
@@ -173,34 +180,92 @@ export default function AgendaPage() {
   // Abrir Modal de Criação para um dia específico
   const openCreateForDate = (dateStr: string) => {
     setCreateDate(dateStr);
+    if (selectedFarmId !== 'all') {
+      setCreateFarmId(selectedFarmId);
+    } else if (farms.length > 0) {
+      setCreateFarmId(farms[0].id);
+    }
     setShowCreateModal(true);
   };
 
-  // Submeter Novo Manejo
+  // Submeter Novo Agendamento (Lote ou Avulso)
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!createLotId || !createDate) return;
-    setCreating(true);
+    if (!createDate) return;
 
-    const ok = await insertManagementEvent({
-      lot_id: createLotId,
-      step_code: createStepCode,
-      planned_date: createDate,
-      start_time: createTime ? `${createTime}:00` : null,
-      responsible_name: createResponsible,
-      notes: createNotes || null,
-      status: 'pendente'
-    });
+    if (createMode === 'lote') {
+      if (!createLotId) {
+        showToast('Selecione um lote para agendar o manejo.');
+        return;
+      }
+      const selectedLot = lots.find((l) => l.id === createLotId);
+      const targetFarmId = selectedLot?.farm_id || (selectedFarmId !== 'all' ? selectedFarmId : farms[0]?.id);
+      if (!targetFarmId) {
+        showToast('Fazenda não identificada.');
+        return;
+      }
 
-    if (ok) {
-      showToast('Manejo agendado com sucesso!');
-      await loadData(true);
-      setShowCreateModal(false);
-      setCreateNotes('');
+      setCreating(true);
+      const ok = await insertManagementEvent({
+        farm_id: targetFarmId,
+        lot_id: createLotId,
+        event_type: 'lote',
+        step_code: createStepCode,
+        planned_date: createDate,
+        start_time: createTime ? `${createTime}:00` : null,
+        responsible_name: createResponsible,
+        notes: createNotes || null,
+        status: 'pendente'
+      });
+
+      if (ok) {
+        showToast('Manejo de lote agendado com sucesso!');
+        await loadData(true);
+        setShowCreateModal(false);
+        setCreateNotes('');
+      } else {
+        showToast('Erro ao agendar manejo.');
+      }
+      setCreating(false);
     } else {
-      showToast('Erro ao agendar manejo.');
+      // Serviço Avulso vinculado à fazenda
+      const targetFarmId = createFarmId || (selectedFarmId !== 'all' ? selectedFarmId : farms[0]?.id);
+      if (!targetFarmId) {
+        showToast('Selecione a fazenda vinculada ao serviço.');
+        return;
+      }
+      if (!createTitle.trim()) {
+        showToast('Informe o nome ou tipo do serviço.');
+        return;
+      }
+
+      setCreating(true);
+      const titleToSave = createTitle.trim();
+      const ok = await insertManagementEvent({
+        farm_id: targetFarmId,
+        lot_id: null,
+        title: titleToSave,
+        event_type: 'avulso',
+        step_code: createStepCode || 'SRV',
+        step_name: titleToSave,
+        planned_date: createDate,
+        start_time: createTime ? `${createTime}:00` : null,
+        responsible_name: createResponsible,
+        notes: createNotes || null,
+        status: 'pendente'
+      });
+
+      if (ok) {
+        showToast('Serviço veterinário agendado com sucesso!');
+        await loadData(true);
+        setShowCreateModal(false);
+        setCreateNotes('');
+        setCreateTitle('');
+      } else {
+        showToast('Erro ao agendar serviço avulso.');
+      }
+      setCreating(false);
     }
-    setCreating(false);
   };
 
   // Concluir Manejo
@@ -285,10 +350,14 @@ export default function AgendaPage() {
   // Filtragem dos eventos
   const filteredEvents = useMemo(() => {
     return events.filter(ev => {
-      // Filtro de etapa
+      const isAvulso = ev.event_type === 'avulso' || !ev.lot_id;
+
+      // Filtro de etapa ou tipo
       if (filterStep !== 'ALL') {
         if (filterStep === 'RETIRADA') {
           if (!['D7', 'D8', 'D9'].includes(ev.step_code)) return false;
+        } else if (filterStep === 'AVULSO') {
+          if (!isAvulso) return false;
         } else if (ev.step_code !== filterStep) {
           return false;
         }
@@ -302,12 +371,13 @@ export default function AgendaPage() {
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
         const lotCode = ev.iatf_lots?.code?.toLowerCase() || '';
-        const farmName = ev.iatf_lots?.farms?.name?.toLowerCase() || '';
+        const title = (ev.title || ev.step_name || '').toLowerCase();
+        const farmName = (ev.farms?.name || ev.iatf_lots?.farms?.name || '').toLowerCase();
         const resp = ev.responsible_name?.toLowerCase() || '';
         const notes = ev.notes?.toLowerCase() || '';
         const step = ev.step_code?.toLowerCase() || '';
 
-        const match = lotCode.includes(q) || farmName.includes(q) || resp.includes(q) || notes.includes(q) || step.includes(q);
+        const match = lotCode.includes(q) || title.includes(q) || farmName.includes(q) || resp.includes(q) || notes.includes(q) || step.includes(q);
         if (!match) return false;
       }
 
@@ -335,6 +405,7 @@ export default function AgendaPage() {
     const iaCount = monthEvents.filter(ev => ev.step_code === 'IA').length;
     const dgCount = monthEvents.filter(ev => ['DG', 'DG1', 'DG2'].includes(ev.step_code)).length;
     const d0Count = monthEvents.filter(ev => ev.step_code === 'D0').length;
+    const avulsoCount = monthEvents.filter(ev => ev.event_type === 'avulso' || !ev.lot_id).length;
     const concludedCount = monthEvents.filter(ev => ev.status === 'concluido').length;
     const totalAnimalsWorked = monthEvents.reduce((acc, ev) => acc + (ev.animals_worked_count || 0), 0);
 
@@ -343,6 +414,7 @@ export default function AgendaPage() {
       iaCount,
       dgCount,
       d0Count,
+      avulsoCount,
       concludedCount,
       totalAnimalsWorked,
     };
@@ -551,6 +623,14 @@ export default function AgendaPage() {
             >
               DG
             </button>
+            <button
+              onClick={() => setFilterStep('AVULSO')}
+              className={`px-2 py-1 rounded-md font-semibold transition-all flex items-center gap-1 ${filterStep === 'AVULSO' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:text-violet-300'}`}
+              title="Apenas Serviços Avulsos"
+            >
+              <Stethoscope className="w-3 h-3" />
+              <span>Avulsos</span>
+            </button>
           </div>
 
           {/* Filtro de Status */}
@@ -631,10 +711,12 @@ export default function AgendaPage() {
                 {/* Lista de Eventos no Dia */}
                 <div className="space-y-1 flex-1 overflow-hidden">
                   {dayEvents.slice(0, 3).map((ev) => {
-                    const stepConf = STEP_COLORS[ev.step_code] || STEP_COLORS.OUTRO;
+                    const isAvulso = ev.event_type === 'avulso' || !ev.lot_id;
+                    const stepConf = STEP_COLORS[ev.step_code] || (isAvulso ? STEP_COLORS.SRV : STEP_COLORS.OUTRO);
                     const isConcluded = ev.status === 'concluido';
-                    const farmName = ev.iatf_lots?.farms?.name || 'Fazenda';
-                    const farmColors = farmColorMap.get(ev.iatf_lots?.farm_id || '') || {
+                    const farmId = ev.farm_id || ev.iatf_lots?.farm_id || '';
+                    const farmName = ev.farms?.name || ev.iatf_lots?.farms?.name || (farms.find(f => f.id === farmId)?.name) || 'Fazenda';
+                    const farmColors = farmColorMap.get(farmId) || {
                       text: 'text-emerald-300',
                       bg: 'bg-emerald-500/15',
                       border: 'border-emerald-500/30'
@@ -649,7 +731,7 @@ export default function AgendaPage() {
                         }}
                         className={`text-[11px] p-1.5 rounded-lg border transition-all cursor-pointer shadow-sm hover:scale-[1.02] ${stepConf.bg} ${stepConf.border} flex flex-col gap-0.5`}
                       >
-                        {/* Linha 1: Tag da Fazenda + Etapa */}
+                        {/* Linha 1: Tag da Fazenda + Etapa/Tipo */}
                         <div className="flex items-center justify-between gap-1">
                           <span
                             className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.2 rounded border truncate max-w-22.5 ${farmColors.bg} ${farmColors.text} ${farmColors.border}`}
@@ -659,14 +741,18 @@ export default function AgendaPage() {
                           </span>
 
                           <span className={`text-[10px] font-extrabold font-mono shrink-0 px-1 rounded ${stepConf.badge}`}>
-                            {ev.step_code}
+                            {isAvulso ? (ev.step_code === 'SRV' ? 'SERVIÇO' : ev.step_code) : ev.step_code}
                           </span>
                         </div>
 
-                        {/* Linha 2: Lote + Status */}
+                        {/* Linha 2: Título do Serviço ou Código do Lote + Status */}
                         <div className="flex items-center justify-between gap-1 text-[10px] text-slate-300 pt-0.5">
-                          <span className="truncate font-medium text-slate-200" title={ev.iatf_lots?.code}>
-                            {ev.iatf_lots?.code || 'Lote'}
+                          <span 
+                            className="truncate font-medium text-slate-200 flex items-center gap-1" 
+                            title={isAvulso ? (ev.title || ev.step_name || 'Serviço Avulso') : ev.iatf_lots?.code}
+                          >
+                            {isAvulso && <Stethoscope className="w-3 h-3 text-violet-400 shrink-0" />}
+                            <span className="truncate">{isAvulso ? (ev.title || ev.step_name || 'Serviço Avulso') : (ev.iatf_lots?.code || 'Lote')}</span>
                           </span>
 
                           {isConcluded ? (
@@ -700,137 +786,148 @@ export default function AgendaPage() {
       {/* ======================================================== */}
       {/* MODAL: DETALHES & CONCLUSÃO DO MANEJO */}
       {/* ======================================================== */}
-      {selectedEvent && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
-          <div className="glass-card w-full max-w-lg rounded-3xl border border-slate-700 bg-slate-900 shadow-2xl overflow-hidden animate-in fade-in my-auto">
-            {/* Header Modal */}
-            <div className="px-6 py-4 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <span className={`text-xs font-extrabold px-2.5 py-1 rounded-lg ${STEP_COLORS[selectedEvent.step_code]?.badge || 'bg-slate-700 text-white'}`}>
-                  {selectedEvent.step_code}
-                </span>
-                <div>
-                  <h3 className="text-base font-bold text-white">
-                    {STEP_COLORS[selectedEvent.step_code]?.label || 'Manejo Operacional'}
-                  </h3>
-                  <p className="text-xs text-slate-400">
-                    Lote: <strong className="text-emerald-400 font-mono">{selectedEvent.iatf_lots?.code}</strong>
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setSelectedEvent(null)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {selectedEvent && (() => {
+        const isAvulso = selectedEvent.event_type === 'avulso' || !selectedEvent.lot_id;
+        const eventFarmName = selectedEvent.farms?.name || selectedEvent.iatf_lots?.farms?.name || (farms.find(f => f.id === (selectedEvent.farm_id || selectedEvent.iatf_lots?.farm_id))?.name) || 'Fazenda';
 
-            {/* Corpo dos Detalhes */}
-            <div className="p-6 space-y-4">
-              {/* Informações Gerais */}
-              <div className="grid grid-cols-2 gap-3 text-xs bg-slate-950/70 p-4 rounded-2xl border border-slate-800">
-                <div>
-                  <span className="text-slate-400 block text-[11px]">Propriedade / Fazenda</span>
-                  <p className="font-semibold text-white flex items-center gap-1.5 mt-0.5">
-                    <Building2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    {selectedEvent.iatf_lots?.farms?.name || 'Fazenda'}
-                  </p>
-                </div>
-
-                <div>
-                  <span className="text-slate-400 block text-[11px]">Data Planejada</span>
-                  <p className="font-semibold text-white font-mono mt-0.5">
-                    {selectedEvent.planned_date.split('-').reverse().join('/')}
-                    {selectedEvent.start_time && ` às ${selectedEvent.start_time.slice(0, 5)}`}
-                  </p>
-                </div>
-
-                <div>
-                  <span className="text-slate-400 block text-[11px]">Status Operacional</span>
-                  <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full mt-1 ${
-                    selectedEvent.status === 'concluido' 
-                      ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30' 
-                      : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                  }`}>
-                    {selectedEvent.status === 'concluido' ? <CheckCircle2 className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
-                    {selectedEvent.status === 'concluido' ? 'Concluído' : 'Pendente / Agendado'}
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+            <div className="glass-card w-full max-w-lg rounded-3xl border border-slate-700 bg-slate-900 shadow-2xl overflow-hidden animate-in fade-in my-auto">
+              {/* Header Modal */}
+              <div className="px-6 py-4 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span className={`text-xs font-extrabold px-2.5 py-1 rounded-lg ${STEP_COLORS[selectedEvent.step_code]?.badge || (isAvulso ? 'bg-violet-600 text-white' : 'bg-slate-700 text-white')}`}>
+                    {isAvulso ? (selectedEvent.step_code === 'SRV' ? 'SERVIÇO' : selectedEvent.step_code) : selectedEvent.step_code}
                   </span>
+                  <div>
+                    <h3 className="text-base font-bold text-white flex items-center gap-2">
+                      {isAvulso ? (selectedEvent.title || 'Serviço Veterinário Avulso') : (STEP_COLORS[selectedEvent.step_code]?.label || 'Manejo Operacional')}
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      {isAvulso ? (
+                        <span className="inline-flex items-center gap-1 text-violet-400 font-semibold">
+                          <Stethoscope className="w-3.5 h-3.5" />
+                          Serviço Avulso (Sem Lote)
+                        </span>
+                      ) : (
+                        <>Lote: <strong className="text-emerald-400 font-mono">{selectedEvent.iatf_lots?.code}</strong></>
+                      )}
+                    </p>
+                  </div>
                 </div>
-
-                <div>
-                  <span className="text-slate-400 block text-[11px]">Responsável</span>
-                  <p className="font-semibold text-white flex items-center gap-1.5 mt-0.5">
-                    <User className="w-3.5 h-3.5 text-slate-400" />
-                    {selectedEvent.responsible_name || 'Equipe de Campo'}
-                  </p>
-                </div>
+                <button
+                  onClick={() => setSelectedEvent(null)}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
 
-              {selectedEvent.notes && (
-                <div className="p-3 bg-slate-950/50 rounded-xl border border-slate-800/80 text-xs text-slate-300">
-                  <span className="text-[10px] text-slate-400 font-bold block mb-0.5">Observações:</span>
-                  {selectedEvent.notes}
-                </div>
-              )}
-
-              {/* Se o evento estiver pendente: Formulário para concluir */}
-              {selectedEvent.status !== 'concluido' ? (
-                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
-                  <h4 className="text-xs font-bold text-white flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    Registrar Execução no Curral
-                  </h4>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">
-                        Fêmeas Trabalhadas *
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        placeholder="Ex: 85"
-                        value={animalsWorked}
-                        onChange={(e) => setAnimalsWorked(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 font-mono"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">
-                        Perdas / Falhas
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        placeholder="0"
-                        value={lossesCount}
-                        onChange={(e) => setLossesCount(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 font-mono"
-                      />
-                    </div>
+              {/* Corpo dos Detalhes */}
+              <div className="p-6 space-y-4">
+                {/* Informações Gerais */}
+                <div className="grid grid-cols-2 gap-3 text-xs bg-slate-950/70 p-4 rounded-2xl border border-slate-800">
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">Propriedade / Fazenda</span>
+                    <p className="font-semibold text-white flex items-center gap-1.5 mt-0.5">
+                      <Building2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      {eventFarmName}
+                    </p>
                   </div>
 
-                  <button
-                    onClick={handleCompleteSubmit}
-                    disabled={completing || !animalsWorked}
-                    className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md"
-                  >
-                    {completing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                    {completing ? 'Salvando...' : 'Confirmar Conclusão do Manejo'}
-                  </button>
-                </div>
-              ) : (
-                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-300 flex items-center justify-between">
-                  <span>Manejo já finalizado com {selectedEvent.animals_worked_count} fêmeas trabalhadas.</span>
-                  {selectedEvent.execution_date && (
-                    <span className="font-mono text-[11px]">
-                      Executado em {selectedEvent.execution_date.split('-').reverse().join('/')}
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">Data Planejada</span>
+                    <p className="font-semibold text-white font-mono mt-0.5">
+                      {selectedEvent.planned_date.split('-').reverse().join('/')}
+                      {selectedEvent.start_time && ` às ${selectedEvent.start_time.slice(0, 5)}`}
+                    </p>
+                  </div>
+
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">Status Operacional</span>
+                    <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full mt-1 ${
+                      selectedEvent.status === 'concluido' 
+                        ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30' 
+                        : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                    }`}>
+                      {selectedEvent.status === 'concluido' ? <CheckCircle2 className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                      {selectedEvent.status === 'concluido' ? 'Concluído' : 'Pendente / Agendado'}
                     </span>
-                  )}
+                  </div>
+
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">Responsável</span>
+                    <p className="font-semibold text-white flex items-center gap-1.5 mt-0.5">
+                      <User className="w-3.5 h-3.5 text-slate-400" />
+                      {selectedEvent.responsible_name || 'Equipe de Campo'}
+                    </p>
+                  </div>
                 </div>
-              )}
+
+                {selectedEvent.notes && (
+                  <div className="p-3 bg-slate-950/50 rounded-xl border border-slate-800/80 text-xs text-slate-300">
+                    <span className="text-[10px] text-slate-400 font-bold block mb-0.5">Observações:</span>
+                    {selectedEvent.notes}
+                  </div>
+                )}
+
+                {/* Se o evento estiver pendente: Formulário para concluir */}
+                {selectedEvent.status !== 'concluido' ? (
+                  <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
+                    <h4 className="text-xs font-bold text-white flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                      {isAvulso ? 'Registrar Execução do Serviço' : 'Registrar Execução no Curral'}
+                    </h4>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">
+                          {isAvulso ? 'Animais Atendidos (Opcional)' : 'Fêmeas Trabalhadas *'}
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder={isAvulso ? "Ex: 15 (ou 0 se visita)" : "Ex: 85"}
+                          value={animalsWorked}
+                          onChange={(e) => setAnimalsWorked(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 font-mono"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">
+                          Perdas / Falhas
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="0"
+                          value={lossesCount}
+                          onChange={(e) => setLossesCount(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={handleCompleteSubmit}
+                      disabled={completing || (!isAvulso && !animalsWorked)}
+                      className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md"
+                    >
+                      {completing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                      {completing ? 'Salvando...' : 'Confirmar Conclusão'}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-300 flex items-center justify-between">
+                    <span>Finalizado com {selectedEvent.animals_worked_count} animais registrados.</span>
+                    {selectedEvent.execution_date && (
+                      <span className="font-mono text-[11px]">
+                        Executado em {selectedEvent.execution_date.split('-').reverse().join('/')}
+                      </span>
+                    )}
+                  </div>
+                )}
 
               {/* Botões do Rodapé */}
               <div className="flex items-center justify-between pt-2 border-t border-slate-800">
@@ -854,7 +951,8 @@ export default function AgendaPage() {
             </div>
           </div>
         </div>
-      )}
+      );
+    })()}
 
       {/* ======================================================== */}
       {/* MODAL: NOVO AGENDAMENTO DE MANEJO */}
@@ -876,58 +974,188 @@ export default function AgendaPage() {
               </button>
             </div>
 
-            <form onSubmit={handleCreateSubmit} className="p-6 space-y-4">
-              {/* Lote Alvo */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1">
-                  Lote de IATF *
-                </label>
-                {lots.length === 0 ? (
-                  <p className="text-xs text-amber-400 bg-amber-500/10 p-2 rounded-lg border border-amber-500/20">
-                    Nenhum lote ativo cadastrado nesta seleção. Crie um lote primeiro na tela de Lotes.
-                  </p>
-                ) : (
-                  <select
-                    required
-                    value={createLotId}
-                    onChange={(e) => setCreateLotId(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500 cursor-pointer"
-                  >
-                    {lots.map((l) => {
-                      const lotFarm = farms.find((f) => f.id === l.farm_id);
-                      return (
-                        <option key={l.id} value={l.id}>
-                          {l.code} {lotFarm ? `— (${lotFarm.name})` : ''} • {l.worked_qty || 0} fêmeas
-                        </option>
-                      );
-                    })}
-                  </select>
-                )}
-              </div>
+            {/* Alternador de Modo: Lote vs Serviço Avulso */}
+            <div className="p-4 bg-slate-950/60 border-b border-slate-800 flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setCreateMode('lote');
+                  setCreateStepCode('D0');
+                }}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  createMode === 'lote'
+                    ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
+                    : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Manejo de Lote (IATF)</span>
+              </button>
 
-              {/* Etapa */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1">
-                  Etapa do Protocolo *
-                </label>
-                <select
-                  value={createStepCode}
-                  onChange={(e) => setCreateStepCode(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500 cursor-pointer"
-                >
-                  <option value="D0">D0 - Início do Protocolo / Implante de Progesterona</option>
-                  <option value="D7">D7 - Retirada PGF</option>
-                  <option value="D8">D8 - Retirada de Implante + Indutor de Ovulação</option>
-                  <option value="D9">D9 - Retirada de Implante (Protocolo 9 dias)</option>
-                  <option value="IA">IA - Inseminação Artificial em Tempo Fixo</option>
-                  <option value="DG">DG - Diagnóstico de Gestação (30-45 dias)</option>
-                  <option value="DG1">DG 1 - Diagnóstico Precoce</option>
-                  <option value="DG2">DG 2 - Confirmação de Perda / Sexagem Fetal</option>
-                  <option value="VAC">VAC - Vacinação Reprodutiva / Sanitária</option>
-                  <option value="PES">PES - Pesagem e Avaliação de ECC</option>
-                  <option value="OUTRO">OUTRO - Outro Manejo Operacional</option>
-                </select>
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCreateMode('avulso');
+                  setCreateStepCode('SRV');
+                  if (!createTitle) setCreateTitle('Exame Andrológico');
+                  if (!createFarmId && farms.length > 0) {
+                    setCreateFarmId(selectedFarmId !== 'all' ? selectedFarmId : farms[0].id);
+                  }
+                }}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  createMode === 'avulso'
+                    ? 'bg-violet-600 text-white shadow-md shadow-violet-500/20'
+                    : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                }`}
+              >
+                <Stethoscope className="w-3.5 h-3.5" />
+                <span>Serviço Avulso</span>
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateSubmit} className="p-6 space-y-4">
+              {/* MODO 1: MANEJO DE LOTE */}
+              {createMode === 'lote' ? (
+                <>
+                  {/* Lote Alvo */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">
+                      Lote de IATF *
+                    </label>
+                    {lots.length === 0 ? (
+                      <p className="text-xs text-amber-400 bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20">
+                        Nenhum lote ativo cadastrado nesta seleção. Crie um lote na tela de Lotes ou use a aba &quot;Serviço Avulso&quot; acima.
+                      </p>
+                    ) : (
+                      <select
+                        required
+                        value={createLotId}
+                        onChange={(e) => setCreateLotId(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500 cursor-pointer"
+                      >
+                        {lots.map((l) => {
+                          const lotFarm = farms.find((f) => f.id === l.farm_id);
+                          return (
+                            <option key={l.id} value={l.id}>
+                              {l.code} {lotFarm ? `— (${lotFarm.name})` : ''} • {l.worked_qty || 0} fêmeas
+                            </option>
+                          );
+                        })}
+                      </select>
+                    )}
+                  </div>
+
+                  {/* Etapa */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">
+                      Etapa do Protocolo *
+                    </label>
+                    <select
+                      value={createStepCode}
+                      onChange={(e) => setCreateStepCode(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500 cursor-pointer"
+                    >
+                      <option value="D0">D0 - Início do Protocolo / Implante de Progesterona</option>
+                      <option value="D7">D7 - Retirada PGF</option>
+                      <option value="D8">D8 - Retirada de Implante + Indutor de Ovulação</option>
+                      <option value="D9">D9 - Retirada de Implante (Protocolo 9 dias)</option>
+                      <option value="IA">IA - Inseminação Artificial em Tempo Fixo</option>
+                      <option value="DG">DG - Diagnóstico de Gestação (30-45 dias)</option>
+                      <option value="DG1">DG 1 - Diagnóstico Precoce</option>
+                      <option value="DG2">DG 2 - Confirmação de Perda / Sexagem Fetal</option>
+                      <option value="VAC">VAC - Vacinação Reprodutiva / Sanitária</option>
+                      <option value="PES">PES - Pesagem e Avaliação de ECC</option>
+                      <option value="OUTRO">OUTRO - Outro Manejo Operacional</option>
+                    </select>
+                  </div>
+                </>
+              ) : (
+                /* MODO 2: SERVIÇO VETERINÁRIO AVULSO */
+                <>
+                  {/* Fazenda Vinculada (Obrigatória) */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">
+                      Fazenda Vinculada *
+                    </label>
+                    <select
+                      required
+                      value={createFarmId || (selectedFarmId !== 'all' ? selectedFarmId : (farms[0]?.id || ''))}
+                      onChange={(e) => setCreateFarmId(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2.5 rounded-xl focus:outline-none focus:border-violet-500 cursor-pointer"
+                    >
+                      {farms.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.name}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="text-[10px] text-slate-500 mt-1 block">
+                      O serviço fica registrado no histórico desta propriedade rural.
+                    </span>
+                  </div>
+
+                  {/* Nome do Serviço */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">
+                      Título / Tipo do Serviço *
+                    </label>
+                    <input
+                      required
+                      type="text"
+                      placeholder="Ex: Exame Andrológico dos Touros"
+                      value={createTitle}
+                      onChange={(e) => setCreateTitle(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-violet-500"
+                    />
+
+                    {/* Sugestões Rápidas */}
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {[
+                        { title: 'Exame Andrológico', code: 'ANDR' },
+                        { title: 'Visita Técnica Geral', code: 'VISITA' },
+                        { title: 'Vacinação Geral', code: 'VAC' },
+                        { title: 'Ultrassom Ginecológico Avulso', code: 'SRV' },
+                        { title: 'Consultoria Nutricional', code: 'VISITA' },
+                      ].map((sug) => (
+                        <button
+                          key={sug.title}
+                          type="button"
+                          onClick={() => {
+                            setCreateTitle(sug.title);
+                            setCreateStepCode(sug.code);
+                          }}
+                          className={`text-[10px] px-2 py-0.5 rounded-lg border transition-colors cursor-pointer ${
+                            createTitle === sug.title
+                              ? 'bg-violet-600/30 text-violet-300 border-violet-500/50'
+                              : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                          }`}
+                        >
+                          + {sug.title}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Categoria do Serviço */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">
+                      Categoria Operacional
+                    </label>
+                    <select
+                      value={createStepCode}
+                      onChange={(e) => setCreateStepCode(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2.5 rounded-xl focus:outline-none focus:border-violet-500 cursor-pointer"
+                    >
+                      <option value="SRV">SRV - Serviço Clínico / Veterinário Geral</option>
+                      <option value="ANDR">ANDR - Exame Andrológico</option>
+                      <option value="VISITA">VISITA - Visita Técnica / Consultoria</option>
+                      <option value="VAC">VAC - Manejo Sanitário / Vacinação</option>
+                      <option value="PES">PES - Pesagem / Avaliação de Escore</option>
+                      <option value="OUTRO">OUTRO - Outro Procedimento</option>
+                    </select>
+                  </div>
+                </>
+              )}
 
               {/* Data e Hora */}
               <div className="grid grid-cols-2 gap-3">
@@ -980,7 +1208,7 @@ export default function AgendaPage() {
                   rows={2}
                   value={createNotes}
                   onChange={(e) => setCreateNotes(e.target.value)}
-                  placeholder="Ex: Verificar palhetas na caneca 2 antes de iniciar o curral."
+                  placeholder="Ex: Trazer eletroejaculador e lâminas para análise de motilidade."
                   className="w-full bg-slate-950 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 resize-none"
                 />
               </div>
@@ -989,11 +1217,15 @@ export default function AgendaPage() {
               <div className="flex gap-3 pt-2">
                 <button
                   type="submit"
-                  disabled={creating || !createLotId}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md"
+                  disabled={creating || (createMode === 'lote' && !createLotId) || (createMode === 'avulso' && !createTitle.trim())}
+                  className={`flex-1 disabled:opacity-50 text-slate-950 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md ${
+                    createMode === 'avulso'
+                      ? 'bg-violet-500 hover:bg-violet-400 text-white'
+                      : 'bg-emerald-600 hover:bg-emerald-500 text-slate-950'
+                  }`}
                 >
                   {creating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                  {creating ? 'Salvando...' : 'Salvar Agendamento'}
+                  {creating ? 'Salvando...' : (createMode === 'avulso' ? 'Agendar Serviço' : 'Salvar Manejo')}
                 </button>
                 <button
                   type="button"

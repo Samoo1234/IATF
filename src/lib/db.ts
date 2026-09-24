@@ -627,7 +627,10 @@ export async function createAndAddAnimalToLot(
 
 export interface ManagementEvent {
   id: string;
-  lot_id: string;
+  lot_id: string | null;
+  farm_id?: string | null;
+  title?: string | null;
+  event_type?: 'lote' | 'avulso' | string;
   step_code: string;
   step_name: string | null;
   planned_date: string;
@@ -639,13 +642,14 @@ export interface ManagementEvent {
   responsible_name: string | null;
   status: string;
   notes: string | null;
-  iatf_lots: {
+  iatf_lots?: {
     code: string;
     name?: string | null;
     farm_id?: string;
     farms?: { id: string; name: string } | null;
     properties?: { name: string } | null;
   } | null;
+  farms?: { id: string; name: string } | null;
 }
 
 export async function getManagementEvents(forceRefresh = false, farmId?: string): Promise<ManagementEvent[]> {
@@ -663,7 +667,8 @@ export async function getManagementEvents(forceRefresh = false, farmId?: string)
     .from('management_events')
     .select(`
       *,
-      iatf_lots!inner (
+      farms (id, name),
+      iatf_lots (
         code,
         name,
         farm_id,
@@ -674,7 +679,7 @@ export async function getManagementEvents(forceRefresh = false, farmId?: string)
     .eq('organization_id', orgId);
 
   if (farmId && farmId !== 'all') {
-    query = query.eq('iatf_lots.farm_id', farmId);
+    query = query.or(`farm_id.eq.${farmId},iatf_lots.farm_id.eq.${farmId}`);
   }
 
   const { data, error } = await query.order('planned_date', { ascending: true });
@@ -717,8 +722,12 @@ export async function completeManagementEvent(
 }
 
 export async function insertManagementEvent(event: {
-  lot_id: string;
+  farm_id: string;
+  lot_id?: string | null;
+  title?: string | null;
+  event_type?: 'lote' | 'avulso';
   step_code: string;
+  step_name?: string | null;
   planned_date: string;
   start_time?: string | null;
   end_time?: string | null;
@@ -734,8 +743,12 @@ export async function insertManagementEvent(event: {
     .from('management_events')
     .insert({
       organization_id: orgId,
-      lot_id: event.lot_id,
+      farm_id: event.farm_id,
+      lot_id: event.lot_id || null,
+      title: event.title || null,
+      event_type: event.event_type || (event.lot_id ? 'lote' : 'avulso'),
       step_code: event.step_code,
+      step_name: event.step_name || event.title || event.step_code,
       planned_date: event.planned_date,
       start_time: event.start_time || null,
       end_time: event.end_time || null,
@@ -1554,12 +1567,14 @@ export async function createLot(lot: {
   for (const step of steps) {
     await supabase.from('management_events').insert({
       organization_id: orgId,
+      farm_id: prop?.farm_id,
       lot_id: inserted.id,
       step_code: step.code,
       step_name: step.name ?? step.code,
       planned_date: addDays(d0, step.day_offset),
       responsible_name: lot.responsible_name,
       status: 'pendente',
+      event_type: 'lote',
     });
   }
 
