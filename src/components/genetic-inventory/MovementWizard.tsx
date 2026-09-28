@@ -19,7 +19,8 @@ import {
   ArrowRightLeft, 
   AlertCircle, 
   RefreshCw, 
-  Layers 
+  Layers,
+  Lock 
 } from 'lucide-react';
 import { 
   processInbound, 
@@ -49,6 +50,8 @@ interface MovementWizardProps {
   } | null;
   onSuccess: (result?: { action: string; [key: string]: unknown }) => void;
   onClose: () => void;
+  isMainFarm?: boolean;
+  mainFarmName?: string;
 }
 
 export default function MovementWizard({
@@ -62,6 +65,8 @@ export default function MovementWizard({
   prefill,
   onSuccess,
   onClose,
+  isMainFarm = true,
+  mainFarmName = 'Fazenda Principal',
 }: MovementWizardProps) {
   const [activeTab, setActiveTab] = useState<MovementWizardMode>(initialMode);
   const [submitting, setSubmitting] = useState(false);
@@ -171,6 +176,10 @@ export default function MovementWizard({
   // Submeter Entrada
   const handleInboundSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isMainFarm) {
+      setErrorMsg(`Trava de Segurança: Lançamentos de estoque genético só podem ser efetuados na ${mainFarmName}.`);
+      return;
+    }
     setErrorMsg(null);
     const qty = parseInt(inboundQuantity);
     if (!qty || qty <= 0) {
@@ -246,6 +255,10 @@ export default function MovementWizard({
   // Submeter Saída
   const handleOutboundSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isMainFarm) {
+      setErrorMsg(`Trava de Segurança: Lançamentos de estoque genético só podem ser efetuados na ${mainFarmName}.`);
+      return;
+    }
     setErrorMsg(null);
     if (!selectedOutboundBalance) {
       setErrorMsg('Selecione o lote do qual será feita a retirada.');
@@ -288,6 +301,10 @@ export default function MovementWizard({
   // Submeter Transferência
   const handleTransferSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isMainFarm) {
+      setErrorMsg(`Trava de Segurança: Lançamentos de estoque genético só podem ser efetuados na ${mainFarmName}.`);
+      return;
+    }
     setErrorMsg(null);
     if (!selectedTransferBalance) {
       setErrorMsg('Selecione o lote de origem.');
@@ -340,6 +357,10 @@ export default function MovementWizard({
   // Submeter Ajuste / Perda
   const handleAdjSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isMainFarm) {
+      setErrorMsg(`Trava de Segurança: Lançamentos de estoque genético só podem ser efetuados na ${mainFarmName}.`);
+      return;
+    }
     setErrorMsg(null);
     if (!selectedAdjBalance) {
       setErrorMsg('Selecione o lote.');
@@ -463,6 +484,16 @@ export default function MovementWizard({
           <div className="mx-6 mt-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
             <span>{errorMsg}</span>
+          </div>
+        )}
+
+        {/* Lock notification banner */}
+        {!isMainFarm && (
+          <div className="mx-6 mt-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2.5">
+            <Lock className="w-4 h-4 shrink-0 text-amber-400" />
+            <span>
+              <strong>Trava Ativa:</strong> Todos os lançamentos de dados e movimentações de sêmen/embriões são permitidos exclusivamente na <strong>{mainFarmName}</strong>.
+            </span>
           </div>
         )}
 

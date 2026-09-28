@@ -18,7 +18,8 @@ import {
   History, 
   X, 
   Package, 
-  RefreshCw 
+  RefreshCw,
+  Lock 
 } from 'lucide-react';
 import CanisterVisualMap from './CanisterVisualMap';
 import { createTank, recordNitrogenMeasurement, getCanisters, getNitrogenHistory } from '@/lib/services/geneticInventoryService';
@@ -29,6 +30,8 @@ interface TanksViewProps {
   balances: InventoryBalance[];
   onRefresh: () => Promise<void>;
   onStartMovementAction?: (action: 'inbound' | 'outbound' | 'transfer', prefill?: { tankId?: string; canisterId?: string; batchId?: string; balanceId?: string; materialType?: GeneticMaterialType }) => void;
+  isMainFarm?: boolean;
+  mainFarmName?: string;
 }
 
 export default function TanksView({
@@ -37,6 +40,8 @@ export default function TanksView({
   balances,
   onRefresh,
   onStartMovementAction,
+  isMainFarm = true,
+  mainFarmName = 'Fazenda Principal',
 }: TanksViewProps) {
   const [selectedTankForMap, setSelectedTankForMap] = useState<SemenTank | null>(null);
   const [tankCanisters, setTankCanisters] = useState<TankCanister[]>([]);
@@ -79,6 +84,10 @@ export default function TanksView({
 
   const handleCreateTank = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isMainFarm) {
+      alert(`Trava de Segurança: Novos botijões só podem ser cadastrados na ${mainFarmName}.`);
+      return;
+    }
     if (!newTankForm.number || !newTankForm.name) return;
     setCreatingTank(true);
     const res = await createTank(farmId, newTankForm);
@@ -146,10 +155,29 @@ export default function TanksView({
         </div>
 
         <button
-          onClick={() => setShowNewTankModal(true)}
-          className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md self-start sm:self-auto cursor-pointer"
+          onClick={() => {
+            if (!isMainFarm) {
+              alert(`Trava de Segurança: Novos botijões só podem ser cadastrados na ${mainFarmName}.`);
+              return;
+            }
+            setShowNewTankModal(true);
+          }}
+          className={`font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md self-start sm:self-auto cursor-pointer ${
+            !isMainFarm
+              ? 'bg-slate-800 text-amber-300 border border-amber-500/30 hover:bg-slate-700'
+              : 'bg-emerald-600 hover:bg-emerald-500 text-slate-950'
+          }`}
+          title={!isMainFarm ? `Cadastros permitidos somente na ${mainFarmName}` : 'Cadastrar novo botijão'}
         >
-          <Plus className="w-4 h-4" /> Cadastrar Botijão
+          {!isMainFarm ? (
+            <>
+              <Lock className="w-4 h-4 text-amber-400" /> Botijão (Restrito à Matriz)
+            </>
+          ) : (
+            <>
+              <Plus className="w-4 h-4" /> Cadastrar Botijão
+            </>
+          )}
         </button>
       </div>
 
@@ -185,12 +213,32 @@ export default function TanksView({
           <div className="col-span-full py-16 text-center text-slate-400 glass-card rounded-2xl border border-slate-800">
             <Package className="w-12 h-12 mx-auto mb-3 text-slate-600" />
             <p className="text-base font-semibold text-slate-300">Nenhum botijão cadastrado nesta fazenda.</p>
-            <p className="text-xs text-slate-400 mt-1 mb-4">Cadastre o primeiro botijão criogênico para iniciar o controle.</p>
+            <p className="text-xs text-slate-400 mt-1 mb-4">
+              {!isMainFarm 
+                ? `O estoque e botijões estão centralizados na ${mainFarmName}.` 
+                : 'Cadastre o primeiro botijão criogênico para iniciar o controle.'}
+            </p>
             <button
-              onClick={() => setShowNewTankModal(true)}
-              className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs"
+              onClick={() => {
+                if (!isMainFarm) {
+                  alert(`Trava de Segurança: Novos botijões só podem ser cadastrados na ${mainFarmName}.`);
+                  return;
+                }
+                setShowNewTankModal(true);
+              }}
+              className={`font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 mx-auto ${
+                !isMainFarm
+                  ? 'bg-slate-800 text-amber-300 border border-amber-500/30'
+                  : 'bg-emerald-600 hover:bg-emerald-500 text-slate-950'
+              }`}
             >
-              Cadastrar Agora
+              {!isMainFarm ? (
+                <>
+                  <Lock className="w-3.5 h-3.5 text-amber-400" /> Centralizado na Matriz
+                </>
+              ) : (
+                'Cadastrar Agora'
+              )}
             </button>
           </div>
         ) : (

@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import type { GeneticClient, InventoryBalance } from '@/lib/types/genetic-inventory';
-import { User, Plus, Phone, Mail, Package, X, RefreshCw } from 'lucide-react';
+import { User, Plus, Phone, Mail, Package, X, RefreshCw, Lock } from 'lucide-react';
 import { createClientRecord } from '@/lib/services/geneticInventoryService';
 
 interface ClientsViewProps {
@@ -11,6 +11,8 @@ interface ClientsViewProps {
   balances: InventoryBalance[];
   onRefresh: () => Promise<void>;
   onStartActionForClient?: (client: GeneticClient) => void;
+  isMainFarm?: boolean;
+  mainFarmName?: string;
 }
 
 export default function ClientsView({
@@ -19,6 +21,8 @@ export default function ClientsView({
   balances,
   onRefresh,
   onStartActionForClient,
+  isMainFarm = true,
+  mainFarmName = 'Fazenda Principal',
 }: ClientsViewProps) {
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -32,6 +36,10 @@ export default function ClientsView({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isMainFarm) {
+      alert(`Trava de Segurança: Novos clientes sob custódia só podem ser cadastrados na ${mainFarmName}.`);
+      return;
+    }
     if (!form.name.trim()) return;
     setSaving(true);
     const res = await createClientRecord(farmId, form);
@@ -71,10 +79,29 @@ export default function ClientsView({
         </div>
 
         <button
-          onClick={() => setShowModal(true)}
-          className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md self-start sm:self-auto cursor-pointer"
+          onClick={() => {
+            if (!isMainFarm) {
+              alert(`Trava de Segurança: Novos clientes sob custódia só podem ser cadastrados na ${mainFarmName}.`);
+              return;
+            }
+            setShowModal(true);
+          }}
+          className={`font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md self-start sm:self-auto cursor-pointer ${
+            !isMainFarm
+              ? 'bg-slate-800 text-amber-300 border border-amber-500/30 hover:bg-slate-700'
+              : 'bg-amber-500 hover:bg-amber-400 text-slate-950'
+          }`}
+          title={!isMainFarm ? `Cadastros centralizados na ${mainFarmName}` : 'Cadastrar novo cliente'}
         >
-          <Plus className="w-4 h-4" /> Novo Cliente
+          {!isMainFarm ? (
+            <>
+              <Lock className="w-4 h-4 text-amber-400" /> Cliente (Restrito à Matriz)
+            </>
+          ) : (
+            <>
+              <Plus className="w-4 h-4" /> Novo Cliente
+            </>
+          )}
         </button>
       </div>
 
@@ -85,13 +112,31 @@ export default function ClientsView({
             <User className="w-12 h-12 mx-auto mb-3 text-slate-600" />
             <p className="text-base font-semibold text-slate-300">Nenhum cliente cadastrado.</p>
             <p className="text-xs text-slate-400 mt-1 mb-4">
-              Cadastre clientes caso sua fazenda armazene doses de terceiros sob custódia.
+              {!isMainFarm
+                ? `O controle de clientes e doses sob custódia está centralizado na ${mainFarmName}.`
+                : 'Cadastre clientes caso sua fazenda armazene doses de terceiros sob custódia.'}
             </p>
             <button
-              onClick={() => setShowModal(true)}
-              className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs cursor-pointer"
+              onClick={() => {
+                if (!isMainFarm) {
+                  alert(`Trava de Segurança: Novos clientes só podem ser cadastrados na ${mainFarmName}.`);
+                  return;
+                }
+                setShowModal(true);
+              }}
+              className={`font-bold px-4 py-2 rounded-xl text-xs cursor-pointer flex items-center gap-1.5 mx-auto ${
+                !isMainFarm
+                  ? 'bg-slate-800 text-amber-300 border border-amber-500/30'
+                  : 'bg-amber-500 hover:bg-amber-400 text-slate-950'
+              }`}
             >
-              Cadastrar Cliente
+              {!isMainFarm ? (
+                <>
+                  <Lock className="w-3.5 h-3.5 text-amber-400" /> Centralizado na Matriz
+                </>
+              ) : (
+                'Cadastrar Cliente'
+              )}
             </button>
           </div>
         ) : (

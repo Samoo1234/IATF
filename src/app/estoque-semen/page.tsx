@@ -17,7 +17,9 @@ import {
   Building2, 
   RefreshCw, 
   CheckCircle2, 
-  AlertCircle 
+  AlertCircle,
+  Lock,
+  ArrowRight 
 } from 'lucide-react';
 import type { 
   GeneticMaterialType, 
@@ -65,7 +67,11 @@ type ModuleTab =
   | 'reports';
 
 export default function EstoqueSemenPage() {
-  const { activeFarm, activeFarmId } = useActiveFarm();
+  const { farms, activeFarm, activeFarmId, setActiveFarmId } = useActiveFarm();
+
+  // Identificar fazenda principal de sêmen (ex: 'Fazenda Principal Mastercriareproducao')
+  const mainFarm = farms.find((f) => f.name.toLowerCase().includes('principal')) || null;
+  const isMainFarm = !mainFarm || activeFarmId === mainFarm.id;
 
   // Seletor de Modo Sêmen / Embriões com cancelamento de requisições obsoletas
   const [materialType, setMaterialType] = useState<GeneticMaterialType>('SEMEN');
@@ -180,6 +186,10 @@ export default function EstoqueSemenPage() {
       materialType?: GeneticMaterialType 
     }
   ) => {
+    if (!isMainFarm && mainFarm) {
+      showToast(`Lançamentos de sêmen são restritos à ${mainFarm.name}. Alterne a fazenda para realizar movimentações.`, 'error');
+      return;
+    }
     setWizardMode(mode);
     setWizardPrefill(prefill || null);
     setWizardOpen(true);
@@ -293,12 +303,59 @@ export default function EstoqueSemenPage() {
           {/* Botão Principal: Nova Movimentação */}
           <button
             onClick={() => handleOpenWizard('inbound')}
-            className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-black px-4 py-2.5 rounded-2xl text-xs sm:text-sm transition-all flex items-center gap-2 shadow-lg shadow-emerald-600/20 cursor-pointer"
+            className={`font-black px-4 py-2.5 rounded-2xl text-xs sm:text-sm transition-all flex items-center gap-2 shadow-lg cursor-pointer ${
+              !isMainFarm && mainFarm
+                ? 'bg-slate-800 text-amber-300 border border-amber-500/30 hover:bg-slate-700'
+                : 'bg-emerald-600 hover:bg-emerald-500 text-slate-950 shadow-emerald-600/20'
+            }`}
+            title={!isMainFarm && mainFarm ? `Lançamentos permitidos apenas na ${mainFarm.name}` : 'Registrar nova movimentação'}
           >
-            <Plus className="w-4 h-4" /> Nova Movimentação
+            {!isMainFarm && mainFarm ? (
+              <>
+                <Lock className="w-4 h-4 text-amber-400" /> Lançamento Bloqueado
+              </>
+            ) : (
+              <>
+                <Plus className="w-4 h-4" /> Nova Movimentação
+              </>
+            )}
           </button>
         </div>
       </div>
+
+      {/* Banner de Trava de Segurança da Fazenda Principal */}
+      {!isMainFarm && mainFarm && (
+        <div className="bg-amber-500/10 border border-amber-500/30 p-4 sm:p-5 rounded-3xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xl animate-in fade-in duration-300">
+          <div className="flex items-start gap-3.5">
+            <div className="p-2.5 rounded-2xl bg-amber-500/20 text-amber-400 shrink-0 border border-amber-500/30">
+              <Lock className="w-5 h-5" />
+            </div>
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-sm font-bold text-amber-300">
+                  Estoque de Genética Centralizado na Matriz
+                </h3>
+                <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-extrabold uppercase tracking-wider">
+                  Trava Ativa
+                </span>
+              </div>
+              <p className="text-xs text-amber-200/80 leading-relaxed">
+                Por política de controle, todos os dados, botijões e lançamentos de sêmen/embriões são gerenciados exclusivamente na <strong className="text-white font-semibold">{mainFarm.name}</strong>. Nesta fazenda (<span className="text-slate-300">{farmName}</span>), novos lançamentos e movimentações estão bloqueados.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              setActiveFarmId(mainFarm.id);
+              showToast(`Alternado para ${mainFarm.name}`);
+            }}
+            className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-4 py-2.5 rounded-2xl text-xs flex items-center justify-center gap-2 transition-all shrink-0 cursor-pointer shadow-lg shadow-amber-500/20 hover:scale-[1.02] active:scale-[0.98]"
+          >
+            <span>Ir para {mainFarm.name}</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Sub-navegação por Abas do Módulo */}
       <div className="flex border-b border-slate-800 bg-slate-900/60 p-1.5 rounded-2xl gap-1 overflow-x-auto custom-scrollbar text-xs font-semibold select-none">
@@ -427,6 +484,8 @@ export default function EstoqueSemenPage() {
               balances={balances}
               onRefresh={() => loadData(true)}
               onStartMovementAction={(action, prefill) => handleOpenWizard(action, prefill)}
+              isMainFarm={isMainFarm}
+              mainFarmName={mainFarm?.name}
             />
           )}
 
@@ -455,6 +514,8 @@ export default function EstoqueSemenPage() {
               clients={clients}
               balances={balances}
               onRefresh={() => loadData(true)}
+              isMainFarm={isMainFarm}
+              mainFarmName={mainFarm?.name}
             />
           )}
 
@@ -499,6 +560,8 @@ export default function EstoqueSemenPage() {
           prefill={wizardPrefill || undefined}
           onSuccess={handleWizardSuccess}
           onClose={() => setWizardOpen(false)}
+          isMainFarm={isMainFarm}
+          mainFarmName={mainFarm?.name}
         />
       )}
 

@@ -251,6 +251,40 @@ export async function getTanks(farmId: string, forceRefresh = false): Promise<Se
   return result;
 }
 
+/**
+ * Validação de Trava de Centralização:
+ * Se a organização possuir uma Fazenda Principal cadastrada (ex: Fazenda Principal Mastercriareproducao),
+ * impede lançamentos, entradas e criação de botijões em outras fazendas.
+ */
+async function validateMainFarmSemenLock(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  orgId: string,
+  farmId: string
+): Promise<{ allowed: boolean; mainFarmName?: string; error?: string }> {
+  try {
+    const { data: mainFarm } = await supabase
+      .from('farms')
+      .select('id, name')
+      .eq('organization_id', orgId)
+      .ilike('name', '%principal%')
+      .limit(1)
+      .maybeSingle();
+
+    if (mainFarm && mainFarm.id !== farmId) {
+      return {
+        allowed: false,
+        mainFarmName: mainFarm.name,
+        error: `Trava de Segurança: Lançamentos de estoque genético (sêmen/embriões) são permitidos exclusivamente na ${mainFarm.name}. Alterne para a fazenda principal para prosseguir.`
+      };
+    }
+  } catch (err) {
+    console.error('Error validating main farm semen lock:', err);
+  }
+
+  return { allowed: true };
+}
+
 export async function createTank(
   farmId: string,
   tank: {
@@ -271,6 +305,13 @@ export async function createTank(
   if (!orgId || !farmId) return { success: false, error: 'Fazenda não identificada.' };
 
   const supabase = createClient();
+
+  // Trava de segurança: somente na fazenda principal
+  const lock = await validateMainFarmSemenLock(supabase, orgId, farmId);
+  if (!lock.allowed) {
+    return { success: false, error: lock.error };
+  }
+
   const { data, error } = await supabase
     .from('semen_tanks')
     .insert({
@@ -377,6 +418,13 @@ export async function recordNitrogenMeasurement(
   if (!orgId || !farmId) return { success: false, error: 'Fazenda não identificada.' };
 
   const supabase = createClient();
+
+  // Trava de segurança: lançamentos permitidos exclusivamente na fazenda principal
+  const lock = await validateMainFarmSemenLock(supabase, orgId, farmId);
+  if (!lock.allowed) {
+    return { success: false, error: lock.error };
+  }
+
   const { error } = await supabase.rpc('fn_record_nitrogen_measurement', {
     p_organization_id: orgId,
     p_farm_id: farmId,
@@ -600,6 +648,12 @@ export async function processInbound(
 
   const supabase = createClient();
 
+  // Trava de segurança: somente na fazenda principal
+  const lock = await validateMainFarmSemenLock(supabase, orgId, farmId);
+  if (!lock.allowed) {
+    return { success: false, error: lock.error };
+  }
+
   let targetBatchId = payload.batchId;
 
   // Se for cadastro simultâneo de novo material + lote
@@ -711,6 +765,13 @@ export async function processOutbound(
   if (!orgId || !farmId) return { success: false, error: 'Fazenda não identificada.' };
 
   const supabase = createClient();
+
+  // Trava de segurança: lançamentos permitidos exclusivamente na fazenda principal
+  const lock = await validateMainFarmSemenLock(supabase, orgId, farmId);
+  if (!lock.allowed) {
+    return { success: false, error: lock.error };
+  }
+
   const { data: res, error } = await supabase.rpc('fn_process_genetic_outbound', {
     p_organization_id: orgId,
     p_farm_id: farmId,
@@ -752,6 +813,13 @@ export async function processTransfer(
   if (!orgId || !farmId) return { success: false, error: 'Fazenda não identificada.' };
 
   const supabase = createClient();
+
+  // Trava de segurança: somente na fazenda principal
+  const lock = await validateMainFarmSemenLock(supabase, orgId, farmId);
+  if (!lock.allowed) {
+    return { success: false, error: lock.error };
+  }
+
   const { data: transferGroupId, error } = await supabase.rpc('fn_process_genetic_transfer', {
     p_organization_id: orgId,
     p_farm_id: farmId,
@@ -787,6 +855,13 @@ export async function processAdjustment(
   if (!orgId || !farmId) return { success: false, error: 'Fazenda não identificada.' };
 
   const supabase = createClient();
+
+  // Trava de segurança: somente na fazenda principal
+  const lock = await validateMainFarmSemenLock(supabase, orgId, farmId);
+  if (!lock.allowed) {
+    return { success: false, error: lock.error };
+  }
+
   const { error } = await supabase.rpc('fn_process_genetic_adjustment', {
     p_organization_id: orgId,
     p_farm_id: farmId,
@@ -978,6 +1053,13 @@ export async function createClientRecord(
   if (!orgId || !farmId) return { success: false, error: 'Fazenda não identificada.' };
 
   const supabase = createClient();
+
+  // Trava de segurança: somente na fazenda principal
+  const lock = await validateMainFarmSemenLock(supabase, orgId, farmId);
+  if (!lock.allowed) {
+    return { success: false, error: lock.error };
+  }
+
   const { data, error } = await supabase
     .from('genetic_clients')
     .insert({
