@@ -93,19 +93,19 @@ html.light .glass-card {
 }
 
 /* Exceções: botões e badges sólidos coloridos devem manter texto e ícones brancos */
-html:not(.dark) button[class*="bg-emerald-6"],
-html:not(.dark) a[class*="bg-emerald-6"],
-html:not(.dark) button[class*="bg-rose-"],
-html:not(.dark) button[class*="bg-red-"],
-html:not(.dark) button[class*="bg-blue-"],
-html:not(.dark) button[class*="bg-indigo-"],
+html:not(.dark) button[class*="bg-emerald-6"]:not([class*="text-emerald"]):not([class*="text-rose"]):not([class*="text-slate"]):not([class*="text-amber"]):not([class*="text-blue"]):not([class*="text-red"]),
+html:not(.dark) a[class*="bg-emerald-6"]:not([class*="text-emerald"]):not([class*="text-rose"]):not([class*="text-slate"]):not([class*="text-amber"]):not([class*="text-blue"]):not([class*="text-red"]),
+html:not(.dark) button[class*="bg-rose-6"]:not([class*="text-rose"]):not([class*="text-slate"]),
+html:not(.dark) button[class*="bg-red-6"]:not([class*="text-red"]):not([class*="text-slate"]),
+html:not(.dark) button[class*="bg-blue-6"]:not([class*="text-blue"]):not([class*="text-slate"]),
+html:not(.dark) button[class*="bg-indigo-6"]:not([class*="text-indigo"]):not([class*="text-slate"]),
 html:not(.dark) .keep-white,
-html.light button[class*="bg-emerald-6"],
-html.light a[class*="bg-emerald-6"],
-html.light button[class*="bg-rose-"],
-html.light button[class*="bg-red-"],
-html.light button[class*="bg-blue-"],
-html.light button[class*="bg-indigo-"],
+html.light button[class*="bg-emerald-6"]:not([class*="text-emerald"]):not([class*="text-rose"]):not([class*="text-slate"]):not([class*="text-amber"]):not([class*="text-blue"]):not([class*="text-red"]),
+html.light a[class*="bg-emerald-6"]:not([class*="text-emerald"]):not([class*="text-rose"]):not([class*="text-slate"]):not([class*="text-amber"]):not([class*="text-blue"]):not([class*="text-red"]),
+html.light button[class*="bg-rose-6"]:not([class*="text-rose"]):not([class*="text-slate"]),
+html.light button[class*="bg-red-6"]:not([class*="text-red"]):not([class*="text-slate"]),
+html.light button[class*="bg-blue-6"]:not([class*="text-blue"]):not([class*="text-slate"]),
+html.light button[class*="bg-indigo-6"]:not([class*="text-indigo"]):not([class*="text-slate"]),
 html.light .keep-white {
   --color-white: #ffffff !important;
   color: #ffffff !important;

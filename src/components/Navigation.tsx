@@ -215,7 +215,7 @@ export default function Navigation() {
                   {userEmail ? (
                     <button
                       onClick={handleLogout}
-                      className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 border border-rose-900/30 transition-colors font-semibold"
+                      className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 bg-rose-500/10 dark:bg-transparent hover:bg-rose-500/15 dark:hover:bg-rose-950/40 border border-rose-500/20 dark:border-rose-900/30 transition-colors font-semibold cursor-pointer"
                     >
                       <span className="flex items-center gap-2">
                         <LogOut className="w-3.5 h-3.5" /> Sair da Conta
