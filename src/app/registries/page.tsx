@@ -2,14 +2,15 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { 
-  getBulls, createBull, 
+  getBulls, createBull, updateBull, deleteBull,
+  getGeneticCenters, createGeneticCenter, updateGeneticCenter, deleteGeneticCenter,
   getFarms, createFarm, updateFarm, deleteFarm, createProperty, updateProperty, deleteProperty, freezeFarm, unfreezeFarm,
   getBreeds, createBreed, 
   getAnimalCategories, createAnimalCategory,
   getAnimals, createAnimal,
   createReproductiveSeason, updateReproductiveSeason, deleteReproductiveSeason,
   getVeterinarians, createVeterinarian, updateVeterinarian, deleteVeterinarian, setDefaultVeterinarian,
-  type Bull, type Farm, type Property, type Breed, type AnimalCategory, type Animal, type ReproductiveSeason, type Veterinarian
+  type Bull, type GeneticCenter, type Farm, type Property, type Breed, type AnimalCategory, type Animal, type ReproductiveSeason, type Veterinarian
 } from '@/lib/db';
 import { 
   FolderTree, Plus, RefreshCw, X,
@@ -57,9 +58,19 @@ export default function RegistriesPage() {
   // Data states
   const [animals, setAnimals] = useState<Animal[]>([]);
   const [bulls, setBulls] = useState<Bull[]>([]);
+  const [centers, setCenters] = useState<GeneticCenter[]>([]);
   const [farms, setFarms] = useState<Farm[]>([]);
   const [breeds, setBreeds] = useState<Breed[]>([]);
   const [categories, setCategories] = useState<AnimalCategory[]>([]);
+
+  // Sub-tab and filters for Bulls & Centrais
+  const [bullsSubTab, setBullsSubTab] = useState<'bulls' | 'centers'>('bulls');
+  const [bullSearchQuery, setBullSearchQuery] = useState('');
+  const [bullBreedFilter, setBullBreedFilter] = useState('');
+  const [bullStatusFilter, setBullStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
+
+  const [centerSearchQuery, setCenterSearchQuery] = useState('');
+  const [centerStatusFilter, setCenterStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
   // Animal Management Modal State
   const [mgmtAnimal, setMgmtAnimal] = useState<{ id: string; tag_number: string; farm_id: string } | null>(null);
@@ -77,6 +88,9 @@ export default function RegistriesPage() {
   // Modal states
   const [showAnimalModal, setShowAnimalModal] = useState(false);
   const [showBullModal, setShowBullModal] = useState(false);
+  const [editingBullId, setEditingBullId] = useState<string | null>(null);
+  const [showCenterModal, setShowCenterModal] = useState(false);
+  const [editingCenterId, setEditingCenterId] = useState<string | null>(null);
   const [showFarmModal, setShowFarmModal] = useState(false);
   const [editingFarmId, setEditingFarmId] = useState<string | null>(null);
   const [showPropertyModal, setShowPropertyModal] = useState(false);
@@ -103,6 +117,16 @@ export default function RegistriesPage() {
     owner_central: '',
     registration_number: '',
     breed_id: '',
+    status: 'active' as 'active' | 'inactive',
+  });
+
+  const [centerForm, setCenterForm] = useState({
+    name: '',
+    short_name: '',
+    document_number: '',
+    contact_phone: '',
+    contact_email: '',
+    active: true,
   });
 
   const [farmForm, setFarmForm] = useState({
@@ -124,13 +148,14 @@ export default function RegistriesPage() {
 
   const loadAllData = useCallback(async () => {
     setLoading(true);
-    const [a, b, f, br, c, v] = await Promise.all([
+    const [a, b, f, br, c, v, gc] = await Promise.all([
       getAnimals(100, false, activeFarmId || undefined),
-      getBulls(),
+      getBulls(true),
       getFarms(true, true),
       getBreeds(),
       getAnimalCategories(),
       getVeterinarians(),
+      getGeneticCenters(true),
     ]);
     setAnimals(a);
     setBulls(b);
@@ -138,6 +163,7 @@ export default function RegistriesPage() {
     setBreeds(br);
     setCategories(c);
     setVeterinarians(v);
+    setCenters(gc);
 
     const defaultVet = v.find((vet) => vet.is_default);
     if (defaultVet && !farmForm.technical_responsible) {
@@ -211,22 +237,227 @@ export default function RegistriesPage() {
     }
   };
 
-  const handleCreateBull = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!bullForm.name) return;
-    setSaving(true);
-    const ok = await createBull({
-      name: bullForm.name,
-      code: bullForm.code || undefined,
-      owner_central: bullForm.owner_central || undefined,
-      registration_number: bullForm.registration_number || undefined,
-      breed_id: bullForm.breed_id || undefined,
+  // Bull Handlers
+  const handleOpenCreateBull = () => {
+    setEditingBullId(null);
+    setBullForm({
+      name: '',
+      code: '',
+      owner_central: '',
+      registration_number: '',
+      breed_id: '',
+      status: 'active',
     });
+    setShowBullModal(true);
+  };
+
+  const handleOpenEditBull = (b: Bull) => {
+    setEditingBullId(b.id);
+    setBullForm({
+      name: b.name,
+      code: b.code || '',
+      owner_central: b.owner_central || '',
+      registration_number: b.registration_number || '',
+      breed_id: b.breed_id || '',
+      status: (b.status === 'inactive' ? 'inactive' : 'active') as 'active' | 'inactive',
+    });
+    setShowBullModal(true);
+  };
+
+  const handleSaveBull = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bullForm.name.trim()) {
+      setFeedbackMsg({ type: 'error', text: 'Preencha o nome do touro reprodutor.' });
+      return;
+    }
+
+    setSaving(true);
+    let success = false;
+    let errorText = '';
+
+    if (editingBullId) {
+      const res = await updateBull(editingBullId, {
+        name: bullForm.name.trim(),
+        code: bullForm.code.trim() || null,
+        owner_central: bullForm.owner_central.trim() || null,
+        registration_number: bullForm.registration_number.trim() || null,
+        breed_id: bullForm.breed_id || null,
+        status: bullForm.status,
+      });
+      success = res.success;
+      errorText = res.error || 'Erro ao atualizar touro.';
+    } else {
+      const res = await createBull({
+        name: bullForm.name.trim(),
+        code: bullForm.code.trim() || undefined,
+        owner_central: bullForm.owner_central.trim() || undefined,
+        registration_number: bullForm.registration_number.trim() || undefined,
+        breed_id: bullForm.breed_id || undefined,
+        status: bullForm.status,
+      });
+      success = res.success;
+      errorText = res.error || 'Erro ao cadastrar touro.';
+    }
     setSaving(false);
-    if (ok) {
+
+    if (success) {
+      setFeedbackMsg({
+        type: 'success',
+        text: editingBullId ? `Touro "${bullForm.name}" atualizado com sucesso!` : `Touro "${bullForm.name}" cadastrado com sucesso!`,
+      });
       setShowBullModal(false);
-      setBullForm({ name: '', code: '', owner_central: '', registration_number: '', breed_id: '' });
+      setEditingBullId(null);
+      setBullForm({ name: '', code: '', owner_central: '', registration_number: '', breed_id: '', status: 'active' });
       await loadAllData();
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: errorText });
+    }
+  };
+
+  const handleDeleteBull = async (b: Bull) => {
+    if (!confirm(`Deseja realmente excluir o touro "${b.name}"?`)) return;
+
+    setSaving(true);
+    const res = await deleteBull(b.id);
+    setSaving(false);
+
+    if (res.success) {
+      setFeedbackMsg({ type: 'success', text: `Touro "${b.name}" excluído com sucesso!` });
+      await loadAllData();
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao excluir touro.' });
+    }
+  };
+
+  const handleToggleBullStatus = async (b: Bull) => {
+    const newStatus = b.status === 'inactive' ? 'active' : 'inactive';
+    setSaving(true);
+    const res = await updateBull(b.id, { status: newStatus });
+    setSaving(false);
+
+    if (res.success) {
+      setFeedbackMsg({
+        type: 'success',
+        text: `Touro "${b.name}" ${newStatus === 'active' ? 'ativado' : 'inativado'} com sucesso!`,
+      });
+      await loadAllData();
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao alterar status do touro.' });
+    }
+  };
+
+  // Genetic Centers Handlers
+  const handleOpenCreateCenter = () => {
+    setEditingCenterId(null);
+    setCenterForm({
+      name: '',
+      short_name: '',
+      document_number: '',
+      contact_phone: '',
+      contact_email: '',
+      active: true,
+    });
+    setShowCenterModal(true);
+  };
+
+  const handleOpenEditCenter = (c: GeneticCenter) => {
+    setEditingCenterId(c.id);
+    setCenterForm({
+      name: c.name,
+      short_name: c.short_name || '',
+      document_number: c.document_number || '',
+      contact_phone: c.contact_phone || '',
+      contact_email: c.contact_email || '',
+      active: c.active,
+    });
+    setShowCenterModal(true);
+  };
+
+  const handleSaveCenter = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!centerForm.name.trim()) {
+      setFeedbackMsg({ type: 'error', text: 'Preencha o nome da central de inseminação.' });
+      return;
+    }
+
+    setSaving(true);
+    let success = false;
+    let errorText = '';
+
+    if (editingCenterId) {
+      const res = await updateGeneticCenter(editingCenterId, {
+        name: centerForm.name.trim(),
+        short_name: centerForm.short_name.trim() || null,
+        document_number: centerForm.document_number.trim() || null,
+        contact_phone: centerForm.contact_phone.trim() || null,
+        contact_email: centerForm.contact_email.trim() || null,
+        active: centerForm.active,
+      });
+      success = res.success;
+      errorText = res.error || 'Erro ao atualizar central.';
+    } else {
+      const res = await createGeneticCenter({
+        name: centerForm.name.trim(),
+        short_name: centerForm.short_name.trim() || null,
+        document_number: centerForm.document_number.trim() || null,
+        contact_phone: centerForm.contact_phone.trim() || null,
+        contact_email: centerForm.contact_email.trim() || null,
+        active: centerForm.active,
+      });
+      success = res.success;
+      errorText = res.error || 'Erro ao cadastrar central.';
+    }
+    setSaving(false);
+
+    if (success) {
+      setFeedbackMsg({
+        type: 'success',
+        text: editingCenterId ? `Central "${centerForm.name}" atualizada com sucesso!` : `Central "${centerForm.name}" cadastrada com sucesso!`,
+      });
+      setShowCenterModal(false);
+      setEditingCenterId(null);
+      setCenterForm({ name: '', short_name: '', document_number: '', contact_phone: '', contact_email: '', active: true });
+      await loadAllData();
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: errorText });
+    }
+  };
+
+  const handleDeleteCenter = async (c: GeneticCenter) => {
+    if (!confirm(`Deseja realmente excluir a central "${c.name}"?`)) return;
+
+    setSaving(true);
+    const res = await deleteGeneticCenter(c.id);
+    setSaving(false);
+
+    if (res.success) {
+      setFeedbackMsg({ type: 'success', text: `Central "${c.name}" excluída com sucesso!` });
+      await loadAllData();
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao excluir central.' });
+    }
+  };
+
+  const handleToggleCenterStatus = async (c: GeneticCenter) => {
+    const newActive = !c.active;
+    setSaving(true);
+    const res = await updateGeneticCenter(c.id, { active: newActive });
+    setSaving(false);
+
+    if (res.success) {
+      setFeedbackMsg({
+        type: 'success',
+        text: `Central "${c.name}" ${newActive ? 'ativada' : 'inativada'} com sucesso!`,
+      });
+      await loadAllData();
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao alterar status da central.' });
     }
   };
 
@@ -625,6 +856,39 @@ export default function RegistriesPage() {
     return true;
   });
 
+  const filteredBulls = bulls.filter((b) => {
+    if (bullStatusFilter === 'active' && b.status === 'inactive') return false;
+    if (bullStatusFilter === 'inactive' && b.status !== 'inactive') return false;
+    if (bullBreedFilter && b.breed_id !== bullBreedFilter) return false;
+
+    if (bullSearchQuery.trim()) {
+      const q = bullSearchQuery.toLowerCase();
+      const matchName = b.name?.toLowerCase().includes(q) ?? false;
+      const matchCode = b.code?.toLowerCase().includes(q) ?? false;
+      const matchRgd = b.registration_number?.toLowerCase().includes(q) ?? false;
+      const matchCentral = b.owner_central?.toLowerCase().includes(q) ?? false;
+      const matchBreed = b.breeds?.name?.toLowerCase().includes(q) ?? false;
+      return matchName || matchCode || matchRgd || matchCentral || matchBreed;
+    }
+    return true;
+  });
+
+  const filteredCenters = centers.filter((c) => {
+    if (centerStatusFilter === 'active' && !c.active) return false;
+    if (centerStatusFilter === 'inactive' && c.active) return false;
+
+    if (centerSearchQuery.trim()) {
+      const q = centerSearchQuery.toLowerCase();
+      const matchName = c.name?.toLowerCase().includes(q) ?? false;
+      const matchShort = c.short_name?.toLowerCase().includes(q) ?? false;
+      const matchDoc = c.document_number?.toLowerCase().includes(q) ?? false;
+      const matchPhone = c.contact_phone?.toLowerCase().includes(q) ?? false;
+      const matchEmail = c.contact_email?.toLowerCase().includes(q) ?? false;
+      return matchName || matchShort || matchDoc || matchPhone || matchEmail;
+    }
+    return true;
+  });
+
   return (
     <div className="space-y-6">
       {/* Toast Feedback */}
@@ -653,7 +917,7 @@ export default function RegistriesPage() {
             Cadastros Gerais do Sistema
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Gerenciamento de matrizes (vacas), touros reprodutores, fazendas, retiros, raças e categorias bovinas.
+            Gerenciamento de matrizes (vacas), touros reprodutores, centrais de inseminação, fazendas, retiros, raças e categorias bovinas.
           </p>
         </div>
 
@@ -667,12 +931,20 @@ export default function RegistriesPage() {
             </button>
           )}
           {activeTab === 'bulls' && (
-            <button
-              onClick={() => setShowBullModal(true)}
-              className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
-            >
-              <Plus className="w-4 h-4" /> Novo Touro
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleOpenCreateBull}
+                className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20 cursor-pointer"
+              >
+                <Plus className="w-4 h-4" /> Novo Touro
+              </button>
+              <button
+                onClick={handleOpenCreateCenter}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium px-4 py-2 rounded-xl border border-slate-700 text-xs sm:text-sm transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <Plus className="w-4 h-4" /> Nova Central
+              </button>
+            </div>
           )}
           {activeTab === 'farms' && (
             <div className="flex gap-2">
@@ -768,7 +1040,7 @@ export default function RegistriesPage() {
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Award className="w-4 h-4" /> Touros & Centrais ({bulls.length})
+          <Award className="w-4 h-4" /> Touros & Centrais ({bulls.length + centers.length})
         </button>
         <button
           onClick={() => setActiveTab('breeds')}
@@ -882,46 +1154,403 @@ export default function RegistriesPage() {
           </div>
         </div>
       ) : activeTab === 'bulls' ? (
-        /* ===== TAB: TOUROS ===== */
-        <div className="glass-card p-6 rounded-2xl border border-slate-800 space-y-4">
-          <h2 className="text-base font-bold text-white flex items-center gap-2">
-            <Award className="w-4 h-4 text-emerald-400" /> Reprodutores & Touros Cadastrados
-          </h2>
+        /* ===== TAB: TOUROS & CENTRAIS ===== */
+        <div className="space-y-4">
+          {/* Sub-navegação interna entre Touros e Centrais */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/60 p-3 rounded-2xl border border-slate-800">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setBullsSubTab('bulls')}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                  bullsSubTab === 'bulls'
+                    ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <Award className="w-4 h-4" />
+                Touros Reprodutores ({bulls.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setBullsSubTab('centers')}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                  bullsSubTab === 'centers'
+                    ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <Building2 className="w-4 h-4" />
+                Centrais de Inseminação & Genética ({centers.length})
+              </button>
+            </div>
 
-          <div className="overflow-x-auto rounded-xl border border-slate-800">
-            <table className="w-full text-left text-xs text-slate-300">
-              <thead className="bg-slate-950 text-slate-400 uppercase tracking-wider text-[10px]">
-                <tr>
-                  <th className="p-3">Nome do Touro</th>
-                  <th className="p-3">Código</th>
-                  <th className="p-3">Central de Inseminação</th>
-                  <th className="p-3">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/80 bg-slate-900/60">
-                {bulls.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="p-8 text-center text-slate-500">
-                      Nenhum touro cadastrado no banco de dados.
-                    </td>
-                  </tr>
-                ) : (
-                  bulls.map((b) => (
-                    <tr key={b.id} className="hover:bg-slate-800/50 transition-colors">
-                      <td className="p-3 font-bold text-white">{b.name}</td>
-                      <td className="p-3 font-mono text-emerald-400">{b.code || '-'}</td>
-                      <td className="p-3 text-slate-400">{b.owner_central || '-'}</td>
-                      <td className="p-3">
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                          {b.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+            <div>
+              {bullsSubTab === 'bulls' ? (
+                <button
+                  onClick={handleOpenCreateBull}
+                  className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-3.5 py-2 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-500/20 cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" /> Novo Touro
+                </button>
+              ) : (
+                <button
+                  onClick={handleOpenCreateCenter}
+                  className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-3.5 py-2 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-500/20 cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" /> Nova Central
+                </button>
+              )}
+            </div>
           </div>
+
+          {bullsSubTab === 'bulls' ? (
+            /* Sub-tab 1: Touros */
+            <div className="glass-card p-6 rounded-2xl border border-slate-800 space-y-4">
+              {/* Barra de Filtros e Busca de Touros */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2 flex-1">
+                  {/* Busca */}
+                  <div className="relative min-w-[220px] flex-1 max-w-sm">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
+                    <input
+                      type="text"
+                      placeholder="Buscar por nome, código, central, raça..."
+                      value={bullSearchQuery}
+                      onChange={(e) => setBullSearchQuery(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 text-xs text-slate-200 pl-8 pr-7 py-2 rounded-xl focus:outline-none focus:border-emerald-500 placeholder:text-slate-600"
+                    />
+                    {bullSearchQuery && (
+                      <button
+                        onClick={() => setBullSearchQuery('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Filtro por Raça */}
+                  <select
+                    value={bullBreedFilter}
+                    onChange={(e) => setBullBreedFilter(e.target.value)}
+                    className="bg-slate-950 border border-slate-800 text-xs text-slate-200 px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="">Todas as Raças</option>
+                    {breeds.map((br) => (
+                      <option key={br.id} value={br.id}>{br.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Filtro de Status */}
+                <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setBullStatusFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      bullStatusFilter === 'all'
+                        ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Todos ({bulls.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBullStatusFilter('active')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      bullStatusFilter === 'active'
+                        ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Ativos ({bulls.filter((b) => b.status !== 'inactive').length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBullStatusFilter('inactive')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      bullStatusFilter === 'inactive'
+                        ? 'bg-amber-500 text-slate-950 shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Inativos ({bulls.filter((b) => b.status === 'inactive').length})
+                  </button>
+                </div>
+              </div>
+
+              {/* Tabela de Touros */}
+              <div className="overflow-x-auto rounded-xl border border-slate-800">
+                <table className="w-full text-left text-xs text-slate-300">
+                  <thead className="bg-slate-950 text-slate-400 uppercase tracking-wider text-[10px]">
+                    <tr>
+                      <th className="p-3">Touro / Reprodutor</th>
+                      <th className="p-3">Código / Sigla</th>
+                      <th className="p-3">RGD / Registro</th>
+                      <th className="p-3">Raça</th>
+                      <th className="p-3">Central Fornecedora</th>
+                      <th className="p-3">Status</th>
+                      <th className="p-3 text-right">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80 bg-slate-900/60">
+                    {filteredBulls.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="p-8 text-center text-slate-500">
+                          {bulls.length === 0
+                            ? 'Nenhum touro cadastrado no banco de dados.'
+                            : 'Nenhum touro encontrado com os filtros aplicados.'}
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredBulls.map((b) => (
+                        <tr key={b.id} className="hover:bg-slate-800/50 transition-colors">
+                          <td className="p-3">
+                            <div className="font-bold text-white text-sm">{b.name}</div>
+                          </td>
+                          <td className="p-3">
+                            {b.code ? (
+                              <span className="font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                                {b.code}
+                              </span>
+                            ) : (
+                              <span className="text-slate-600">-</span>
+                            )}
+                          </td>
+                          <td className="p-3 font-mono text-slate-400">
+                            {b.registration_number || '-'}
+                          </td>
+                          <td className="p-3">
+                            {b.breeds?.name ? (
+                              <span className="inline-flex items-center gap-1.5 text-slate-300 font-medium">
+                                <Dna className="w-3.5 h-3.5 text-cyan-400" />
+                                {b.breeds.name}
+                              </span>
+                            ) : (
+                              <span className="text-slate-600">Não informada</span>
+                            )}
+                          </td>
+                          <td className="p-3">
+                            {b.owner_central ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-800 text-slate-200 border border-slate-700">
+                                <Building2 className="w-3 h-3 text-emerald-400" />
+                                {b.owner_central}
+                              </span>
+                            ) : (
+                              <span className="text-slate-600">-</span>
+                            )}
+                          </td>
+                          <td className="p-3">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleBullStatus(b)}
+                              title="Clique para alternar status"
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border transition-all cursor-pointer ${
+                                b.status === 'inactive'
+                                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/20 hover:bg-amber-500/20'
+                                  : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
+                              }`}
+                            >
+                              {b.status === 'inactive' ? 'Inativo' : 'Ativo'}
+                            </button>
+                          </td>
+                          <td className="p-3 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditBull(b)}
+                                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all cursor-pointer"
+                                title="Editar Touro"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteBull(b)}
+                                className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 transition-all cursor-pointer"
+                                title="Excluir Touro"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            /* Sub-tab 2: Centrais de Inseminação & Genética */
+            <div className="glass-card p-6 rounded-2xl border border-slate-800 space-y-4">
+              {/* Barra de Filtros e Busca de Centrais */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="relative min-w-[220px] flex-1 max-w-sm">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
+                  <input
+                    type="text"
+                    placeholder="Buscar por nome da central, sigla, CNPJ..."
+                    value={centerSearchQuery}
+                    onChange={(e) => setCenterSearchQuery(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 text-xs text-slate-200 pl-8 pr-7 py-2 rounded-xl focus:outline-none focus:border-emerald-500 placeholder:text-slate-600"
+                  />
+                  {centerSearchQuery && (
+                    <button
+                      onClick={() => setCenterSearchQuery('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Filtro de Status das Centrais */}
+                <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setCenterStatusFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      centerStatusFilter === 'all'
+                        ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Todas ({centers.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCenterStatusFilter('active')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      centerStatusFilter === 'active'
+                        ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Ativas ({centers.filter((c) => c.active).length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCenterStatusFilter('inactive')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      centerStatusFilter === 'inactive'
+                        ? 'bg-amber-500 text-slate-950 shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Inativas ({centers.filter((c) => !c.active).length})
+                  </button>
+                </div>
+              </div>
+
+              {/* Tabela de Centrais */}
+              <div className="overflow-x-auto rounded-xl border border-slate-800">
+                <table className="w-full text-left text-xs text-slate-300">
+                  <thead className="bg-slate-950 text-slate-400 uppercase tracking-wider text-[10px]">
+                    <tr>
+                      <th className="p-3">Central de Inseminação</th>
+                      <th className="p-3">Sigla / Nome Curto</th>
+                      <th className="p-3">CNPJ / Documento</th>
+                      <th className="p-3">Contato & Telefone</th>
+                      <th className="p-3">E-mail</th>
+                      <th className="p-3">Status</th>
+                      <th className="p-3 text-right">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80 bg-slate-900/60">
+                    {filteredCenters.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="p-8 text-center text-slate-500">
+                          {centers.length === 0
+                            ? 'Nenhuma central de inseminação cadastrada.'
+                            : 'Nenhuma central encontrada com os filtros aplicados.'}
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredCenters.map((c) => (
+                        <tr key={c.id} className="hover:bg-slate-800/50 transition-colors">
+                          <td className="p-3">
+                            <div className="font-bold text-white text-sm flex items-center gap-2">
+                              <Building2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                              {c.name}
+                            </div>
+                          </td>
+                          <td className="p-3">
+                            {c.short_name ? (
+                              <span className="font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 font-semibold">
+                                {c.short_name}
+                              </span>
+                            ) : (
+                              <span className="text-slate-600">-</span>
+                            )}
+                          </td>
+                          <td className="p-3 font-mono text-slate-400">
+                            {c.document_number || '-'}
+                          </td>
+                          <td className="p-3">
+                            {c.contact_phone ? (
+                              <span className="inline-flex items-center gap-1.5 text-slate-300">
+                                <Phone className="w-3.5 h-3.5 text-emerald-400" />
+                                {c.contact_phone}
+                              </span>
+                            ) : (
+                              <span className="text-slate-600">-</span>
+                            )}
+                          </td>
+                          <td className="p-3">
+                            {c.contact_email ? (
+                              <span className="inline-flex items-center gap-1.5 text-slate-300">
+                                <Mail className="w-3.5 h-3.5 text-sky-400" />
+                                {c.contact_email}
+                              </span>
+                            ) : (
+                              <span className="text-slate-600">-</span>
+                            )}
+                          </td>
+                          <td className="p-3">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleCenterStatus(c)}
+                              title="Clique para alternar status"
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border transition-all cursor-pointer ${
+                                !c.active
+                                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/20 hover:bg-amber-500/20'
+                                  : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
+                              }`}
+                            >
+                              {c.active ? 'Ativa' : 'Inativa'}
+                            </button>
+                          </td>
+                          <td className="p-3 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditCenter(c)}
+                                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all cursor-pointer"
+                                title="Editar Central"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteCenter(c)}
+                                className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 transition-all cursor-pointer"
+                                title="Excluir Central"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       ) : activeTab === 'farms' ? (
         /* ===== TAB: FAZENDAS & RETIROS ===== */
@@ -1651,20 +2280,27 @@ export default function RegistriesPage() {
         </div>
       )}
 
-      {/* ===== MODAL NOVO TOURO ===== */}
+      {/* ===== MODAL TOURO (CRIAR & EDITAR) ===== */}
       {showBullModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="glass-card w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 space-y-5">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                <Award className="w-5 h-5 text-emerald-400" /> Cadastrar Novo Touro
+                <Award className="w-5 h-5 text-emerald-400" />
+                {editingBullId ? 'Editar Touro Reprodutor' : 'Cadastrar Novo Touro'}
               </h3>
-              <button onClick={() => setShowBullModal(false)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white">
+              <button
+                onClick={() => {
+                  setShowBullModal(false);
+                  setEditingBullId(null);
+                }}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateBull} className="space-y-4">
+            <form onSubmit={handleSaveBull} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-400 mb-1.5">Nome do Touro / Reprodutor *</label>
                 <input
@@ -1689,44 +2325,203 @@ export default function RegistriesPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Central / Fornecedor</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">RGD / Registro</label>
                   <input
                     type="text"
-                    placeholder="Ex: ALTA GENETICS, ABS"
-                    value={bullForm.owner_central}
-                    onChange={(e) => setBullForm((f) => ({ ...f, owner_central: e.target.value }))}
+                    placeholder="Ex: 123456-ABC"
+                    value={bullForm.registration_number}
+                    onChange={(e) => setBullForm((f) => ({ ...f, registration_number: e.target.value }))}
                     className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
                   />
                 </div>
               </div>
 
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Raça</label>
+                  <select
+                    value={bullForm.breed_id}
+                    onChange={(e) => setBullForm((f) => ({ ...f, breed_id: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="">Selecione a raça...</option>
+                    {breeds.map((b) => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Status</label>
+                  <select
+                    value={bullForm.status}
+                    onChange={(e) => setBullForm((f) => ({ ...f, status: e.target.value as 'active' | 'inactive' }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="active">Ativo</option>
+                    <option value="inactive">Inativo</option>
+                  </select>
+                </div>
+              </div>
+
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1.5">Raça</label>
-                <select
-                  value={bullForm.breed_id}
-                  onChange={(e) => setBullForm((f) => ({ ...f, breed_id: e.target.value }))}
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                  Central / Fornecedor
+                </label>
+                <input
+                  list="centrais-datalist"
+                  type="text"
+                  placeholder="Selecione ou digite a central (ex: Alta Genetics, ABS)"
+                  value={bullForm.owner_central}
+                  onChange={(e) => setBullForm((f) => ({ ...f, owner_central: e.target.value }))}
                   className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
-                >
-                  <option value="">Selecione a raça...</option>
-                  {breeds.map((b) => (
-                    <option key={b.id} value={b.id}>{b.name}</option>
+                />
+                <datalist id="centrais-datalist">
+                  {centers.map((c) => (
+                    <option key={c.id} value={c.name}>
+                      {c.short_name ? `${c.name} (${c.short_name})` : c.name}
+                    </option>
                   ))}
-                </select>
+                </datalist>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Dica: Você pode selecionar uma central cadastrada ou digitar um novo nome.
+                </p>
               </div>
 
               <div className="flex gap-3 pt-2">
                 <button
                   type="submit"
                   disabled={saving}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm"
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm cursor-pointer shadow-md shadow-emerald-500/20"
                 >
                   {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                  {saving ? 'Cadastrando...' : 'Cadastrar Touro'}
+                  {saving ? 'Salvando...' : editingBullId ? 'Salvar Alterações' : 'Cadastrar Touro'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowBullModal(false)}
-                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm"
+                  onClick={() => {
+                    setShowBullModal(false);
+                    setEditingBullId(null);
+                  }}
+                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm cursor-pointer"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===== MODAL CENTRAL DE INSEMINAÇÃO (CRIAR & EDITAR) ===== */}
+      {showCenterModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="glass-card w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 space-y-5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <Building2 className="w-5 h-5 text-emerald-400" />
+                {editingCenterId ? 'Editar Central de Inseminação' : 'Cadastrar Nova Central'}
+              </h3>
+              <button
+                onClick={() => {
+                  setShowCenterModal(false);
+                  setEditingCenterId(null);
+                }}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCenter} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                  Nome da Central / Empresa *
+                </label>
+                <input
+                  required
+                  type="text"
+                  placeholder="Ex: Alta Genetics, ABS Pecplan, CRV Lagoa"
+                  value={centerForm.name}
+                  onChange={(e) => setCenterForm((f) => ({ ...f, name: e.target.value }))}
+                  className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Sigla / Nome Curto</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: ALTA, ABS, CRV"
+                    value={centerForm.short_name}
+                    onChange={(e) => setCenterForm((f) => ({ ...f, short_name: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 uppercase"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">CNPJ / Documento</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: 00.000.000/0001-00"
+                    value={centerForm.document_number}
+                    onChange={(e) => setCenterForm((f) => ({ ...f, document_number: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Telefone / WhatsApp</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: (65) 99999-9999"
+                    value={centerForm.contact_phone}
+                    onChange={(e) => setCenterForm((f) => ({ ...f, contact_phone: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">E-mail de Contato</label>
+                  <input
+                    type="email"
+                    placeholder="Ex: contato@central.com.br"
+                    value={centerForm.contact_email}
+                    onChange={(e) => setCenterForm((f) => ({ ...f, contact_email: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="center-active-check"
+                  checked={centerForm.active}
+                  onChange={(e) => setCenterForm((f) => ({ ...f, active: e.target.checked }))}
+                  className="rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
+                />
+                <label htmlFor="center-active-check" className="text-xs text-slate-300 font-medium cursor-pointer">
+                  Central Ativa (disponível para seleção em novos lotes e touros)
+                </label>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm cursor-pointer shadow-md shadow-emerald-500/20"
+                >
+                  {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  {saving ? 'Salvando...' : editingCenterId ? 'Salvar Alterações' : 'Cadastrar Central'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCenterModal(false);
+                    setEditingCenterId(null);
+                  }}
+                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm cursor-pointer"
                 >
                   Cancelar
                 </button>

@@ -1392,12 +1392,21 @@ export async function toggleProtocolStatus(id: string, newStatus: 'active' | 'ar
 // BULLS
 // ============================================================
 
+// ============================================================
+// BULLS & CENTRAIS (GENETIC CENTERS)
+// ============================================================
+
 export interface Bull {
   id: string;
   name: string;
   code: string | null;
+  registration_number?: string | null;
+  breed_id?: string | null;
   owner_central: string | null;
   status: string;
+  created_at?: string;
+  updated_at?: string;
+  breeds?: { id: string; name: string } | null;
 }
 
 export async function getBulls(forceRefresh = false): Promise<Bull[]> {
@@ -1413,7 +1422,7 @@ export async function getBulls(forceRefresh = false): Promise<Bull[]> {
   const supabase = createClient();
   const { data, error } = await supabase
     .from('bulls')
-    .select('*')
+    .select('*, breeds(id, name)')
     .eq('organization_id', orgId)
     .order('name');
 
@@ -1432,23 +1441,232 @@ export async function createBull(bull: {
   owner_central?: string;
   registration_number?: string;
   breed_id?: string;
-}): Promise<boolean> {
+  status?: string;
+}): Promise<{ success: boolean; data?: Bull; error?: string }> {
   const orgId = await getCurrentOrgId();
-  if (!orgId) return false;
+  if (!orgId) return { success: false, error: 'Organização não identificada.' };
 
   const supabase = createClient();
-  const { error } = await supabase.from('bulls').insert({
-    ...bull,
-    organization_id: orgId,
-    status: 'active',
-  });
+  const { data, error } = await supabase
+    .from('bulls')
+    .insert({
+      ...bull,
+      organization_id: orgId,
+      status: bull.status || 'active',
+    })
+    .select('*, breeds(id, name)')
+    .single();
+
   if (error) {
     console.error('createBull error:', error);
-    return false;
+    return { success: false, error: error.message };
   }
 
   invalidateCache('bulls');
-  return true;
+  return { success: true, data: data as Bull };
+}
+
+export async function updateBull(
+  id: string,
+  bull: {
+    name?: string;
+    code?: string | null;
+    owner_central?: string | null;
+    registration_number?: string | null;
+    breed_id?: string | null;
+    status?: string;
+  }
+): Promise<{ success: boolean; error?: string }> {
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('bulls')
+    .update({
+      ...bull,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+
+  if (error) {
+    console.error('updateBull error:', error);
+    return { success: false, error: error.message };
+  }
+
+  invalidateCache('bulls');
+  return { success: true };
+}
+
+export async function deleteBull(id: string): Promise<{ success: boolean; error?: string }> {
+  const supabase = createClient();
+
+  // Verificar se o touro possui registros vinculados antes de deletar
+  const [batchesCheck, lotCheck, geneticCheck] = await Promise.all([
+    supabase.from('semen_batches').select('id', { count: 'exact', head: true }).eq('bull_id', id),
+    supabase.from('iatf_lot_animals').select('id', { count: 'exact', head: true }).eq('bull_id', id),
+    supabase.from('genetic_materials').select('id', { count: 'exact', head: true }).eq('sire_id', id),
+  ]);
+
+  const totalRefs = (batchesCheck.count || 0) + (lotCheck.count || 0) + (geneticCheck.count || 0);
+
+  if (totalRefs > 0) {
+    return {
+      success: false,
+      error: `Este touro possui ${totalRefs} registro(s) vinculado(s) no sistema (estoque de sêmen ou lotes IATF). Para manter a rastreabilidade zootécnica, inative o touro em vez de excluir.`,
+    };
+  }
+
+  const { error } = await supabase
+    .from('bulls')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('deleteBull error:', error);
+    return { success: false, error: error.message };
+  }
+
+  invalidateCache('bulls');
+  return { success: true };
+}
+
+// ------------------------------------------------------------
+// CENTRAIS DE INSEMINAÇÃO / GENÉTICA
+// ------------------------------------------------------------
+
+export interface GeneticCenter {
+  id: string;
+  organization_id?: string;
+  name: string;
+  short_name?: string | null;
+  document_number?: string | null;
+  contact_phone?: string | null;
+  contact_email?: string | null;
+  active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export async function getGeneticCenters(forceRefresh = false, onlyActive = false): Promise<GeneticCenter[]> {
+  const orgId = await getCurrentOrgId();
+  const cacheKey = `genetic_centers_${orgId || 'all'}_${onlyActive ? 'active' : 'all'}`;
+
+  if (!forceRefresh) {
+    const cached = getCached<GeneticCenter[]>(cacheKey);
+    if (cached) return cached;
+  }
+
+  const supabase = createClient();
+  let query = supabase.from('genetic_centers').select('*').order('name');
+
+  if (orgId) {
+    query = query.eq('organization_id', orgId);
+  }
+  if (onlyActive) {
+    query = query.eq('active', true);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    console.error('getGeneticCenters error:', error);
+    return getCached<GeneticCenter[]>(cacheKey) ?? [];
+  }
+
+  const result = (data ?? []) as GeneticCenter[];
+  setCached(cacheKey, result);
+  return result;
+}
+
+export async function createGeneticCenter(center: {
+  name: string;
+  short_name?: string | null;
+  document_number?: string | null;
+  contact_phone?: string | null;
+  contact_email?: string | null;
+  active?: boolean;
+}): Promise<{ success: boolean; data?: GeneticCenter; error?: string }> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return { success: false, error: 'Organização não identificada.' };
+
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('genetic_centers')
+    .insert({
+      organization_id: orgId,
+      name: center.name.trim(),
+      short_name: center.short_name?.trim() || null,
+      document_number: center.document_number?.trim() || null,
+      contact_phone: center.contact_phone?.trim() || null,
+      contact_email: center.contact_email?.trim() || null,
+      active: center.active !== undefined ? center.active : true,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('createGeneticCenter error:', error);
+    return { success: false, error: error.message };
+  }
+
+  invalidateCache('genetic_centers');
+  return { success: true, data: data as GeneticCenter };
+}
+
+export async function updateGeneticCenter(
+  id: string,
+  center: {
+    name?: string;
+    short_name?: string | null;
+    document_number?: string | null;
+    contact_phone?: string | null;
+    contact_email?: string | null;
+    active?: boolean;
+  }
+): Promise<{ success: boolean; error?: string }> {
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('genetic_centers')
+    .update({
+      ...center,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+
+  if (error) {
+    console.error('updateGeneticCenter error:', error);
+    return { success: false, error: error.message };
+  }
+
+  invalidateCache('genetic_centers');
+  return { success: true };
+}
+
+export async function deleteGeneticCenter(id: string): Promise<{ success: boolean; error?: string }> {
+  const supabase = createClient();
+
+  // Verificar se a central possui lotes de sêmen/embrião vinculados
+  const { count } = await supabase
+    .from('genetic_material_batches')
+    .select('id', { count: 'exact', head: true })
+    .eq('center_id', id);
+
+  if (count && count > 0) {
+    return {
+      success: false,
+      error: `Esta central possui ${count} partida(s) de sêmen/embrião vinculada(s). Para segurança do estoque, inative a central em vez de excluir.`,
+    };
+  }
+
+  const { error } = await supabase
+    .from('genetic_centers')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('deleteGeneticCenter error:', error);
+    return { success: false, error: error.message };
+  }
+
+  invalidateCache('genetic_centers');
+  return { success: true };
 }
 
 // ============================================================
