@@ -607,7 +607,7 @@ export default function TanksView({
                 Nenhuma medição registrada ainda para este botijão.
               </div>
             ) : (
-              <div className="space-y-2 max-h-[350px] overflow-y-auto custom-scrollbar pr-1">
+              <div className="space-y-2 max-h-87.5 overflow-y-auto custom-scrollbar pr-1">
                 {nitrogenHistory.map((m) => (
                   <div
                     key={m.id}

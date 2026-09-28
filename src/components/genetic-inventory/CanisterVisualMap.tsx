@@ -165,7 +165,7 @@ export default function CanisterVisualMap({
               </div>
 
               {/* Lotes na Caneca */}
-              <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
+              <div className="space-y-2 max-h-75 overflow-y-auto custom-scrollbar pr-1">
                 {activeBalances.length === 0 ? (
                   <div className="text-center py-8 text-slate-400 text-xs">
                     <Package className="w-8 h-8 mx-auto mb-2 text-slate-600" />

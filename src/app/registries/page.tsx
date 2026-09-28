@@ -1211,7 +1211,7 @@ export default function RegistriesPage() {
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2 flex-1">
                   {/* Busca */}
-                  <div className="relative min-w-[220px] flex-1 max-w-sm">
+                  <div className="relative min-w-55 flex-1 max-w-sm">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
                     <input
                       type="text"
@@ -1388,7 +1388,7 @@ export default function RegistriesPage() {
             <div className="glass-card p-6 rounded-2xl border border-slate-800 space-y-4">
               {/* Barra de Filtros e Busca de Centrais */}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                <div className="relative min-w-[220px] flex-1 max-w-sm">
+                <div className="relative min-w-55 flex-1 max-w-sm">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
                   <input
                     type="text"
@@ -1568,7 +1568,7 @@ export default function RegistriesPage() {
 
             <div className="flex flex-wrap items-center gap-2">
               {/* Barra de Pesquisa */}
-              <div className="relative min-w-[220px]">
+              <div className="relative min-w-55">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
                 <input
                   type="text"

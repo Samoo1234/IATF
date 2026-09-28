@@ -785,7 +785,7 @@ export default function MovementWizard({
                       placeholder="Ex: 50"
                       value={inboundQuantity}
                       onChange={(e) => setInboundQuantity(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 font-mono font-bold text-emerald-400"
+                      className="w-full bg-slate-900 border border-slate-700 text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 font-mono font-bold text-emerald-400"
                     />
                   </div>
 
@@ -902,7 +902,7 @@ export default function MovementWizard({
                     placeholder="Ex: 20"
                     value={outboundQuantity}
                     onChange={(e) => setOutboundQuantity(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-rose-500 font-mono font-bold text-rose-400"
+                    className="w-full bg-slate-950 border border-slate-700 text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-rose-500 font-mono font-bold text-rose-400"
                   />
                 </div>
                 <div>
@@ -1072,7 +1072,7 @@ export default function MovementWizard({
                       placeholder="Ex: 30"
                       value={transferQuantity}
                       onChange={(e) => setTransferQuantity(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-cyan-500 font-mono font-bold text-cyan-400"
+                      className="w-full bg-slate-900 border border-slate-700 text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-cyan-500 font-mono font-bold text-cyan-400"
                     />
                   </div>
 
@@ -1188,7 +1188,7 @@ export default function MovementWizard({
                     placeholder="Ex: 5"
                     value={adjQuantity}
                     onChange={(e) => setAdjQuantity(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-amber-500 font-mono font-bold text-amber-400"
+                    className="w-full bg-slate-950 border border-slate-700 text-sm px-3 py-2 rounded-xl focus:outline-none focus:border-amber-500 font-mono font-bold text-amber-400"
                   />
                 </div>
                 <div>

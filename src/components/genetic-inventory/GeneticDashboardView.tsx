@@ -227,7 +227,7 @@ export default function GeneticDashboardView({
             <span className="text-[11px] text-slate-400">{metrics.tanksSummary.length} tanques</span>
           </div>
 
-          <div className="space-y-3 overflow-y-auto max-h-[220px] custom-scrollbar pr-1">
+          <div className="space-y-3 overflow-y-auto max-h-55 custom-scrollbar pr-1">
             {metrics.tanksSummary.length === 0 ? (
               <p className="text-xs text-slate-500 text-center py-8">Nenhum botijão cadastrado.</p>
             ) : (
@@ -248,7 +248,7 @@ export default function GeneticDashboardView({
                     <div className="flex items-center justify-between text-xs">
                       <div className="flex items-center gap-2">
                         <span className="font-mono font-bold text-emerald-400">{t.tankNumber}</span>
-                        <span className="font-semibold text-white truncate max-w-[140px]">{t.tankName}</span>
+                        <span className="font-semibold text-white truncate max-w-35">{t.tankName}</span>
                       </div>
                       <div className="flex items-center gap-2 font-mono">
                         <span className="text-slate-400 text-[11px]">{t.totalDoses} doses</span>
