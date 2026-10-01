@@ -89,7 +89,7 @@ export default function InventoryTableView({
         const rack = b.genetic_material_batches?.rack_code?.toLowerCase() || '';
         const tankName = b.semen_tanks?.name?.toLowerCase() || b.semen_tanks?.number?.toLowerCase() || '';
         const clientName = b.genetic_clients?.name?.toLowerCase() || '';
-        const breed = mat?.breeds?.name?.toLowerCase() || '';
+        const breed = (mat?.breeds?.name || mat?.bulls?.breeds?.name || mat?.animals?.breeds?.name || '').toLowerCase();
 
         return (
           animalName.includes(s) ||
@@ -367,7 +367,7 @@ export default function InventoryTableView({
 
                       {/* Raça */}
                       <td className="p-3 font-sans text-slate-300">
-                        {mat?.breeds?.name || '-'}
+                        {mat?.breeds?.name || mat?.bulls?.breeds?.name || mat?.animals?.breeds?.name || '-'}
                       </td>
 
                       {/* Partida */}

@@ -508,9 +508,8 @@ export async function getInventoryBalances(
           package_type,
           cryopreservation,
           donor_name,
-          donor_rgd,
-          bulls (name, code),
-          animals (tag_number),
+          bulls (name, code, breeds (name)),
+          animals (tag_number, breeds (name)),
           breeds (name)
         ),
         genetic_centers (name, short_name)
@@ -567,7 +566,7 @@ export async function getInventoryBalances(
       const rack = b.genetic_material_batches?.rack_code?.toLowerCase() || '';
       const tank = b.semen_tanks?.name?.toLowerCase() || b.semen_tanks?.number?.toLowerCase() || '';
       const client = b.genetic_clients?.name?.toLowerCase() || '';
-      const breed = mat?.breeds?.name?.toLowerCase() || '';
+      const breed = (mat?.breeds?.name || mat?.bulls?.breeds?.name || mat?.animals?.breeds?.name || '').toLowerCase();
 
       return (
         bullName.includes(s) ||
@@ -662,6 +661,23 @@ export async function processInbound(
       return { success: false, error: 'Número da partida/lote é obrigatório para novo material.' };
     }
 
+    let resolvedBreedId = payload.breedId || null;
+    if (!resolvedBreedId && payload.sireId) {
+      const { data: bData } = await supabase
+        .from('bulls')
+        .select('breed_id')
+        .eq('id', payload.sireId)
+        .maybeSingle();
+      if (bData?.breed_id) resolvedBreedId = bData.breed_id;
+    } else if (!resolvedBreedId && payload.donorId) {
+      const { data: aData } = await supabase
+        .from('animals')
+        .select('breed_id')
+        .eq('id', payload.donorId)
+        .maybeSingle();
+      if (aData?.breed_id) resolvedBreedId = aData.breed_id;
+    }
+
     // 1. Inserir material
     const { data: newMat, error: matErr } = await supabase
       .from('genetic_materials')
@@ -673,7 +689,7 @@ export async function processInbound(
         donor_id: payload.donorId || null,
         donor_name: payload.donorName || null,
         donor_rgd: payload.donorRgd || null,
-        breed_id: payload.breedId || null,
+        breed_id: resolvedBreedId,
         sexing: payload.sexing,
         package_type: payload.packageType,
         cryopreservation: payload.cryopreservation,
@@ -940,8 +956,9 @@ export async function getMovementHistory(
           type,
           sexing,
           donor_name,
-          bulls (name),
-          animals (tag_number)
+          bulls (name, code, breeds (name)),
+          animals (tag_number, breeds (name)),
+          breeds (name)
         )
       ),
       source_tank:semen_tanks!source_tank_id (name, number),
@@ -1003,8 +1020,8 @@ export async function getWithdrawalReceipts(farmId: string): Promise<WithdrawalR
             cryopreservation,
             donor_name,
             donor_rgd,
-            bulls (name, code),
-            animals (tag_number),
+            bulls (name, code, breeds (name)),
+            animals (tag_number, breeds (name)),
             breeds (name)
           ),
           genetic_centers (name, short_name)
@@ -1109,7 +1126,7 @@ export function exportInventoryToExcel(balances: InventoryBalance[], farmName = 
       'Tipo de Material': isSemen ? 'Sêmen' : 'Embrião',
       'Animal / Genética': animalName,
       'Código / RGD': (isSemen ? mat?.bulls?.code : mat?.donor_rgd) || '-',
-      'Raça': mat?.breeds?.name || '-',
+      'Raça': mat?.breeds?.name || mat?.bulls?.breeds?.name || mat?.animals?.breeds?.name || '-',
       'Partida / Lote': b.genetic_material_batches?.batch_number || '-',
       'Rack': b.genetic_material_batches?.rack_code || '-',
       'Central Fornecedora': b.genetic_material_batches?.genetic_centers?.name || '-',

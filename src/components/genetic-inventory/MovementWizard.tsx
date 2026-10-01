@@ -200,12 +200,14 @@ export default function MovementWizard({
         setSubmitting(false);
         return;
       }
+      const selectedBull = inboundType === 'SEMEN' ? bulls.find((b) => b.id === inboundSireId) : undefined;
       payload = {
         isNewMaterial: true,
         materialType: inboundType,
         sireId: inboundType === 'SEMEN' ? inboundSireId : undefined,
         donorName: inboundType === 'EMBRYO' ? inboundDonorName : undefined,
         donorRgd: inboundType === 'EMBRYO' ? inboundDonorRgd : undefined,
+        breedId: selectedBull?.breed_id || undefined,
         sexing: inboundSexing,
         packageType: inboundPackageType,
         cryopreservation: inboundCryo,
@@ -576,7 +578,7 @@ export default function MovementWizard({
                         <option value="">Selecione o touro cadastrado...</option>
                         {bulls.map((b) => (
                           <option key={b.id} value={b.id}>
-                            {b.name} {b.code ? `(${b.code})` : ''} {b.owner_central ? `• ${b.owner_central}` : ''}
+                            {b.name} {b.code ? `(${b.code})` : ''} {b.breeds?.name ? `• ${b.breeds.name}` : ''} {b.owner_central ? `• ${b.owner_central}` : ''}
                           </option>
                         ))}
                       </select>

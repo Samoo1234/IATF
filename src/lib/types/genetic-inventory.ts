@@ -117,9 +117,9 @@ export interface GeneticMaterial {
   active: boolean;
   created_at: string;
   updated_at: string;
-  bulls?: { id: string; name: string; code?: string | null; owner_central?: string | null } | null;
-  animals?: { id: string; tag_number: string } | null;
-  breeds?: { id: string; name: string } | null;
+  bulls?: { id?: string; name: string; code?: string | null; owner_central?: string | null; breeds?: { id?: string; name: string } | null } | null;
+  animals?: { id?: string; tag_number: string; breeds?: { id?: string; name: string } | null } | null;
+  breeds?: { id?: string; name: string } | null;
 }
 
 export interface GeneticMaterialBatch {
@@ -170,8 +170,8 @@ export interface InventoryBalance {
       cryopreservation: CryopreservationType;
       donor_name?: string | null;
       donor_rgd?: string | null;
-      bulls?: { name: string; code?: string | null } | null;
-      animals?: { tag_number: string } | null;
+      bulls?: { name: string; code?: string | null; breeds?: { name: string } | null } | null;
+      animals?: { tag_number: string; breeds?: { name: string } | null } | null;
       breeds?: { name: string } | null;
     };
     genetic_centers?: { name: string; short_name?: string | null } | null;
@@ -214,8 +214,8 @@ export interface InventoryMovement {
       cryopreservation?: CryopreservationType;
       donor_name?: string | null;
       donor_rgd?: string | null;
-      bulls?: { name: string; code?: string | null } | null;
-      animals?: { tag_number: string } | null;
+      bulls?: { name: string; code?: string | null; breeds?: { name: string } | null } | null;
+      animals?: { tag_number: string; breeds?: { name: string } | null } | null;
       breeds?: { name: string } | null;
     };
     genetic_centers?: { name: string; short_name?: string | null } | null;

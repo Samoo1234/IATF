@@ -112,7 +112,7 @@ export default function ReceiptViewerModal({
               </div>
               <div>
                 <span className="text-[10px] text-slate-400 print:text-slate-600 block">Raça:</span>
-                <span className="text-white print:text-black">{mat?.breeds?.name || '-'}</span>
+                <span className="text-white print:text-black">{mat?.breeds?.name || mat?.bulls?.breeds?.name || mat?.animals?.breeds?.name || '-'}</span>
               </div>
             </div>
 

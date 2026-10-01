@@ -78,7 +78,7 @@ export default function ReportsView({
       const isSemen = mat?.type === 'SEMEN';
       const name = isSemen ? (mat?.bulls?.name || 'Touro') : (mat?.donor_name || mat?.animals?.tag_number || 'Doadora');
       const code = (isSemen ? mat?.bulls?.code : mat?.donor_rgd) || '-';
-      const breed = mat?.breeds?.name || '-';
+      const breed = mat?.breeds?.name || mat?.bulls?.breeds?.name || mat?.animals?.breeds?.name || '-';
       const type = isSemen ? 'Sêmen' : 'Embrião';
 
       const key = `${name}_${code}`;
@@ -107,7 +107,8 @@ export default function ReportsView({
     const map = new Map<string, { breed: string; totalDoses: number; animalsCount: Set<string> }>();
 
     balances.forEach((b) => {
-      const breed = b.genetic_material_batches?.genetic_materials?.breeds?.name || 'Não Informada';
+      const mat = b.genetic_material_batches?.genetic_materials;
+      const breed = mat?.breeds?.name || mat?.bulls?.breeds?.name || mat?.animals?.breeds?.name || 'Não Informada';
       const animal = b.genetic_material_batches?.genetic_materials?.bulls?.name || b.genetic_material_batches?.genetic_materials?.donor_name || 'Animal';
       const entry = map.get(breed) || { breed, totalDoses: 0, animalsCount: new Set<string>() };
       entry.totalDoses += b.quantity_available || 0;
