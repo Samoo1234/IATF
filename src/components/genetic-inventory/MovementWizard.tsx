@@ -29,6 +29,7 @@ import {
   processAdjustment, 
   getCanisters 
 } from '@/lib/services/geneticInventoryService';
+import { getTodayDateString } from '@/lib/dateUtils';
 import type { Bull } from '@/lib/db';
 
 export type MovementWizardMode = 'inbound' | 'outbound' | 'transfer' | 'adjustment';
@@ -102,7 +103,7 @@ export default function MovementWizard({
   const [inboundQuantity, setInboundQuantity] = useState('');
   const [inboundReason, setInboundReason] = useState('Compra de material genético');
   const [inboundNotes, setInboundNotes] = useState('');
-  const [inboundDate, setInboundDate] = useState(new Date().toISOString().slice(0, 10));
+  const [inboundDate, setInboundDate] = useState(getTodayDateString());
 
   // ==========================================
   // ESTADO — SAÍDA / RETIRADA (OUTBOUND)
@@ -113,7 +114,7 @@ export default function MovementWizard({
   const [outboundRecipientName, setOutboundRecipientName] = useState('MV. Dr. Samoel Duarte');
   const [outboundRecipientDoc, setOutboundRecipientDoc] = useState('');
   const [outboundNotes, setOutboundNotes] = useState('');
-  const [outboundDate, setOutboundDate] = useState(new Date().toISOString().slice(0, 10));
+  const [outboundDate, setOutboundDate] = useState(getTodayDateString());
 
   // ==========================================
   // ESTADO — TRANSFERÊNCIA (TRANSFER)

@@ -10,6 +10,7 @@ import {
   type ManagementEvent, 
   type LotStat 
 } from '@/lib/db';
+import { getTodayDateString } from '@/lib/dateUtils';
 import { useActiveFarm } from '@/context/FarmContext';
 import { 
   CheckCircle2, 
@@ -86,7 +87,7 @@ export default function AgendaPage() {
   const [createMode, setCreateMode] = useState<'lote' | 'avulso'>('lote');
   const [createFarmId, setCreateFarmId] = useState('');
   const [createTitle, setCreateTitle] = useState('');
-  const [createDate, setCreateDate] = useState(new Date().toISOString().split('T')[0]);
+  const [createDate, setCreateDate] = useState(getTodayDateString());
   const [createTime, setCreateTime] = useState('08:00');
   const [createLotId, setCreateLotId] = useState('');
   const [createStepCode, setCreateStepCode] = useState('D0');
@@ -306,7 +307,7 @@ export default function AgendaPage() {
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
   const formattedMonthYear = `${MONTH_NAMES[month]} de ${year}`;
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getTodayDateString();
 
   // Grid de dias do mês (com preenchimento de semanas completas)
   const monthGridDays = useMemo(() => {

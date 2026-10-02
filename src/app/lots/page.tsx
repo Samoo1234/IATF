@@ -32,6 +32,7 @@ import {
   type ManagementEvent,
   type Veterinarian,
 } from '@/lib/db';
+import { getTodayDateString, addDaysToDateString, formatDateBR } from '@/lib/dateUtils';
 import {
   Layers,
   Plus,
@@ -80,8 +81,7 @@ function computeLotProgress(
   events: ManagementEvent[],
   protocolsList: Protocol[]
 ): LotProgressInfo {
-  const now = new Date();
-  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const todayStr = getTodayDateString();
 
   const lotEvents = events.filter((e) => e.lot_id === lot.id);
   let rawSteps: { code: string; name: string; date: string }[] = [];
@@ -1623,11 +1623,8 @@ export default function LotsPage() {
               {form.start_date && form.protocol_id && protocols.length > 0 && (() => {
                 const proto = protocols.find((p) => p.id === form.protocol_id);
                 const steps = proto?.protocol_steps ?? [];
-                const d0 = new Date(form.start_date);
                 const addDays = (n: number) => {
-                  const r = new Date(d0);
-                  r.setDate(r.getDate() + n);
-                  return r.toLocaleDateString('pt-BR');
+                  return formatDateBR(addDaysToDateString(form.start_date, n));
                 };
                 const ia = steps.find((s) => s.code === 'IA');
                 const dg = steps.find((s) => s.code === 'DG');
@@ -1639,7 +1636,7 @@ export default function LotsPage() {
                     <div className="grid grid-cols-3 gap-2 mt-2">
                       <div className="text-center">
                         <span className="text-slate-500 block">D0</span>
-                        <strong>{new Date(form.start_date).toLocaleDateString('pt-BR')}</strong>
+                        <strong>{formatDateBR(form.start_date)}</strong>
                       </div>
                       {ia && (
                         <div className="text-center">

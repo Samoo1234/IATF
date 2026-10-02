@@ -15,6 +15,7 @@ import {
 } from '@/lib/db';
 import { useActiveFarm } from '@/context/FarmContext';
 import { useActiveSeason } from '@/context/SeasonContext';
+import { getTodayDateString } from '@/lib/dateUtils';
 import { 
   FileText, 
   Printer, 
@@ -241,7 +242,7 @@ export default function ReportsPage() {
   // Exportar para Excel (.xlsx)
   const handleExportExcel = () => {
     const wb = XLSX.utils.book_new();
-    const dateStr = new Date().toISOString().slice(0, 10);
+    const dateStr = getTodayDateString();
 
     if (activeTab === 'lote_categoria') {
       const dataRows = filteredLotCatData.map((item) => ({

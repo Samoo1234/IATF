@@ -8,6 +8,7 @@ import {
   type Animal, 
   type AnimalManagement 
 } from '@/lib/db';
+import { formatDateBR } from '@/lib/dateUtils';
 import { 
   Syringe, 
   ArrowLeft, 
@@ -303,14 +304,14 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
                           1º Passo — D0
                         </span>
                         <span className="text-[10px] font-mono text-slate-500">
-                          {mgmt.start_date ? new Date(mgmt.start_date + 'T00:00:00').toLocaleDateString('pt-BR') : '-'}
+                          {formatDateBR(mgmt.start_date)}
                         </span>
                       </div>
                       <p className="text-xs font-bold text-white">Implante P4 + Benzoato</p>
                       <div className="mt-2 text-[11px] text-slate-400 space-y-0.5">
                         {mgmt.d0_executed_at ? (
                           <p className="text-emerald-400 font-medium">
-                            Executado em: {new Date(mgmt.d0_executed_at + 'T00:00:00').toLocaleDateString('pt-BR')}
+                            Executado em: {formatDateBR(mgmt.d0_executed_at)}
                           </p>
                         ) : (
                           <p className="text-slate-500">Pendente de apontamento</p>
@@ -339,7 +340,7 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
                           2º Passo — D9
                         </span>
                         <span className="text-[10px] font-mono text-slate-500">
-                          {mgmt.d9_date ? new Date(mgmt.d9_date + 'T00:00:00').toLocaleDateString('pt-BR') : '-'}
+                          {formatDateBR(mgmt.d9_date)}
                         </span>
                       </div>
                       <p className="text-xs font-bold text-white">Retirada P4 + Indutores</p>
@@ -347,7 +348,7 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
                         {mgmt.d9_executed_at ? (
                           <>
                             <p className="text-indigo-400 font-medium">
-                              Executado em: {new Date(mgmt.d9_executed_at + 'T00:00:00').toLocaleDateString('pt-BR')}
+                              Executado em: {formatDateBR(mgmt.d9_executed_at)}
                             </p>
                             {mgmt.d9_device_loss && (
                               <p className="text-rose-400 font-bold flex items-center gap-1">
@@ -389,7 +390,7 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
                           3º Passo — IA
                         </span>
                         <span className="text-[10px] font-mono text-slate-500">
-                          {mgmt.ia_date ? new Date(mgmt.ia_date + 'T00:00:00').toLocaleDateString('pt-BR') : '-'}
+                          {formatDateBR(mgmt.ia_date)}
                         </span>
                       </div>
                       <p className="text-xs font-bold text-white">Inseminação Artificial</p>
@@ -397,7 +398,7 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
                         {mgmt.ia_executed_at ? (
                           <>
                             <p className="text-emerald-400 font-medium">
-                              Executado: {new Date(mgmt.ia_executed_at + 'T00:00:00').toLocaleDateString('pt-BR')}
+                              Executado: {formatDateBR(mgmt.ia_executed_at)}
                             </p>
                             <p className="truncate">Touro: <strong className="text-slate-200">{mgmt.bulls?.name ?? '-'}</strong></p>
                             {mgmt.inseminator_name && <p>Insem: {mgmt.inseminator_name}</p>}
@@ -439,7 +440,7 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
                           4º Passo — DG
                         </span>
                         <span className="text-[10px] font-mono text-slate-500">
-                          {mgmt.dg_date ? new Date(mgmt.dg_date + 'T00:00:00').toLocaleDateString('pt-BR') : '-'}
+                          {formatDateBR(mgmt.dg_date)}
                         </span>
                       </div>
                       <p className="text-xs font-bold text-white">Diagnóstico de Gestação</p>
@@ -454,7 +455,7 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
                             {mgmt.ecc_dg != null && <p>ECC DG: <strong className="text-white font-mono">{mgmt.ecc_dg.toFixed(2)}</strong></p>}
                             {mgmt.expected_parturition_date && (
                               <p className="text-emerald-300 font-mono text-[10px]">
-                                Parto: {new Date(mgmt.expected_parturition_date + 'T00:00:00').toLocaleDateString('pt-BR')}
+                                Parto: {formatDateBR(mgmt.expected_parturition_date)}
                               </p>
                             )}
                           </>
@@ -506,7 +507,7 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
                       </span>
                       {lot?.ia_planned_date != null && (
                         <span className="text-xs text-slate-400">
-                          ({new Date(String(lot.ia_planned_date) + 'T00:00:00').toLocaleDateString('pt-BR')})
+                          ({formatDateBR(String(lot.ia_planned_date))})
                         </span>
                       )}
                     </div>
@@ -520,7 +521,7 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
                     </p>
                     {h.expected_parturition_date != null && (
                       <p className="text-xs text-emerald-400 mt-0.5">
-                        Previsão de Parto: <strong>{new Date(String(h.expected_parturition_date) + 'T00:00:00').toLocaleDateString('pt-BR')}</strong>
+                        Previsão de Parto: <strong>{formatDateBR(String(h.expected_parturition_date))}</strong>
                       </p>
                     )}
                   </div>

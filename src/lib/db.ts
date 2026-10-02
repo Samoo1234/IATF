@@ -1,6 +1,7 @@
 import { createClient } from './supabase/client';
 import { offlineDb } from './offline/offlineDb';
 import { syncEngine } from './offline/syncEngine';
+import { getTodayDateString, addDaysToDateString } from './dateUtils';
 
 // ============================================================
 // DYNAMIC MULTI-TENANT RESOLVER & GLOBAL IN-MEMORY CACHE
@@ -198,7 +199,7 @@ export async function getLots(forceRefresh = false, farmId?: string): Promise<Lo
           farm_id: l.farm_id,
           season_id: l.season_id,
           season_name: null,
-          start_date: (l.start_date as string) || new Date().toISOString().slice(0, 10),
+          start_date: (l.start_date as string) || getTodayDateString(),
           ia_planned_date: null,
           dg_planned_date: null,
           responsible_name: null,
@@ -251,7 +252,7 @@ export async function getLots(forceRefresh = false, farmId?: string): Promise<Lo
           farm_id: l.farm_id,
           season_id: l.season_id,
           season_name: null,
-          start_date: (l.start_date as string) || new Date().toISOString().slice(0, 10),
+          start_date: (l.start_date as string) || getTodayDateString(),
           ia_planned_date: null,
           dg_planned_date: null,
           responsible_name: null,
@@ -703,7 +704,7 @@ export async function completeManagementEvent(
     .from('management_events')
     .update({
       status: 'concluido',
-      execution_date: new Date().toISOString().split('T')[0],
+      execution_date: getTodayDateString(),
       animals_worked_count: animalsWorked,
       losses_count: lossesCount,
       updated_at: new Date().toISOString(),
@@ -1741,12 +1742,7 @@ export async function createLot(lot: {
     .single() as { data: { protocol_steps: { code: string; name?: string; day_offset: number }[] } | null };
 
   const steps = proto?.protocol_steps ?? [];
-  const d0 = new Date(lot.start_date);
-  const addDays = (d: Date, n: number) => {
-    const r = new Date(d);
-    r.setDate(r.getDate() + n);
-    return r.toISOString().split('T')[0];
-  };
+  const addDays = (n: number) => addDaysToDateString(lot.start_date, n);
 
   const iaStep = steps.find((s) => s.code === 'IA');
   const dgStep = steps.find((s) => s.code === 'DG');
@@ -1768,8 +1764,8 @@ export async function createLot(lot: {
       protocol_id: lot.protocol_id,
       code: lot.code,
       start_date: lot.start_date,
-      ia_planned_date: iaStep ? addDays(d0, iaStep.day_offset) : null,
-      dg_planned_date: dgStep ? addDays(d0, dgStep.day_offset) : null,
+      ia_planned_date: iaStep ? addDays(iaStep.day_offset) : null,
+      dg_planned_date: dgStep ? addDays(dgStep.day_offset) : null,
       responsible_name: lot.responsible_name,
       status: 'planejado',
     })
@@ -1789,7 +1785,7 @@ export async function createLot(lot: {
       lot_id: inserted.id,
       step_code: step.code,
       step_name: step.name ?? step.code,
-      planned_date: addDays(d0, step.day_offset),
+      planned_date: addDays(step.day_offset),
       responsible_name: lot.responsible_name,
       status: 'pendente',
       event_type: 'lote',
@@ -2911,8 +2907,6 @@ export async function startAnimalManagement(params: {
     .eq('protocol_id', params.protocol_id)
     .order('step_order', { ascending: true });
 
-  const d0Date = new Date(params.start_date + 'T00:00:00');
-
   let d7Date: string | null = null;
   let d9Date: string | null = null;
   let iaDate: string | null = null;
@@ -2920,9 +2914,7 @@ export async function startAnimalManagement(params: {
 
   if (protocolSteps && protocolSteps.length > 0) {
     for (const step of protocolSteps) {
-      const target = new Date(d0Date);
-      target.setDate(target.getDate() + step.day_offset);
-      const str = target.toISOString().split('T')[0];
+      const str = addDaysToDateString(params.start_date, step.day_offset);
       const codeUpper = step.code.toUpperCase();
 
       if (codeUpper === 'D7') d7Date = str;
@@ -2934,19 +2926,13 @@ export async function startAnimalManagement(params: {
 
   // Fallbacks padrão caso o protocolo não especifique algum step
   if (!d9Date) {
-    const d9 = new Date(d0Date);
-    d9.setDate(d9.getDate() + 9);
-    d9Date = d9.toISOString().split('T')[0];
+    d9Date = addDaysToDateString(params.start_date, 9);
   }
   if (!iaDate) {
-    const ia = new Date(d0Date);
-    ia.setDate(ia.getDate() + 11);
-    iaDate = ia.toISOString().split('T')[0];
+    iaDate = addDaysToDateString(params.start_date, 11);
   }
   if (!dgDate) {
-    const dg = new Date(d0Date);
-    dg.setDate(dg.getDate() + 44);
-    dgDate = dg.toISOString().split('T')[0];
+    dgDate = addDaysToDateString(params.start_date, 44);
   }
 
   // Livre escolha do veterinário tem precedência sobre o cálculo automático
@@ -3181,9 +3167,7 @@ export async function executeStepDG(
     }
 
     if (baseIaDate) {
-      const iaD = new Date(baseIaDate + 'T00:00:00');
-      iaD.setDate(iaD.getDate() + 295);
-      expectedParturition = iaD.toISOString().split('T')[0];
+      expectedParturition = addDaysToDateString(baseIaDate, 295);
     }
   }
 
@@ -3315,9 +3299,7 @@ export async function recordDirectDG(params: {
 
   let expectedParturition = params.expected_parturition_date || null;
   if (params.pregnancy_status === 'prenha' && !expectedParturition) {
-    const d = new Date(params.dg_date + 'T00:00:00');
-    d.setDate(d.getDate() + 250); // Estimativa padrão se gestação confirmada sem data de IA
-    expectedParturition = d.toISOString().split('T')[0];
+    expectedParturition = addDaysToDateString(params.dg_date, 250); // Estimativa padrão se gestação confirmada sem data de IA
   }
 
   const { error: insertError } = await supabase

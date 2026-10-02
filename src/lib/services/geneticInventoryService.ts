@@ -18,6 +18,7 @@ import type {
   AdjustmentPayload,
 } from '@/lib/types/genetic-inventory';
 import * as XLSX from 'xlsx';
+import { getTodayDateString } from '@/lib/dateUtils';
 
 // ============================================================
 // 1. DASHBOARD METRICS
@@ -1167,7 +1168,7 @@ export function exportInventoryToExcel(balances: InventoryBalance[], farmName = 
     { wch: 18 },
   ];
 
-  const dateStr = new Date().toISOString().slice(0, 10);
+  const dateStr = getTodayDateString();
   XLSX.writeFile(workbook, `Inventario_Estoque_Genetico_${farmName.replace(/\s+/g, '_')}_${dateStr}.xlsx`);
 }
 
@@ -1201,6 +1202,6 @@ export function exportMovementsToExcel(movements: InventoryMovement[], farmName 
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Livro Razão de Movimentações');
 
-  const dateStr = new Date().toISOString().slice(0, 10);
+  const dateStr = getTodayDateString();
   XLSX.writeFile(workbook, `Movimentacoes_Estoque_Genetico_${farmName.replace(/\s+/g, '_')}_${dateStr}.xlsx`);
 }

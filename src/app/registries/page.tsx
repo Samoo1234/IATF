@@ -22,6 +22,7 @@ import Link from 'next/link';
 import AnimalManagementModal from '@/components/AnimalManagementModal';
 import { useActiveFarm } from '@/context/FarmContext';
 import { useActiveSeason } from '@/context/SeasonContext';
+import { getTodayDateString } from '@/lib/dateUtils';
 
 type TabType = 'matrizes' | 'bulls' | 'farms' | 'breeds' | 'seasons' | 'veterinarians';
 
@@ -968,7 +969,7 @@ export default function RegistriesPage() {
                 setEditingSeasonId(null);
                 setSeasonForm({
                   name: '',
-                  start_date: new Date().toISOString().split('T')[0],
+                  start_date: getTodayDateString(),
                   end_date: '',
                   status: 'active',
                 });
@@ -1894,7 +1895,7 @@ export default function RegistriesPage() {
                 setEditingSeasonId(null);
                 setSeasonForm({
                   name: '',
-                  start_date: new Date().toISOString().split('T')[0],
+                  start_date: getTodayDateString(),
                   end_date: '',
                   status: 'active',
                 });

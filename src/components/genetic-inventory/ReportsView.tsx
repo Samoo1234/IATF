@@ -13,6 +13,7 @@ import {
   Package 
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { getTodayDateString } from '@/lib/dateUtils';
 
 interface ReportsViewProps {
   farmName?: string;
@@ -236,7 +237,7 @@ export default function ReportsView({
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
-    const dateStr = new Date().toISOString().slice(0, 10);
+    const dateStr = getTodayDateString();
     XLSX.writeFile(wb, `Relatorio_${sheetName.replace(/\s+/g, '_')}_${dateStr}.xlsx`);
   };
 

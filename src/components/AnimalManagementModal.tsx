@@ -19,6 +19,7 @@ import {
   type ReproductiveSeason,
   type AnimalManagement
 } from '@/lib/db';
+import { getTodayDateString, addDaysToDateString } from '@/lib/dateUtils';
 import { 
   X, 
   Syringe, 
@@ -73,7 +74,7 @@ export default function AnimalManagementModal({
 
   // Start Form
   const [selectedProtocolId, setSelectedProtocolId] = useState('');
-  const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [startDate, setStartDate] = useState(getTodayDateString());
   const [selectedSeasonId, setSelectedSeasonId] = useState('');
   const [responsibleName, setResponsibleName] = useState('');
   const [d0Executed, setD0Executed] = useState(true);
@@ -85,13 +86,13 @@ export default function AnimalManagementModal({
   const [customDgDate, setCustomDgDate] = useState('');
 
   // Step D9 Form
-  const [d9Date, setD9Date] = useState(new Date().toISOString().split('T')[0]);
+  const [d9Date, setD9Date] = useState(getTodayDateString());
   const [d9Responsible, setD9Responsible] = useState('');
   const [d9DeviceLoss, setD9DeviceLoss] = useState(false);
   const [d9Notes, setD9Notes] = useState('');
 
   // Step IA Form
-  const [iaDate, setIaDate] = useState(new Date().toISOString().split('T')[0]);
+  const [iaDate, setIaDate] = useState(getTodayDateString());
   const [selectedBullId, setSelectedBullId] = useState('');
   const [selectedBatchId, setSelectedBatchId] = useState('');
   const [inseminatorName, setInseminatorName] = useState('');
@@ -99,7 +100,7 @@ export default function AnimalManagementModal({
   const [iaNotes, setIaNotes] = useState('');
 
   // Step DG Form
-  const [dgDate, setDgDate] = useState(new Date().toISOString().split('T')[0]);
+  const [dgDate, setDgDate] = useState(getTodayDateString());
   const [pregnancyStatus, setPregnancyStatus] = useState<'prenha' | 'vazia' | 'inconclusivo'>('prenha');
   const [eccDg, setEccDg] = useState('3.00');
   const [dgNotes, setDgNotes] = useState('');
@@ -189,19 +190,14 @@ export default function AnimalManagementModal({
   // Recalcular datas sugeridas do cronograma quando a data D0 ou protocolo mudar
   useEffect(() => {
     if (!startDate) return;
-    const d0 = new Date(startDate + 'T00:00:00');
-    let d9 = new Date(d0);
-    d9.setDate(d9.getDate() + 9);
-    let ia = new Date(d0);
-    ia.setDate(ia.getDate() + 11);
-    let dg = new Date(d0);
-    dg.setDate(dg.getDate() + 44);
+    let d9 = addDaysToDateString(startDate, 9);
+    let ia = addDaysToDateString(startDate, 11);
+    let dg = addDaysToDateString(startDate, 44);
 
     const proto = protocols.find((p) => p.id === selectedProtocolId);
     if (proto?.protocol_steps) {
       for (const st of proto.protocol_steps) {
-        const target = new Date(d0);
-        target.setDate(target.getDate() + st.day_offset);
+        const target = addDaysToDateString(startDate, st.day_offset);
         const code = st.code.toUpperCase();
         if (code === 'D7' || code === 'D8' || code === 'D9') d9 = target;
         else if (code === 'IA') ia = target;
@@ -209,9 +205,9 @@ export default function AnimalManagementModal({
       }
     }
 
-    setCustomD9Date(d9.toISOString().split('T')[0]);
-    setCustomIaDate(ia.toISOString().split('T')[0]);
-    setCustomDgDate(dg.toISOString().split('T')[0]);
+    setCustomD9Date(d9);
+    setCustomIaDate(ia);
+    setCustomDgDate(dg);
   }, [startDate, selectedProtocolId, protocols]);
 
   // Effective management (either passed via prop or loaded automatically)
