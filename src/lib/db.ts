@@ -1730,6 +1730,12 @@ export interface Animal {
   rfid_number: string | null;
   reproductive_status: string;
   status: string;
+  farm_id?: string;
+  property_id?: string | null;
+  breed_id?: string | null;
+  category_id?: string | null;
+  birth_date?: string | null;
+  sex?: string;
   breeds: { name: string } | null;
   animal_categories: { name: string } | null;
   properties: { name: string } | null;
@@ -2066,6 +2072,200 @@ export async function createAnimal(animal: {
 
   invalidateCache('animals');
   invalidateCache('metrics');
+  return { success: true };
+}
+
+export async function updateAnimal(
+  id: string,
+  updates: {
+    farm_id?: string;
+    property_id?: string | null;
+    tag_number?: string;
+    rfid_number?: string | null;
+    breed_id?: string | null;
+    category_id?: string | null;
+    reproductive_status?: string;
+    birth_date?: string | null;
+    status?: string;
+  }
+): Promise<{ success: boolean; error?: string }> {
+  const isOffline = isSystemOffline();
+  const cleanTag = updates.tag_number !== undefined ? updates.tag_number.trim() : undefined;
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
+
+  if (isOffline) {
+    try {
+      const existing = await offlineDb.animals.get(id);
+      if (existing) {
+        await offlineDb.animals.update(id, {
+          ...(updates.farm_id ? { farm_id: updates.farm_id } : {}),
+          ...(cleanTag ? { ear_tag: cleanTag, tag_number: cleanTag, name: cleanTag } : {}),
+          ...(updates.rfid_number !== undefined ? { rfid_number: updates.rfid_number } : {}),
+          ...(updates.reproductive_status ? { reproductive_status: updates.reproductive_status } : {}),
+          ...(updates.status ? { status: updates.status } : {}),
+          ...(updates.breed_id !== undefined ? { breed_id: updates.breed_id || undefined } : {}),
+          ...(updates.category_id !== undefined ? { category_id: updates.category_id || undefined } : {}),
+          ...(updates.property_id !== undefined ? { property_id: updates.property_id || undefined } : {}),
+          updated_at: new Date().toISOString(),
+        });
+      }
+      await syncEngine.enqueueMutation('update', 'animals', id, updates.farm_id || existing?.farm_id, {
+        id,
+        ...(cleanTag ? { tag_number: cleanTag } : {}),
+        ...(updates.rfid_number !== undefined ? { rfid_number: updates.rfid_number } : {}),
+        ...(updates.farm_id ? { farm_id: updates.farm_id } : {}),
+        ...(updates.property_id !== undefined ? { property_id: updates.property_id } : {}),
+        ...(updates.breed_id !== undefined ? { breed_id: updates.breed_id } : {}),
+        ...(updates.category_id !== undefined ? { category_id: updates.category_id } : {}),
+        ...(updates.reproductive_status ? { reproductive_status: updates.reproductive_status } : {}),
+        ...(updates.birth_date !== undefined ? { birth_date: updates.birth_date } : {}),
+        ...(updates.status ? { status: updates.status } : {}),
+        updated_at: new Date().toISOString(),
+      }, orgId || undefined);
+
+      invalidateCache('animals');
+      invalidateCache('metrics');
+      invalidateCache('lots');
+      return { success: true };
+    } catch (e) {
+      console.error('updateAnimal offline error:', e);
+      return { success: false, error: 'Erro offline ao atualizar matriz.' };
+    }
+  }
+
+  const supabase = createClient();
+  const updatePayload: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+
+  if (cleanTag !== undefined) updatePayload.tag_number = cleanTag;
+  if (updates.rfid_number !== undefined) updatePayload.rfid_number = updates.rfid_number ? updates.rfid_number.trim() : null;
+  if (updates.farm_id !== undefined) updatePayload.farm_id = updates.farm_id;
+  if (updates.property_id !== undefined) updatePayload.property_id = updates.property_id || null;
+  if (updates.breed_id !== undefined) updatePayload.breed_id = updates.breed_id || null;
+  if (updates.category_id !== undefined) updatePayload.category_id = updates.category_id || null;
+  if (updates.reproductive_status !== undefined) updatePayload.reproductive_status = updates.reproductive_status;
+  if (updates.birth_date !== undefined) updatePayload.birth_date = updates.birth_date || null;
+  if (updates.status !== undefined) updatePayload.status = updates.status;
+
+  const { error } = await supabase
+    .from('animals')
+    .update(updatePayload)
+    .eq('id', id);
+
+  if (error) {
+    console.error('updateAnimal error:', error);
+    if (error.code === '23505' || error.message?.includes('unique constraint') || error.message?.includes('duplicate key')) {
+      return {
+        success: false,
+        error: `Já existe uma matriz cadastrada com o brinco "${cleanTag}" nesta fazenda.`,
+      };
+    }
+    return { success: false, error: error.message };
+  }
+
+  // Atualizar Dexie offline local
+  try {
+    const existing = await offlineDb.animals.get(id);
+    if (existing) {
+      await offlineDb.animals.update(id, {
+        ...(updates.farm_id ? { farm_id: updates.farm_id } : {}),
+        ...(cleanTag ? { ear_tag: cleanTag, tag_number: cleanTag, name: cleanTag } : {}),
+        ...(updates.status ? { status: updates.status } : {}),
+        ...(updates.reproductive_status ? { reproductive_status: updates.reproductive_status } : {}),
+        updated_at: new Date().toISOString(),
+      });
+    }
+  } catch {}
+
+  invalidateCache('animals');
+  invalidateCache('metrics');
+  invalidateCache('lots');
+  return { success: true };
+}
+
+export async function deleteAnimal(
+  id: string,
+  force = false
+): Promise<{
+  success: boolean;
+  error?: string;
+  hasRelations?: boolean;
+  lotCount?: number;
+  mgmtCount?: number;
+}> {
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
+
+  if (isOffline) {
+    try {
+      await offlineDb.animals.delete(id);
+      await offlineDb.lot_animals.where('animal_id').equals(id).delete().catch(() => {});
+      await syncEngine.enqueueMutation('delete', 'animals', id, undefined, { id }, orgId || undefined);
+      invalidateCache('animals');
+      invalidateCache('metrics');
+      invalidateCache('lots');
+      return { success: true };
+    } catch (e) {
+      console.error('deleteAnimal offline error:', e);
+      return { success: false, error: 'Erro offline ao excluir matriz.' };
+    }
+  }
+
+  const supabase = createClient();
+
+  // 1. Verificar registros vinculados (lotes IATF, manejos reprodutivos, estoque genético)
+  const [lotCheck, mgmtCheck, donorCheck] = await Promise.all([
+    supabase.from('iatf_lot_animals').select('id', { count: 'exact', head: true }).eq('animal_id', id),
+    supabase.from('animal_managements').select('id', { count: 'exact', head: true }).eq('animal_id', id),
+    supabase.from('genetic_materials').select('id', { count: 'exact', head: true }).eq('donor_id', id),
+  ]);
+
+  const lotCount = lotCheck.count || 0;
+  const mgmtCount = mgmtCheck.count || 0;
+  const donorCount = donorCheck.count || 0;
+  const totalRefs = lotCount + mgmtCount + donorCount;
+
+  if (totalRefs > 0 && !force) {
+    return {
+      success: false,
+      hasRelations: true,
+      lotCount,
+      mgmtCount,
+      error: `Esta matriz possui ${totalRefs} vínculo(s) no sistema (${lotCount} lote(s) de IATF e ${mgmtCount} manejo(s) individual(is)). Para manter a rastreabilidade zootécnica, você pode inativar a matriz ou confirmar a exclusão com remoção do histórico.`,
+    };
+  }
+
+  // 2. Se force = true ou totalRefs === 0, executa a exclusão em cascata
+  if (totalRefs > 0) {
+    await supabase.from('animal_managements').delete().eq('animal_id', id);
+    await supabase.from('iatf_lot_animals').delete().eq('animal_id', id);
+  }
+
+  const { error } = await supabase
+    .from('animals')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('deleteAnimal error:', error);
+    return { success: false, error: error.message };
+  }
+
+  // 3. Atualizar Dexie local
+  try {
+    await offlineDb.animals.delete(id);
+    await offlineDb.lot_animals.where('animal_id').equals(id).delete();
+  } catch {}
+
+  // 4. Invalidar caches
+  invalidateCache('animals');
+  invalidateCache('metrics');
+  invalidateCache('lots');
+  invalidateCache('animal_managements');
+
   return { success: true };
 }
 

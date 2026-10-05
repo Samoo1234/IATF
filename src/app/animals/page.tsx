@@ -6,6 +6,8 @@ import {
   getAnimals, 
   getAnimalHistory, 
   createAnimal, 
+  updateAnimal,
+  deleteAnimal,
   getFarms, 
   getBreeds, 
   getAnimalCategories, 
@@ -27,7 +29,9 @@ import {
   AlertCircle,
   Tag,
   Building2,
-  Dna
+  Dna,
+  Edit2,
+  Trash2
 } from 'lucide-react';
 import Link from 'next/link';
 import { useActiveFarm } from '@/context/FarmContext';
@@ -42,11 +46,19 @@ export default function AnimalsPage() {
   const [loading, setLoading] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  // Aux state for creation modal
+  // Aux state for creation & edit modal
   const [farms, setFarms] = useState<Farm[]>([]);
   const [breeds, setBreeds] = useState<Breed[]>([]);
   const [categories, setCategories] = useState<AnimalCategory[]>([]);
   const [showModal, setShowModal] = useState(false);
+  const [editingAnimalId, setEditingAnimalId] = useState<string | null>(null);
+  const [animalToDelete, setAnimalToDelete] = useState<{
+    animal: Animal;
+    hasRelations: boolean;
+    lotCount?: number;
+    mgmtCount?: number;
+    message?: string;
+  } | null>(null);
   const [saving, setSaving] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
@@ -65,6 +77,7 @@ export default function AnimalsPage() {
     category_id: '',
     reproductive_status: 'vazia',
     birth_date: '',
+    status: 'active',
   });
 
   const loadInitialData = useCallback(async () => {
@@ -134,7 +147,49 @@ export default function AnimalsPage() {
     }));
   };
 
-  const handleCreateAnimal = async (e: React.FormEvent) => {
+  const handleOpenCreateAnimal = () => {
+    setEditingAnimalId(null);
+    const farmToUse = activeFarmId || farms[0]?.id || '';
+    const activeFarmObj = farms.find(f => f.id === farmToUse);
+    const neloreBreed = breeds.find(b => b.name.toLowerCase().includes('nelore'))?.id || breeds[0]?.id || '';
+    setAnimalForm({
+      tag_number: '',
+      rfid_number: '',
+      farm_id: farmToUse,
+      property_id: activeFarmObj?.properties?.[0]?.id || '',
+      breed_id: neloreBreed,
+      category_id: categories[0]?.id || '',
+      reproductive_status: 'vazia',
+      birth_date: '',
+      status: 'active',
+    });
+    setModalError(null);
+    setShowModal(true);
+  };
+
+  const handleOpenEditAnimal = (a: Animal) => {
+    setEditingAnimalId(a.id);
+    const farmId = a.farm_id || (farms.find(f => f.name === a.farms?.name)?.id) || activeFarmId || farms[0]?.id || '';
+    const propId = a.property_id || (farms.find(f => f.id === farmId)?.properties?.find(p => p.name === a.properties?.name)?.id) || '';
+    const breedId = a.breed_id || (breeds.find(b => b.name === a.breeds?.name)?.id) || '';
+    const catId = a.category_id || (categories.find(c => c.name === a.animal_categories?.name)?.id) || '';
+
+    setAnimalForm({
+      tag_number: a.tag_number || '',
+      rfid_number: a.rfid_number || '',
+      farm_id: farmId,
+      property_id: propId,
+      breed_id: breedId,
+      category_id: catId,
+      reproductive_status: a.reproductive_status || 'vazia',
+      birth_date: a.birth_date ? String(a.birth_date).split('T')[0] : '',
+      status: a.status || 'active',
+    });
+    setModalError(null);
+    setShowModal(true);
+  };
+
+  const handleSaveAnimal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!animalForm.tag_number.trim() || !animalForm.farm_id) {
       setFeedbackMsg({ type: 'error', text: 'Preencha o número do brinco e selecione a fazenda.' });
@@ -144,44 +199,110 @@ export default function AnimalsPage() {
     setSaving(true);
     setFeedbackMsg(null);
 
-    const res = await createAnimal({
-      tag_number: animalForm.tag_number,
-      rfid_number: animalForm.rfid_number || undefined,
-      farm_id: animalForm.farm_id,
-      property_id: animalForm.property_id || undefined,
-      breed_id: animalForm.breed_id || undefined,
-      category_id: animalForm.category_id || undefined,
-      reproductive_status: animalForm.reproductive_status,
-      birth_date: animalForm.birth_date || undefined,
-    });
+    let res;
+    if (editingAnimalId) {
+      res = await updateAnimal(editingAnimalId, {
+        tag_number: animalForm.tag_number,
+        rfid_number: animalForm.rfid_number || null,
+        farm_id: animalForm.farm_id,
+        property_id: animalForm.property_id || null,
+        breed_id: animalForm.breed_id || null,
+        category_id: animalForm.category_id || null,
+        reproductive_status: animalForm.reproductive_status,
+        birth_date: animalForm.birth_date || null,
+        status: animalForm.status,
+      });
+    } else {
+      res = await createAnimal({
+        tag_number: animalForm.tag_number,
+        rfid_number: animalForm.rfid_number || undefined,
+        farm_id: animalForm.farm_id,
+        property_id: animalForm.property_id || undefined,
+        breed_id: animalForm.breed_id || undefined,
+        category_id: animalForm.category_id || undefined,
+        reproductive_status: animalForm.reproductive_status,
+        birth_date: animalForm.birth_date || undefined,
+      });
+    }
 
     setSaving(false);
 
     if (res.success) {
       setModalError(null);
-      setFeedbackMsg({ type: 'success', text: `Matriz Brinco ${animalForm.tag_number} cadastrada com sucesso!` });
-      setShowModal(false);
-      const farmToUse = activeFarmId || farms[0]?.id || '';
-      const activeFarmObj = farms.find(f => f.id === farmToUse);
-      const neloreBreed = breeds.find(b => b.name.toLowerCase().includes('nelore'))?.id || breeds[0]?.id || '';
-      setAnimalForm({
-        tag_number: '',
-        rfid_number: '',
-        farm_id: farmToUse,
-        property_id: activeFarmObj?.properties?.[0]?.id || '',
-        breed_id: neloreBreed,
-        category_id: '',
-        reproductive_status: 'vazia',
-        birth_date: '',
+      setFeedbackMsg({
+        type: 'success',
+        text: editingAnimalId
+          ? `Matriz Brinco ${animalForm.tag_number} atualizada com sucesso!`
+          : `Matriz Brinco ${animalForm.tag_number} cadastrada com sucesso!`,
       });
+      setShowModal(false);
+      setEditingAnimalId(null);
+
       // Recarregar lista
       const updated = await getAnimals(50, true, activeFarmId || undefined);
       setAnimals(updated);
+      if (selectedAnimal && editingAnimalId === selectedAnimal.id) {
+        const refreshed = updated.find(a => a.id === editingAnimalId);
+        if (refreshed) setSelectedAnimal(refreshed);
+      }
       setTimeout(() => setFeedbackMsg(null), 4000);
     } else {
-      const errorText = res.error || 'Erro ao cadastrar matriz.';
+      const errorText = res.error || (editingAnimalId ? 'Erro ao atualizar matriz.' : 'Erro ao cadastrar matriz.');
       setModalError(errorText);
       setFeedbackMsg({ type: 'error', text: errorText });
+    }
+  };
+
+  const handleDeleteAnimal = async (a: Animal, force = false) => {
+    if (!force) {
+      if (!confirm(`Deseja realmente excluir a matriz Brinco "${a.tag_number}"?`)) return;
+    }
+
+    setSaving(true);
+    const res = await deleteAnimal(a.id, force);
+    setSaving(false);
+
+    if (res.success) {
+      setAnimalToDelete(null);
+      setFeedbackMsg({ type: 'success', text: `Matriz Brinco "${a.tag_number}" excluída com sucesso!` });
+      if (selectedAnimal?.id === a.id) {
+        setSelectedAnimal(null);
+      }
+      const updated = await getAnimals(50, true, activeFarmId || undefined);
+      setAnimals(updated);
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else if (res.hasRelations) {
+      setAnimalToDelete({
+        animal: a,
+        hasRelations: true,
+        lotCount: res.lotCount,
+        mgmtCount: res.mgmtCount,
+        message: res.error,
+      });
+    } else {
+      setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao excluir matriz.' });
+    }
+  };
+
+  const handleInactivateAnimal = async (a: Animal) => {
+    setSaving(true);
+    const res = await updateAnimal(a.id, { status: 'inactive' });
+    setSaving(false);
+    setAnimalToDelete(null);
+
+    if (res.success) {
+      setFeedbackMsg({
+        type: 'success',
+        text: `Matriz Brinco "${a.tag_number}" marcada como inativa/descarte com sucesso! Histórico preservado.`,
+      });
+      const updated = await getAnimals(50, true, activeFarmId || undefined);
+      setAnimals(updated);
+      if (selectedAnimal?.id === a.id) {
+        setSelectedAnimal(null);
+      }
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao inativar matriz.' });
     }
   };
 
@@ -392,6 +513,26 @@ export default function AnimalsPage() {
                     <span>Novo Manejo / Protocolo</span>
                   </button>
 
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEditAnimal(selectedAnimal)}
+                    className="flex items-center gap-1.5 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-3.5 py-2 rounded-xl transition-colors cursor-pointer"
+                    title="Editar dados da matriz"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                    <span>Editar</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteAnimal(selectedAnimal)}
+                    className="flex items-center gap-1.5 text-xs font-semibold text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 px-3.5 py-2 rounded-xl transition-colors cursor-pointer"
+                    title="Excluir ou inativar matriz"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Excluir</span>
+                  </button>
+
                   <Link
                     href={`/animals/${selectedAnimal.id}`}
                     className="flex items-center gap-1.5 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-xl transition-colors"
@@ -465,33 +606,39 @@ export default function AnimalsPage() {
         </div>
       </div>
 
-      {/* ===== MODAL CADASTRO DE MATRIZ / VACA ===== */}
+      {/* ===== MODAL CADASTRO & EDIÇÃO DE MATRIZ / VACA ===== */}
       {showModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="glass-card w-full max-w-xl rounded-3xl border border-slate-700 bg-slate-900 p-6 sm:p-8 space-y-6 animate-in fade-in zoom-in-95">
+          <div className="glass-card w-full max-w-xl rounded-3xl border border-slate-700 bg-slate-900 p-6 sm:p-8 space-y-6 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-800 pb-4">
               <div>
                 <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                  <Syringe className="w-5 h-5 text-emerald-400" /> Cadastrar Nova Matriz (Vaca)
+                  <Syringe className="w-5 h-5 text-emerald-400" />
+                  {editingAnimalId ? 'Editar Matriz (Vaca)' : 'Cadastrar Nova Matriz (Vaca)'}
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Adicione uma fêmea bovina ao rebanho para controle de IATF.
+                  {editingAnimalId
+                    ? 'Altere os dados zootécnicos e cadastrais da matriz.'
+                    : 'Adicione uma fêmea bovina ao rebanho para controle de IATF.'}
                 </p>
               </div>
               <button
-                onClick={() => setShowModal(false)}
-                className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+                onClick={() => {
+                  setShowModal(false);
+                  setEditingAnimalId(null);
+                }}
+                className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateAnimal} className="space-y-4">
+            <form onSubmit={handleSaveAnimal} className="space-y-4">
               {modalError && (
                 <div className="bg-rose-500/15 border border-rose-500/40 rounded-xl p-3.5 flex items-start gap-3 text-xs text-rose-200 animate-in fade-in slide-in-from-top-2">
                   <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                   <div className="flex-1">
-                    <strong className="block text-rose-300 font-semibold mb-0.5">Aviso de Cadastro:</strong>
+                    <strong className="block text-rose-300 font-semibold mb-0.5">Aviso:</strong>
                     <span>{modalError}</span>
                   </div>
                 </div>
@@ -606,10 +753,24 @@ export default function AnimalsPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                    Status Reprodutivo Inicial
+                    Status da Matriz
+                  </label>
+                  <select
+                    value={animalForm.status}
+                    onChange={(e) => setAnimalForm((f) => ({ ...f, status: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="active">Ativa no Rebanho</option>
+                    <option value="inactive">Inativa / Descarte</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
+                    Status Reprodutivo
                   </label>
                   <select
                     value={animalForm.reproductive_status}
@@ -619,13 +780,12 @@ export default function AnimalsPage() {
                     <option value="vazia">Vazia (Apta para IATF)</option>
                     <option value="inseminada">Inseminada</option>
                     <option value="prenha">Prenha</option>
-                    <option value="descartada">Descartada</option>
                   </select>
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                    Data de Nascimento (opcional)
+                    Data de Nascimento
                   </label>
                   <input
                     type="date"
@@ -640,20 +800,102 @@ export default function AnimalsPage() {
                 <button
                   type="submit"
                   disabled={saving}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-3 rounded-xl transition-all shadow-lg glow-emerald flex items-center justify-center gap-2 text-sm"
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-3 rounded-xl transition-all shadow-lg glow-emerald flex items-center justify-center gap-2 text-sm cursor-pointer"
                 >
-                  {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4 stroke-3" />}
-                  {saving ? 'Cadastrando Matriz...' : 'Salvar Matriz'}
+                  {saving ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : editingAnimalId ? (
+                    <Edit2 className="w-4 h-4" />
+                  ) : (
+                    <Plus className="w-4 h-4 stroke-3" />
+                  )}
+                  {saving
+                    ? editingAnimalId
+                      ? 'Salvando Matriz...'
+                      : 'Cadastrando Matriz...'
+                    : editingAnimalId
+                    ? 'Salvar Alterações'
+                    : 'Cadastrar Matriz'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowModal(false)}
-                  className="px-5 py-3 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm font-semibold transition-colors"
+                  onClick={() => {
+                    setShowModal(false);
+                    setEditingAnimalId(null);
+                  }}
+                  className="px-5 py-3 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm font-semibold transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Relações / Exclusão de Matriz */}
+      {animalToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="glass-card w-full max-w-lg rounded-3xl border border-rose-500/30 bg-slate-900 p-6 sm:p-8 space-y-5 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-amber-400" />
+                Exclusão / Descarte de Matriz
+              </h3>
+              <button
+                onClick={() => setAnimalToDelete(null)}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-sm text-slate-300">
+              <p>
+                A matriz com brinco <strong className="text-white font-mono">{animalToDelete.animal.tag_number}</strong> possui registros vinculados no sistema:
+              </p>
+              <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800 space-y-2 text-xs">
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Participação em Lotes IATF:</span>
+                  <span className="font-bold text-amber-400 font-mono text-sm">{animalToDelete.lotCount ?? 0} lote(s)</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Manejos Reprodutivos Individuais:</span>
+                  <span className="font-bold text-amber-400 font-mono text-sm">{animalToDelete.mgmtCount ?? 0} ciclo(s)</span>
+                </div>
+              </div>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Para manter a rastreabilidade zootécnica e os relatórios estatísticos da fazenda, recomendamos <strong>inativar / marcar como descarte</strong> a matriz em vez de excluí-la permanentemente.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2.5 pt-2">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => handleInactivateAnimal(animalToDelete.animal)}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-xs sm:text-sm shadow-md cursor-pointer"
+              >
+                {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                Inativar / Marcar como Descarte (Recomendado)
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => handleDeleteAnimal(animalToDelete.animal, true)}
+                className="w-full bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 font-semibold px-4 py-2 rounded-xl transition-all flex items-center justify-center gap-2 text-xs cursor-pointer"
+              >
+                {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                Excluir Definitivamente (Apaga todo o histórico)
+              </button>
+              <button
+                type="button"
+                onClick={() => setAnimalToDelete(null)}
+                className="w-full px-4 py-2 rounded-xl border border-slate-800 text-slate-400 hover:text-white text-xs cursor-pointer"
+              >
+                Cancelar
+              </button>
+            </div>
           </div>
         </div>
       )}

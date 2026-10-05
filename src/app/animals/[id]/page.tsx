@@ -2,11 +2,20 @@
 
 import { use, useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { 
   getAnimalHistory, 
   getAnimalManagements, 
+  updateAnimal,
+  deleteAnimal,
+  getFarms,
+  getBreeds,
+  getAnimalCategories,
   type Animal, 
-  type AnimalManagement 
+  type AnimalManagement,
+  type Farm,
+  type Breed,
+  type AnimalCategory
 } from '@/lib/db';
 import { formatDateBR } from '@/lib/dateUtils';
 import { 
@@ -19,16 +28,51 @@ import {
   CheckCircle2, 
   Clock, 
   AlertCircle, 
-  Baby
+  Baby,
+  Edit2,
+  Trash2,
+  X,
+  Tag,
+  Building2,
+  Dna
 } from 'lucide-react';
 import AnimalManagementModal, { type ManagementModalMode } from '@/components/AnimalManagementModal';
 
 export default function AnimalDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const router = useRouter();
   const { id } = use(params);
   const [animal, setAnimal] = useState<Animal | null>(null);
   const [history, setHistory] = useState<Record<string, unknown>[]>([]);
   const [managements, setManagements] = useState<AnimalManagement[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Edit & Delete Modal State
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [animalToDelete, setAnimalToDelete] = useState<{
+    hasRelations: boolean;
+    lotCount?: number;
+    mgmtCount?: number;
+    message?: string;
+  } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [editFeedback, setEditFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const [farms, setFarms] = useState<Farm[]>([]);
+  const [breeds, setBreeds] = useState<Breed[]>([]);
+  const [categories, setCategories] = useState<AnimalCategory[]>([]);
+
+  const [editForm, setEditForm] = useState({
+    tag_number: '',
+    rfid_number: '',
+    farm_id: '',
+    property_id: '',
+    breed_id: '',
+    category_id: '',
+    reproductive_status: 'vazia',
+    birth_date: '',
+    status: 'active',
+  });
 
   // Modal State
   const [modalOpen, setModalOpen] = useState(false);
@@ -61,6 +105,106 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  const handleOpenEdit = async () => {
+    if (!animal) return;
+    const [farmsList, breedsList, categoriesList] = await Promise.all([
+      getFarms(),
+      getBreeds(),
+      getAnimalCategories(),
+    ]);
+    setFarms(farmsList);
+    setBreeds(breedsList);
+    setCategories(categoriesList);
+
+    const farmId = animal.farm_id || (farmsList.find(f => f.name === animal.farms?.name)?.id) || farmsList[0]?.id || '';
+    const propId = animal.property_id || (farmsList.find(f => f.id === farmId)?.properties?.find(p => p.name === animal.properties?.name)?.id) || '';
+    const breedId = animal.breed_id || (breedsList.find(b => b.name === animal.breeds?.name)?.id) || '';
+    const catId = animal.category_id || (categoriesList.find(c => c.name === animal.animal_categories?.name)?.id) || '';
+
+    setEditForm({
+      tag_number: animal.tag_number || '',
+      rfid_number: animal.rfid_number || '',
+      farm_id: farmId,
+      property_id: propId,
+      breed_id: breedId,
+      category_id: catId,
+      reproductive_status: animal.reproductive_status || 'vazia',
+      birth_date: animal.birth_date ? String(animal.birth_date).split('T')[0] : '',
+      status: animal.status || 'active',
+    });
+    setEditError(null);
+    setShowEditModal(true);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editForm.tag_number.trim() || !editForm.farm_id) {
+      setEditError('Preencha o número do brinco e selecione a fazenda.');
+      return;
+    }
+    setSaving(true);
+    const res = await updateAnimal(id, {
+      tag_number: editForm.tag_number,
+      rfid_number: editForm.rfid_number || null,
+      farm_id: editForm.farm_id,
+      property_id: editForm.property_id || null,
+      breed_id: editForm.breed_id || null,
+      category_id: editForm.category_id || null,
+      reproductive_status: editForm.reproductive_status,
+      birth_date: editForm.birth_date || null,
+      status: editForm.status,
+    });
+    setSaving(false);
+
+    if (res.success) {
+      setShowEditModal(false);
+      setEditFeedback({ type: 'success', text: 'Dados da matriz atualizados com sucesso!' });
+      await loadData();
+      setTimeout(() => setEditFeedback(null), 4000);
+    } else {
+      setEditError(res.error || 'Erro ao atualizar matriz.');
+    }
+  };
+
+  const handleDeleteAnimal = async (force = false) => {
+    if (!animal) return;
+    if (!force) {
+      if (!confirm(`Deseja realmente excluir a matriz Brinco "${animal.tag_number}"?`)) return;
+    }
+    setSaving(true);
+    const res = await deleteAnimal(id, force);
+    setSaving(false);
+
+    if (res.success) {
+      setAnimalToDelete(null);
+      router.push('/animals');
+    } else if (res.hasRelations) {
+      setAnimalToDelete({
+        hasRelations: true,
+        lotCount: res.lotCount,
+        mgmtCount: res.mgmtCount,
+        message: res.error,
+      });
+    } else {
+      alert(res.error || 'Erro ao excluir matriz.');
+    }
+  };
+
+  const handleInactivateAnimal = async () => {
+    setSaving(true);
+    const res = await updateAnimal(id, { status: 'inactive' });
+    setSaving(false);
+    setAnimalToDelete(null);
+
+    if (res.success) {
+      setEditFeedback({ type: 'success', text: 'Matriz inativada / marcada como descarte com sucesso!' });
+      await loadData();
+      setTimeout(() => setEditFeedback(null), 4000);
+    } else {
+      alert(res.error || 'Erro ao inativar matriz.');
+    }
+  };
 
   const handleOpenStartModal = () => {
     setSelectedMgmt(null);
@@ -112,6 +256,24 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
 
   return (
     <div className="space-y-6">
+      {/* Toast Feedback */}
+      {editFeedback && (
+        <div
+          className={`p-4 rounded-2xl border flex items-center gap-3 animate-in fade-in slide-in-from-top-2 ${
+            editFeedback.type === 'success'
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+              : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+          }`}
+        >
+          {editFeedback.type === 'success' ? (
+            <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+          ) : (
+            <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+          )}
+          <span className="text-sm font-medium">{editFeedback.text}</span>
+        </div>
+      )}
+
       {/* Back Link */}
       <Link href="/animals" className="inline-flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white transition-colors">
         <ArrowLeft className="w-4 h-4" /> Voltar para Busca de Matrizes
@@ -133,6 +295,11 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
                   ? 'Inseminada' 
                   : 'Vazia'}
               </span>
+              {animal.status === 'inactive' && (
+                <span className="text-xs font-bold px-3 py-1 rounded-full border bg-rose-500/10 text-rose-400 border-rose-500/20">
+                  Inativa / Descarte
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-400 mt-1.5 flex items-center gap-2">
               <span>Raça: <strong className="text-slate-200">{animal.breeds?.name ?? '-'}</strong></span>
@@ -155,7 +322,7 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
         </div>
 
         {/* Action Button & Expected Parturition */}
-        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           {activeParturitionDate && animal.reproductive_status === 'prenha' && (
             <div className="p-3.5 rounded-2xl bg-emerald-950/30 border border-emerald-500/30 text-right">
               <span className="text-[11px] text-slate-400 flex items-center justify-end gap-1">
@@ -167,13 +334,35 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
             </div>
           )}
 
-          <button
-            onClick={handleOpenStartModal}
-            className="flex items-center justify-center gap-2 bg-linear-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold px-5 py-3 rounded-2xl text-sm transition-all shadow-lg shadow-emerald-500/20 cursor-pointer"
-          >
-            <Plus className="w-4 h-4 stroke-3" />
-            <span>Iniciar Novo Manejo / Protocolo</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleOpenEdit}
+              className="flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold px-4 py-3 rounded-2xl text-xs sm:text-sm border border-slate-700 transition-all cursor-pointer"
+              title="Editar dados cadastrais da matriz"
+            >
+              <Edit2 className="w-4 h-4" />
+              <span>Editar</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleDeleteAnimal(false)}
+              className="flex items-center justify-center gap-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold px-4 py-3 rounded-2xl text-xs sm:text-sm border border-rose-500/20 transition-all cursor-pointer"
+              title="Excluir ou inativar matriz"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>Excluir</span>
+            </button>
+
+            <button
+              onClick={handleOpenStartModal}
+              className="flex items-center justify-center gap-2 bg-linear-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold px-5 py-3 rounded-2xl text-xs sm:text-sm transition-all shadow-lg shadow-emerald-500/20 cursor-pointer"
+            >
+              <Plus className="w-4 h-4 stroke-3" />
+              <span>Novo Manejo</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -537,6 +726,279 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Edição da Matriz */}
+      {showEditModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="glass-card w-full max-w-lg rounded-3xl border border-slate-700 bg-slate-900 p-6 sm:p-8 space-y-6 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center">
+                  <Edit2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Editar Matriz</h3>
+                  <p className="text-xs text-slate-400">Atualize os dados cadastrais da matriz</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {editError && (
+              <div className="p-3 bg-rose-500/20 border border-rose-500/40 rounded-xl text-xs text-rose-300 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{editError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveEdit} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                    Número do Brinco *
+                  </label>
+                  <div className="relative">
+                    <Tag className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
+                    <input
+                      type="text"
+                      required
+                      value={editForm.tag_number}
+                      onChange={(e) => setEditForm({ ...editForm, tag_number: e.target.value.toUpperCase() })}
+                      placeholder="Ex: 1024"
+                      className="w-full bg-slate-950/60 border border-slate-800 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 uppercase font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                    Número RFID / Chip
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.rfid_number}
+                    onChange={(e) => setEditForm({ ...editForm, rfid_number: e.target.value })}
+                    placeholder="Opcional"
+                    className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                    Fazenda *
+                  </label>
+                  <div className="relative">
+                    <Building2 className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
+                    <select
+                      required
+                      value={editForm.farm_id}
+                      onChange={(e) => setEditForm({ ...editForm, farm_id: e.target.value, property_id: '' })}
+                      className="w-full bg-slate-950/60 border border-slate-800 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="">Selecione...</option>
+                      {farms.map((f) => (
+                        <option key={f.id} value={f.id}>{f.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                    Pasto / Retiro
+                  </label>
+                  <select
+                    value={editForm.property_id}
+                    onChange={(e) => setEditForm({ ...editForm, property_id: e.target.value })}
+                    className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="">Nenhum / Não informado</option>
+                    {(farms.find((f) => f.id === editForm.farm_id)?.properties || []).map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                    Raça
+                  </label>
+                  <div className="relative">
+                    <Dna className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
+                    <select
+                      value={editForm.breed_id}
+                      onChange={(e) => setEditForm({ ...editForm, breed_id: e.target.value })}
+                      className="w-full bg-slate-950/60 border border-slate-800 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="">Selecione a raça...</option>
+                      {breeds.map((b) => (
+                        <option key={b.id} value={b.id}>{b.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                    Categoria
+                  </label>
+                  <select
+                    value={editForm.category_id}
+                    onChange={(e) => setEditForm({ ...editForm, category_id: e.target.value })}
+                    className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="">Selecione a categoria...</option>
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                    Status Reprodutivo
+                  </label>
+                  <select
+                    value={editForm.reproductive_status}
+                    onChange={(e) => setEditForm({ ...editForm, reproductive_status: e.target.value })}
+                    className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="vazia">Vazia</option>
+                    <option value="inseminada">Inseminada</option>
+                    <option value="prenha">Prenha</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                    Data de Nascimento
+                  </label>
+                  <input
+                    type="date"
+                    value={editForm.birth_date}
+                    onChange={(e) => setEditForm({ ...editForm, birth_date: e.target.value })}
+                    className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                    Situação / Status
+                  </label>
+                  <select
+                    value={editForm.status}
+                    onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
+                    className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 font-semibold"
+                  >
+                    <option value="active">Ativa (Rebanho)</option>
+                    <option value="inactive">Inativa / Descarte</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 pt-4 border-t border-slate-800">
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-3 rounded-xl transition-all shadow-lg glow-emerald flex items-center justify-center gap-2 text-sm cursor-pointer"
+                >
+                  {saving ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Edit2 className="w-4 h-4" />
+                  )}
+                  {saving ? 'Salvando...' : 'Salvar Alterações'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowEditModal(false)}
+                  className="px-5 py-3 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm font-semibold transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Exclusão / Descarte com Relações */}
+      {animalToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="glass-card w-full max-w-lg rounded-3xl border border-rose-500/30 bg-slate-900 p-6 sm:p-8 space-y-5 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-amber-400" />
+                Exclusão / Descarte de Matriz
+              </h3>
+              <button
+                onClick={() => setAnimalToDelete(null)}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-sm text-slate-300">
+              <p>
+                A matriz com brinco <strong className="text-white font-mono">{animal?.tag_number}</strong> possui registros vinculados no sistema:
+              </p>
+              <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800 space-y-2 text-xs">
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Participação em Lotes IATF:</span>
+                  <span className="font-bold text-amber-400 font-mono text-sm">{animalToDelete.lotCount ?? 0} lote(s)</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Manejos Reprodutivos Individuais:</span>
+                  <span className="font-bold text-amber-400 font-mono text-sm">{animalToDelete.mgmtCount ?? 0} ciclo(s)</span>
+                </div>
+              </div>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Para manter a integridade dos dados históricos e relatórios zootécnicos, recomendamos <strong>inativar / marcar como descarte</strong> a matriz em vez de excluí-la permanentemente.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2.5 pt-2">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={handleInactivateAnimal}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-xs sm:text-sm shadow-md cursor-pointer"
+              >
+                {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                Inativar / Marcar como Descarte (Recomendado)
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => handleDeleteAnimal(true)}
+                className="w-full bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 font-semibold px-4 py-2 rounded-xl transition-all flex items-center justify-center gap-2 text-xs cursor-pointer"
+              >
+                {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                Excluir Definitivamente (Apaga todo o histórico)
+              </button>
+              <button
+                type="button"
+                onClick={() => setAnimalToDelete(null)}
+                className="w-full px-4 py-2 rounded-xl border border-slate-800 text-slate-400 hover:text-white text-xs cursor-pointer"
+              >
+                Cancelar
+              </button>
+            </div>
           </div>
         </div>
       )}

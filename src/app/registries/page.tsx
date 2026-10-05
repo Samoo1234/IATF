@@ -7,7 +7,7 @@ import {
   getFarms, createFarm, updateFarm, deleteFarm, createProperty, updateProperty, deleteProperty, freezeFarm, unfreezeFarm,
   getBreeds, createBreed, 
   getAnimalCategories, createAnimalCategory,
-  getAnimals, createAnimal,
+  getAnimals, createAnimal, updateAnimal, deleteAnimal,
   createReproductiveSeason, updateReproductiveSeason, deleteReproductiveSeason,
   getVeterinarians, createVeterinarian, updateVeterinarian, deleteVeterinarian, setDefaultVeterinarian,
   type Bull, type GeneticCenter, type Farm, type Property, type Breed, type AnimalCategory, type Animal, type ReproductiveSeason, type Veterinarian
@@ -109,7 +109,18 @@ export default function RegistriesPage() {
     category_id: '',
     reproductive_status: 'vazia',
     birth_date: '',
+    status: 'active' as string,
   });
+  const [editingAnimalId, setEditingAnimalId] = useState<string | null>(null);
+  const [animalSearchQuery, setAnimalSearchQuery] = useState('');
+  const [animalStatusFilter, setAnimalStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
+  const [animalToDelete, setAnimalToDelete] = useState<{
+    animal: Animal;
+    hasRelations: boolean;
+    lotCount?: number;
+    mgmtCount?: number;
+    message?: string;
+  } | null>(null);
   const [modalAnimalError, setModalAnimalError] = useState<string | null>(null);
 
   const [bullForm, setBullForm] = useState({
@@ -192,8 +203,49 @@ export default function RegistriesPage() {
     loadAllData();
   }, [loadAllData]);
 
-  // Handlers
-  const handleCreateAnimal = async (e: React.FormEvent) => {
+  // Animal Handlers
+  const handleOpenCreateAnimal = () => {
+    setEditingAnimalId(null);
+    const farmToUse = activeFarmId || farms[0]?.id || '';
+    const activeFarmObj = farms.find((farm) => farm.id === farmToUse);
+    setAnimalForm({
+      tag_number: '',
+      rfid_number: '',
+      farm_id: farmToUse,
+      property_id: activeFarmObj?.properties?.[0]?.id || '',
+      breed_id: breeds.find((b) => b.name.toLowerCase().includes('nelore'))?.id || breeds[0]?.id || '',
+      category_id: categories[0]?.id || '',
+      reproductive_status: 'vazia',
+      birth_date: '',
+      status: 'active',
+    });
+    setModalAnimalError(null);
+    setShowAnimalModal(true);
+  };
+
+  const handleOpenEditAnimal = (a: Animal) => {
+    setEditingAnimalId(a.id);
+    const farmId = a.farm_id || (farms.find((f) => f.name === a.farms?.name)?.id) || activeFarmId || farms[0]?.id || '';
+    const propId = a.property_id || (farms.find((f) => f.id === farmId)?.properties?.find((p) => p.name === a.properties?.name)?.id) || '';
+    const breedId = a.breed_id || (breeds.find((b) => b.name === a.breeds?.name)?.id) || '';
+    const catId = a.category_id || (categories.find((c) => c.name === a.animal_categories?.name)?.id) || '';
+
+    setAnimalForm({
+      tag_number: a.tag_number || '',
+      rfid_number: a.rfid_number || '',
+      farm_id: farmId,
+      property_id: propId,
+      breed_id: breedId,
+      category_id: catId,
+      reproductive_status: a.reproductive_status || 'vazia',
+      birth_date: a.birth_date ? String(a.birth_date).split('T')[0] : '',
+      status: a.status || 'active',
+    });
+    setModalAnimalError(null);
+    setShowAnimalModal(true);
+  };
+
+  const handleSaveAnimal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!animalForm.tag_number.trim() || !animalForm.farm_id) {
       setFeedbackMsg({ type: 'error', text: 'Preencha o número do brinco e selecione a fazenda.' });
@@ -201,40 +253,94 @@ export default function RegistriesPage() {
     }
 
     setSaving(true);
-    const res = await createAnimal({
-      tag_number: animalForm.tag_number,
-      rfid_number: animalForm.rfid_number || undefined,
-      farm_id: animalForm.farm_id,
-      property_id: animalForm.property_id || undefined,
-      breed_id: animalForm.breed_id || undefined,
-      category_id: animalForm.category_id || undefined,
-      reproductive_status: animalForm.reproductive_status,
-      birth_date: animalForm.birth_date || undefined,
-    });
+    let res;
+    if (editingAnimalId) {
+      res = await updateAnimal(editingAnimalId, {
+        tag_number: animalForm.tag_number,
+        rfid_number: animalForm.rfid_number || null,
+        farm_id: animalForm.farm_id,
+        property_id: animalForm.property_id || null,
+        breed_id: animalForm.breed_id || null,
+        category_id: animalForm.category_id || null,
+        reproductive_status: animalForm.reproductive_status,
+        birth_date: animalForm.birth_date || null,
+        status: animalForm.status,
+      });
+    } else {
+      res = await createAnimal({
+        tag_number: animalForm.tag_number,
+        rfid_number: animalForm.rfid_number || undefined,
+        farm_id: animalForm.farm_id,
+        property_id: animalForm.property_id || undefined,
+        breed_id: animalForm.breed_id || undefined,
+        category_id: animalForm.category_id || undefined,
+        reproductive_status: animalForm.reproductive_status,
+        birth_date: animalForm.birth_date || undefined,
+      });
+    }
     setSaving(false);
 
     if (res.success) {
       setModalAnimalError(null);
-      setFeedbackMsg({ type: 'success', text: `Matriz Brinco ${animalForm.tag_number} cadastrada com sucesso!` });
+      setFeedbackMsg({
+        type: 'success',
+        text: editingAnimalId
+          ? `Matriz Brinco ${animalForm.tag_number} atualizada com sucesso!`
+          : `Matriz Brinco ${animalForm.tag_number} cadastrada com sucesso!`,
+      });
       setShowAnimalModal(false);
-      const farmToUse = activeFarmId || farms[0]?.id || '';
-      const activeFarmObj = farms.find(farm => farm.id === farmToUse);
-      setAnimalForm({
-        tag_number: '',
-        rfid_number: '',
-        farm_id: farmToUse,
-        property_id: activeFarmObj?.properties?.[0]?.id || '',
-        breed_id: '',
-        category_id: '',
-        reproductive_status: 'vazia',
-        birth_date: '',
+      setEditingAnimalId(null);
+      await loadAllData();
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else {
+      const errorText = res.error || (editingAnimalId ? 'Erro ao atualizar matriz.' : 'Erro ao cadastrar matriz.');
+      setModalAnimalError(errorText);
+      setFeedbackMsg({ type: 'error', text: errorText });
+    }
+  };
+
+  const handleDeleteAnimal = async (a: Animal, force = false) => {
+    if (!force) {
+      if (!confirm(`Deseja realmente excluir a matriz Brinco "${a.tag_number}"?`)) return;
+    }
+
+    setSaving(true);
+    const res = await deleteAnimal(a.id, force);
+    setSaving(false);
+
+    if (res.success) {
+      setAnimalToDelete(null);
+      setFeedbackMsg({ type: 'success', text: `Matriz Brinco "${a.tag_number}" excluída com sucesso!` });
+      await loadAllData();
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    } else if (res.hasRelations) {
+      setAnimalToDelete({
+        animal: a,
+        hasRelations: true,
+        lotCount: res.lotCount,
+        mgmtCount: res.mgmtCount,
+        message: res.error,
+      });
+    } else {
+      setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao excluir matriz.' });
+    }
+  };
+
+  const handleInactivateAnimal = async (a: Animal) => {
+    setSaving(true);
+    const res = await updateAnimal(a.id, { status: 'inactive' });
+    setSaving(false);
+    setAnimalToDelete(null);
+
+    if (res.success) {
+      setFeedbackMsg({
+        type: 'success',
+        text: `Matriz Brinco "${a.tag_number}" marcada como inativa/descarte com sucesso! Histórico preservado.`,
       });
       await loadAllData();
       setTimeout(() => setFeedbackMsg(null), 4000);
     } else {
-      const errorText = res.error || 'Erro ao cadastrar matriz.';
-      setModalAnimalError(errorText);
-      setFeedbackMsg({ type: 'error', text: errorText });
+      setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao inativar matriz.' });
     }
   };
 
@@ -841,6 +947,23 @@ export default function RegistriesPage() {
   const selectedFarmObj = farms.find((f) => f.id === animalForm.farm_id);
   const availableProperties = selectedFarmObj?.properties || [];
 
+  const filteredAnimals = animals.filter((a) => {
+    if (animalStatusFilter === 'active' && a.status === 'inactive') return false;
+    if (animalStatusFilter === 'inactive' && a.status !== 'inactive') return false;
+
+    if (animalSearchQuery.trim()) {
+      const q = animalSearchQuery.toLowerCase();
+      const matchTag = a.tag_number?.toLowerCase().includes(q) ?? false;
+      const matchRfid = a.rfid_number?.toLowerCase().includes(q) ?? false;
+      const matchFarm = a.farms?.name?.toLowerCase().includes(q) ?? false;
+      const matchRetiro = a.properties?.name?.toLowerCase().includes(q) ?? false;
+      const matchBreed = a.breeds?.name?.toLowerCase().includes(q) ?? false;
+      const matchCategory = a.animal_categories?.name?.toLowerCase().includes(q) ?? false;
+      return matchTag || matchRfid || matchFarm || matchRetiro || matchBreed || matchCategory;
+    }
+    return true;
+  });
+
   const filteredFarms = farms.filter((f) => {
     if (farmStatusFilter === 'active' && f.status === 'frozen') return false;
     if (farmStatusFilter === 'frozen' && f.status !== 'frozen') return false;
@@ -925,8 +1048,8 @@ export default function RegistriesPage() {
         <div className="flex items-center gap-2">
           {activeTab === 'matrizes' && (
             <button
-              onClick={() => setShowAnimalModal(true)}
-              className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
+              onClick={handleOpenCreateAnimal}
+              className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20 cursor-pointer"
             >
               <Plus className="w-4 h-4" /> Nova Matriz (Vaca)
             </button>
@@ -1074,7 +1197,7 @@ export default function RegistriesPage() {
       ) : activeTab === 'matrizes' ? (
         /* ===== TAB: MATRIZES ===== */
         <div className="glass-card p-6 rounded-2xl border border-slate-800 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <h2 className="text-base font-bold text-white flex items-center gap-2">
               <Syringe className="w-4 h-4 text-emerald-400" /> Rebanho de Fêmeas & Matrizes Cadastradas
             </h2>
@@ -1084,6 +1207,57 @@ export default function RegistriesPage() {
             >
               Abrir busca com ficha reprodutiva detalhada →
             </Link>
+          </div>
+
+          {/* Barra de Filtros e Busca de Matrizes */}
+          <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
+              <input
+                type="text"
+                placeholder="Buscar por brinco, RFID, fazenda, retiro, raça..."
+                value={animalSearchQuery}
+                onChange={(e) => setAnimalSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 bg-slate-950/80 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setAnimalStatusFilter('all')}
+                  className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                    animalStatusFilter === 'all'
+                      ? 'bg-slate-800 text-white'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Todas ({animals.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAnimalStatusFilter('active')}
+                  className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                    animalStatusFilter === 'active'
+                      ? 'bg-emerald-500/20 text-emerald-300 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Ativas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAnimalStatusFilter('inactive')}
+                  className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                    animalStatusFilter === 'inactive'
+                      ? 'bg-rose-500/20 text-rose-300 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Inativas / Descarte
+                </button>
+              </div>
+            </div>
           </div>
 
           <div className="overflow-x-auto rounded-xl border border-slate-800">
@@ -1096,18 +1270,22 @@ export default function RegistriesPage() {
                   <th className="p-3">Retiro</th>
                   <th className="p-3">Raça</th>
                   <th className="p-3">Categoria</th>
+                  <th className="p-3">Status</th>
                   <th className="p-3">Status Reprodutivo</th>
+                  <th className="p-3 text-right">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/80 bg-slate-900/60">
-                {animals.length === 0 ? (
+                {filteredAnimals.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="p-8 text-center text-slate-500">
-                      Nenhuma matriz cadastrada. Clique em &quot;Nova Matriz (Vaca)&quot; para começar.
+                    <td colSpan={9} className="p-8 text-center text-slate-500">
+                      {animals.length === 0
+                        ? 'Nenhuma matriz cadastrada. Clique em "Nova Matriz (Vaca)" para começar.'
+                        : 'Nenhuma matriz encontrada com os filtros selecionados.'}
                     </td>
                   </tr>
                 ) : (
-                  animals.map((a) => (
+                  filteredAnimals.map((a) => (
                     <tr key={a.id} className="hover:bg-slate-800/50 transition-colors">
                       <td className="p-3 font-bold text-white">
                         <div className="flex items-center gap-1.5">
@@ -1138,6 +1316,15 @@ export default function RegistriesPage() {
                       <td className="p-3 text-slate-400">{a.animal_categories?.name || '-'}</td>
                       <td className="p-3">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                          a.status === 'inactive'
+                            ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                            : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                        }`}>
+                          {a.status === 'inactive' ? 'Inativa / Descarte' : 'Ativa'}
+                        </span>
+                      </td>
+                      <td className="p-3">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
                           a.reproductive_status === 'prenha'
                             ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
                             : a.reproductive_status === 'inseminada'
@@ -1146,6 +1333,26 @@ export default function RegistriesPage() {
                         }`}>
                           {a.reproductive_status}
                         </span>
+                      </td>
+                      <td className="p-3 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditAnimal(a)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all cursor-pointer"
+                            title="Editar Matriz"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteAnimal(a)}
+                            className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 transition-all cursor-pointer"
+                            title="Excluir / Descartar Matriz"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -2153,25 +2360,32 @@ export default function RegistriesPage() {
         </div>
       ) : null}
 
-      {/* ===== MODAL CADASTRO DE MATRIZ ===== */}
+      {/* ===== MODAL CADASTRO & EDIÇÃO DE MATRIZ ===== */}
       {showAnimalModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="glass-card w-full max-w-xl rounded-3xl border border-slate-700 bg-slate-900 p-6 sm:p-8 space-y-6">
+          <div className="glass-card w-full max-w-xl rounded-3xl border border-slate-700 bg-slate-900 p-6 sm:p-8 space-y-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-800 pb-4">
               <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                <Syringe className="w-5 h-5 text-emerald-400" /> Cadastrar Nova Matriz (Vaca)
+                <Syringe className="w-5 h-5 text-emerald-400" />
+                {editingAnimalId ? 'Editar Matriz (Vaca)' : 'Cadastrar Nova Matriz (Vaca)'}
               </h3>
-              <button onClick={() => setShowAnimalModal(false)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white">
+              <button
+                onClick={() => {
+                  setShowAnimalModal(false);
+                  setEditingAnimalId(null);
+                }}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateAnimal} className="space-y-4">
+            <form onSubmit={handleSaveAnimal} className="space-y-4">
               {modalAnimalError && (
                 <div className="bg-rose-500/15 border border-rose-500/40 rounded-xl p-3.5 flex items-start gap-3 text-xs text-rose-200 animate-in fade-in slide-in-from-top-2">
                   <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                   <div className="flex-1">
-                    <strong className="block text-rose-300 font-semibold mb-0.5">Aviso de Cadastro:</strong>
+                    <strong className="block text-rose-300 font-semibold mb-0.5">Aviso:</strong>
                     <span>{modalAnimalError}</span>
                   </div>
                 </div>
@@ -2259,24 +2473,142 @@ export default function RegistriesPage() {
                 </div>
               </div>
 
-              <div className="flex gap-3 pt-2">
+              {/* Campos adicionais para edição ou avançado */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Status da Matriz</label>
+                  <select
+                    value={animalForm.status}
+                    onChange={(e) => setAnimalForm((f) => ({ ...f, status: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="active">Ativa no Rebanho</option>
+                    <option value="inactive">Inativa / Descarte</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Status Reprodutivo</label>
+                  <select
+                    value={animalForm.reproductive_status}
+                    onChange={(e) => setAnimalForm((f) => ({ ...f, reproductive_status: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="vazia">Vazia</option>
+                    <option value="inseminada">Inseminada</option>
+                    <option value="prenha">Prenha</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Data de Nascimento</label>
+                  <input
+                    type="date"
+                    value={animalForm.birth_date}
+                    onChange={(e) => setAnimalForm((f) => ({ ...f, birth_date: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-3">
                 <button
                   type="submit"
                   disabled={saving}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm shadow-md"
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm shadow-md cursor-pointer"
                 >
-                  {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                  {saving ? 'Cadastrando...' : 'Cadastrar Matriz'}
+                  {saving ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : editingAnimalId ? (
+                    <Edit2 className="w-4 h-4" />
+                  ) : (
+                    <Plus className="w-4 h-4" />
+                  )}
+                  {saving
+                    ? editingAnimalId
+                      ? 'Salvando...'
+                      : 'Cadastrando...'
+                    : editingAnimalId
+                    ? 'Salvar Alterações'
+                    : 'Cadastrar Matriz'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowAnimalModal(false)}
-                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm"
+                  onClick={() => {
+                    setShowAnimalModal(false);
+                    setEditingAnimalId(null);
+                  }}
+                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-sm cursor-pointer"
                 >
                   Cancelar
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===== MODAL DE RELAÇÕES / EXCLUSÃO DE MATRIZ ===== */}
+      {animalToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="glass-card w-full max-w-lg rounded-3xl border border-rose-500/30 bg-slate-900 p-6 sm:p-8 space-y-5 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-amber-400" />
+                Exclusão / Descarte de Matriz
+              </h3>
+              <button
+                onClick={() => setAnimalToDelete(null)}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-sm text-slate-300">
+              <p>
+                A matriz com brinco <strong className="text-white font-mono">{animalToDelete.animal.tag_number}</strong> possui registros vinculados no sistema:
+              </p>
+              <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800 space-y-2 text-xs">
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Participação em Lotes IATF:</span>
+                  <span className="font-bold text-amber-400 font-mono text-sm">{animalToDelete.lotCount ?? 0} lote(s)</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Manejos Reprodutivos Individuais:</span>
+                  <span className="font-bold text-amber-400 font-mono text-sm">{animalToDelete.mgmtCount ?? 0} ciclo(s)</span>
+                </div>
+              </div>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Para manter a rastreabilidade zootécnica e os relatórios estatísticos da fazenda, recomendamos <strong>inativar / marcar como descarte</strong> a matriz em vez de excluí-la permanentemente.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2.5 pt-2">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => handleInactivateAnimal(animalToDelete.animal)}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-xs sm:text-sm shadow-md cursor-pointer"
+              >
+                {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                Inativar / Marcar como Descarte (Recomendado)
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => handleDeleteAnimal(animalToDelete.animal, true)}
+                className="w-full bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 font-semibold px-4 py-2 rounded-xl transition-all flex items-center justify-center gap-2 text-xs cursor-pointer"
+              >
+                {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                Excluir Definitivamente (Apaga todo o histórico)
+              </button>
+              <button
+                type="button"
+                onClick={() => setAnimalToDelete(null)}
+                className="w-full px-4 py-2 rounded-xl border border-slate-800 text-slate-400 hover:text-white text-xs cursor-pointer"
+              >
+                Cancelar
+              </button>
+            </div>
           </div>
         </div>
       )}
