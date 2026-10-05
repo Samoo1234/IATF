@@ -46,7 +46,13 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         const targetFarmId = validSaved ? (savedFarm as string) : farmsList[0].id;
         selectAndPersistFarm(targetFarmId);
       } else {
-        setActiveFarmIdState(null);
+        const isOffline = typeof window !== 'undefined' && !navigator.onLine;
+        const savedFarm = typeof window !== 'undefined' ? localStorage.getItem('iatf_active_farm_id') : null;
+        if (isOffline && savedFarm) {
+          setActiveFarmIdState(savedFarm);
+        } else {
+          setActiveFarmIdState(null);
+        }
       }
     } catch (err) {
       console.error('Error loading farms in FarmProvider:', err);

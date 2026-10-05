@@ -1,6 +1,7 @@
-const CACHE_NAME = 'iatf-pwa-v1';
+const CACHE_NAME = 'iatf-pwa-v2';
 
 const STATIC_PRECACHE = [
+  '/',
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
@@ -11,7 +12,9 @@ const STATIC_PRECACHE = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_PRECACHE);
+      return Promise.allSettled(
+        STATIC_PRECACHE.map((url) => cache.add(url).catch((err) => console.warn(`[SW] Precache falhou para ${url}:`, err)))
+      );
     })
   );
   self.skipWaiting();

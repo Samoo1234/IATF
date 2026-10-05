@@ -33,6 +33,13 @@ export default function SyncStatusBadge({ onOpenPrepModal }: SyncStatusBadgeProp
       setSyncState(state);
     });
 
+    // Pre-cache all tables in Dexie on mount if online so offline mode is fully functional
+    if (typeof window !== 'undefined' && navigator.onLine) {
+      syncEngine.syncDownAllData().catch((err) => {
+        console.warn('Initial offline cache preload failed:', err);
+      });
+    }
+
     const handleClickOutside = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setMenuOpen(false);
@@ -184,6 +191,27 @@ export default function SyncStatusBadge({ onOpenPrepModal }: SyncStatusBadgeProp
               </span>
               <span className="text-[10px] text-slate-400 font-mono">
                 {syncState.isSyncing ? 'Enviando...' : 'Enviar fila'}
+              </span>
+            </button>
+
+            {/* Toggle Forced Offline Mode */}
+            <button
+              onClick={() => {
+                const nextVal = !syncEngine.getForcedOffline();
+                syncEngine.setForcedOffline(nextVal);
+              }}
+              className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-semibold transition-all border ${
+                syncEngine.getForcedOffline()
+                  ? 'bg-amber-500/20 border-amber-500/40 text-amber-300 hover:bg-amber-500/30'
+                  : 'bg-slate-800/80 border-slate-700/50 text-slate-300 hover:bg-slate-700/80 hover:text-white'
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <WifiOff className="w-3.5 h-3.5 text-amber-400" />
+                {syncEngine.getForcedOffline() ? 'Modo Curral (Forçado)' : 'Forçar Modo Offline'}
+              </span>
+              <span className="text-[10px] font-mono font-bold">
+                {syncEngine.getForcedOffline() ? 'ATIVO' : 'DESATIVADO'}
               </span>
             </button>
 

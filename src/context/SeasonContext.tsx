@@ -61,7 +61,13 @@ export function SeasonProvider({ children }: { children: React.ReactNode }) {
 
         selectAndPersistSeason(targetSeasonId);
       } else {
-        setActiveSeasonIdState(null);
+        const isOffline = typeof window !== 'undefined' && !navigator.onLine;
+        const savedSeason = typeof window !== 'undefined' ? localStorage.getItem('iatf_active_season_id') : null;
+        if (isOffline && savedSeason) {
+          setActiveSeasonIdState(savedSeason);
+        } else {
+          setActiveSeasonIdState(null);
+        }
       }
     } catch (err) {
       console.error('Error loading seasons in SeasonProvider:', err);

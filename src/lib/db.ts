@@ -1,7 +1,28 @@
 import { createClient } from './supabase/client';
-import { offlineDb } from './offline/offlineDb';
+import { offlineDb, type OfflineLotAnimal } from './offline/offlineDb';
 import { syncEngine } from './offline/syncEngine';
 import { getTodayDateString, addDaysToDateString } from './dateUtils';
+
+export const DEFAULT_BREEDS = [
+  { id: 'breed-nelore', name: 'Nelore' },
+  { id: 'breed-angus', name: 'Angus' },
+  { id: 'breed-brangus', name: 'Brangus' },
+  { id: 'breed-senepol', name: 'Senepol' },
+  { id: 'breed-braford', name: 'Braford' },
+  { id: 'breed-tabapua', name: 'Tabapuã' },
+  { id: 'breed-gir', name: 'Gir Leiteiro' },
+  { id: 'breed-girolando', name: 'Girolando' },
+  { id: 'breed-brahman', name: 'Brahman' },
+  { id: 'breed-cruzamento', name: 'Cruzamento Industrial' },
+];
+
+export const DEFAULT_CATEGORIES = [
+  { id: 'cat-novilha', name: 'Novilha' },
+  { id: 'cat-primipara', name: 'Primípara' },
+  { id: 'cat-multipara', name: 'Multípara' },
+  { id: 'cat-solteira', name: 'Solteira' },
+  { id: 'cat-parida', name: 'Vaca Parida' },
+];
 
 // ============================================================
 // DYNAMIC MULTI-TENANT RESOLVER & GLOBAL IN-MEMORY CACHE
@@ -60,45 +81,132 @@ export function clearFarmsCache() {
   invalidateCache('farms');
 }
 
+export function isSystemOffline(): boolean {
+  if (typeof window === 'undefined') return false;
+  return syncEngine.isOffline();
+}
+
+export function isNetworkError(error: unknown): boolean {
+  if (!error) return false;
+  if (typeof window !== 'undefined' && !navigator.onLine) return true;
+  const msg = (error as { message?: string })?.message || String(error);
+  return (
+    msg.includes('Failed to fetch') ||
+    msg.includes('NetworkError') ||
+    msg.includes('ERR_INTERNET_DISCONNECTED') ||
+    msg.includes('Failed to send request') ||
+    msg.includes('Network request failed') ||
+    msg.includes('fetch failed') ||
+    msg.includes('Load failed') ||
+    msg.includes('connection error') ||
+    msg.includes('network error')
+  );
+}
+
 export async function getCurrentOrgId(): Promise<string | null> {
   const now = Date.now();
   if (cachedOrgId && now - cachedOrgIdTimestamp < CACHE_TTL_MS) {
     return cachedOrgId;
   }
 
-  const supabase = createClient();
-  // getSession() lê a sessão localmente em milissegundos sem fazer chamada remota à API de auth
-  const { data: { session } } = await supabase.auth.getSession();
-  let user = session?.user ?? null;
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
 
-  if (!user) {
-    const { data: userData } = await supabase.auth.getUser();
-    user = userData?.user ?? null;
+  if (isOffline) {
+    if (storedOrgId) {
+      cachedOrgId = storedOrgId;
+      cachedOrgIdTimestamp = now;
+      return cachedOrgId;
+    }
+    const fromFarm = (await offlineDb.farms.toCollection().first())?.organization_id;
+    if (fromFarm) {
+      const orgStr = String(fromFarm);
+      cachedOrgId = orgStr;
+      cachedOrgIdTimestamp = now;
+      if (typeof window !== 'undefined') localStorage.setItem('iatf_current_org_id', orgStr);
+      return orgStr;
+    }
+    const fromLot = (await offlineDb.lots.toCollection().first())?.organization_id;
+    if (fromLot) {
+      const orgStr = String(fromLot);
+      cachedOrgId = orgStr;
+      cachedOrgIdTimestamp = now;
+      if (typeof window !== 'undefined') localStorage.setItem('iatf_current_org_id', orgStr);
+      return orgStr;
+    }
+    return null;
   }
 
-  if (!user) return null;
+  try {
+    const supabase = createClient();
+    // getSession() lê a sessão localmente em milissegundos sem fazer chamada remota à API de auth
+    const { data: { session } } = await supabase.auth.getSession();
+    let user = session?.user ?? null;
 
-  const { data: member } = await supabase
-    .from('organization_members')
-    .select('organization_id')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle();
+    if (!user) {
+      const { data: userData } = await supabase.auth.getUser();
+      user = userData?.user ?? null;
+    }
 
-  if (member?.organization_id) {
-    cachedOrgId = member.organization_id;
-    cachedOrgIdTimestamp = now;
-    return cachedOrgId;
+    if (!user) {
+      if (storedOrgId) {
+        cachedOrgId = storedOrgId;
+        cachedOrgIdTimestamp = now;
+        return cachedOrgId;
+      }
+      return null;
+    }
+
+    const { data: member } = await supabase
+      .from('organization_members')
+      .select('organization_id')
+      .eq('user_id', user.id)
+      .limit(1)
+      .maybeSingle();
+
+    if (member?.organization_id) {
+      cachedOrgId = member.organization_id;
+      cachedOrgIdTimestamp = now;
+      if (typeof window !== 'undefined' && cachedOrgId) {
+        localStorage.setItem('iatf_current_org_id', cachedOrgId);
+      }
+      return cachedOrgId;
+    }
+
+    // Fallback: Check if user owns an organization directly
+    const { data: orgs } = await supabase
+      .from('organizations')
+      .select('id')
+      .limit(1);
+
+    if (orgs && orgs.length > 0) {
+      cachedOrgId = orgs[0].id;
+      cachedOrgIdTimestamp = now;
+      if (typeof window !== 'undefined' && cachedOrgId) {
+        localStorage.setItem('iatf_current_org_id', cachedOrgId);
+      }
+      return cachedOrgId;
+    }
+  } catch (err) {
+    if (isNetworkError(err)) {
+      syncEngine.markOffline();
+    }
+    console.warn('[getCurrentOrgId] Falha na rede, utilizando fallback local:', err);
+    if (storedOrgId) {
+      cachedOrgId = storedOrgId;
+      cachedOrgIdTimestamp = now;
+      return cachedOrgId;
+    }
+    const fromFarm = (await offlineDb.farms.toCollection().first())?.organization_id;
+    if (fromFarm) {
+      cachedOrgId = fromFarm;
+      cachedOrgIdTimestamp = now;
+      return fromFarm;
+    }
   }
 
-  // Fallback: Check if user owns an organization directly
-  const { data: orgs } = await supabase
-    .from('organizations')
-    .select('id')
-    .limit(1);
-
-  if (orgs && orgs.length > 0) {
-    cachedOrgId = orgs[0].id;
+  if (storedOrgId) {
+    cachedOrgId = storedOrgId;
     cachedOrgIdTimestamp = now;
     return cachedOrgId;
   }
@@ -185,43 +293,73 @@ export interface LotStat {
 }
 
 export async function getLots(forceRefresh = false, farmId?: string): Promise<LotStat[]> {
-  const isOffline = typeof window !== 'undefined' && !navigator.onLine;
+  const isOffline = isSystemOffline();
   if (isOffline) {
     try {
       let offlineLots = await offlineDb.lots.toArray();
       if (farmId && farmId !== 'all') {
         offlineLots = offlineLots.filter((l) => l.farm_id === farmId);
       }
-      if (offlineLots.length > 0) {
-        return offlineLots.map((l) => ({
-          id: l.id,
-          code: l.code || 'Lote',
-          farm_id: l.farm_id,
-          season_id: l.season_id,
-          season_name: null,
-          start_date: (l.start_date as string) || getTodayDateString(),
-          ia_planned_date: null,
-          dg_planned_date: null,
-          responsible_name: null,
-          status: (l.status as string) || 'ativo',
-          property_name: null,
-          protocol_name: null,
-          farm_name: null,
-          worked_qty: (l.females_count as number) || 0,
-          inseminated_qty: (l.inseminated_count as number) || 0,
-          pregnancies: (l.pregnant_count as number) || 0,
-          empty_count: 0,
-          pregnancy_rate: 0,
-          pending_dg: 0,
-        }));
-      }
+      return offlineLots.map((l) => ({
+        id: l.id,
+        code: l.code || 'Lote',
+        farm_id: l.farm_id,
+        season_id: l.season_id,
+        season_name: null,
+        start_date: (l.start_date as string) || getTodayDateString(),
+        ia_planned_date: (l.ia_planned_date as string) || null,
+        dg_planned_date: (l.dg_planned_date as string) || null,
+        responsible_name: (l.responsible_name as string) || null,
+        status: (l.status as string) || 'ativo',
+        property_name: (l.property_name as string) || null,
+        protocol_name: (l.protocol_name as string) || null,
+        farm_name: (l.farm_name as string) || null,
+        worked_qty: (l.females_count as number) || 0,
+        inseminated_qty: (l.inseminated_count as number) || 0,
+        pregnancies: (l.pregnant_count as number) || 0,
+        empty_count: (l.empty_count as number) || 0,
+        pregnancy_rate: (l.pregnancy_rate as number) || 0,
+        pending_dg: (l.pending_dg as number) || 0,
+      }));
     } catch (e) {
       console.warn('Falha ao carregar lotes offline:', e);
+      return [];
     }
   }
 
   const orgId = await getCurrentOrgId();
-  if (!orgId) return [];
+  if (!orgId) {
+    try {
+      let offlineLots = await offlineDb.lots.toArray();
+      if (farmId && farmId !== 'all') {
+        offlineLots = offlineLots.filter((l) => l.farm_id === farmId);
+      }
+      return offlineLots.map((l) => ({
+        id: l.id,
+        code: l.code || 'Lote',
+        farm_id: l.farm_id,
+        season_id: l.season_id,
+        season_name: null,
+        start_date: (l.start_date as string) || getTodayDateString(),
+        ia_planned_date: (l.ia_planned_date as string) || null,
+        dg_planned_date: (l.dg_planned_date as string) || null,
+        responsible_name: (l.responsible_name as string) || null,
+        status: (l.status as string) || 'ativo',
+        property_name: (l.property_name as string) || null,
+        protocol_name: (l.protocol_name as string) || null,
+        farm_name: (l.farm_name as string) || null,
+        worked_qty: (l.females_count as number) || 0,
+        inseminated_qty: (l.inseminated_count as number) || 0,
+        pregnancies: (l.pregnant_count as number) || 0,
+        empty_count: (l.empty_count as number) || 0,
+        pregnancy_rate: (l.pregnancy_rate as number) || 0,
+        pending_dg: (l.pending_dg as number) || 0,
+      }));
+    } catch {
+      // ignore
+    }
+    return [];
+  }
 
   const cacheKey = `lots_${orgId}_${farmId || 'all'}`;
   if (!forceRefresh) {
@@ -244,30 +382,31 @@ export async function getLots(forceRefresh = false, farmId?: string): Promise<Lo
   if (error) {
     console.error('getLots error:', error);
     try {
-      const offlineLots = await offlineDb.lots.toArray();
-      if (offlineLots.length > 0) {
-        return offlineLots.map((l) => ({
-          id: l.id,
-          code: l.code || 'Lote',
-          farm_id: l.farm_id,
-          season_id: l.season_id,
-          season_name: null,
-          start_date: (l.start_date as string) || getTodayDateString(),
-          ia_planned_date: null,
-          dg_planned_date: null,
-          responsible_name: null,
-          status: (l.status as string) || 'ativo',
-          property_name: null,
-          protocol_name: null,
-          farm_name: null,
-          worked_qty: (l.females_count as number) || 0,
-          inseminated_qty: (l.inseminated_count as number) || 0,
-          pregnancies: (l.pregnant_count as number) || 0,
-          empty_count: 0,
-          pregnancy_rate: 0,
-          pending_dg: 0,
-        }));
+      let offlineLots = await offlineDb.lots.toArray();
+      if (farmId && farmId !== 'all') {
+        offlineLots = offlineLots.filter((l) => l.farm_id === farmId);
       }
+      return offlineLots.map((l) => ({
+        id: l.id,
+        code: l.code || 'Lote',
+        farm_id: l.farm_id,
+        season_id: l.season_id,
+        season_name: null,
+        start_date: (l.start_date as string) || getTodayDateString(),
+        ia_planned_date: (l.ia_planned_date as string) || null,
+        dg_planned_date: (l.dg_planned_date as string) || null,
+        responsible_name: (l.responsible_name as string) || null,
+        status: (l.status as string) || 'ativo',
+        property_name: (l.property_name as string) || null,
+        protocol_name: (l.protocol_name as string) || null,
+        farm_name: (l.farm_name as string) || null,
+        worked_qty: (l.females_count as number) || 0,
+        inseminated_qty: (l.inseminated_count as number) || 0,
+        pregnancies: (l.pregnant_count as number) || 0,
+        empty_count: (l.empty_count as number) || 0,
+        pregnancy_rate: (l.pregnancy_rate as number) || 0,
+        pending_dg: (l.pending_dg as number) || 0,
+      }));
     } catch {
       // ignore
     }
@@ -275,10 +414,75 @@ export async function getLots(forceRefresh = false, farmId?: string): Promise<Lo
   }
   const result = (data ?? []) as LotStat[];
   setCached(cacheKey, result);
+
+  if (result.length > 0) {
+    try {
+      await offlineDb.lots.bulkPut(
+        result.map((l) => ({
+          id: l.id,
+          farm_id: l.farm_id,
+          season_id: l.season_id || undefined,
+          code: l.code,
+          name: l.code,
+          status: l.status,
+          start_date: l.start_date,
+          ia_planned_date: l.ia_planned_date || undefined,
+          dg_planned_date: l.dg_planned_date || undefined,
+          responsible_name: l.responsible_name || undefined,
+          property_name: l.property_name || undefined,
+          protocol_name: l.protocol_name || undefined,
+          farm_name: l.farm_name || undefined,
+          females_count: l.worked_qty,
+          inseminated_count: l.inseminated_qty,
+          pregnant_count: l.pregnancies,
+          empty_count: l.empty_count,
+          pregnancy_rate: l.pregnancy_rate,
+          pending_dg: l.pending_dg,
+          organization_id: orgId,
+          updated_at: new Date().toISOString(),
+        } as unknown as import('./offline/offlineDb').OfflineLot))
+      );
+    } catch (e) {
+      console.warn('Erro ao salvar lotes no IndexedDB:', e);
+    }
+  }
+
   return result;
 }
 
 export async function getLotById(id: string, forceRefresh = false): Promise<LotStat | null> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const l = await offlineDb.lots.get(id);
+      if (l) {
+        return {
+          id: l.id,
+          code: l.code || 'Lote',
+          farm_id: l.farm_id,
+          season_id: l.season_id,
+          season_name: null,
+          start_date: (l.start_date as string) || getTodayDateString(),
+          ia_planned_date: (l.ia_planned_date as string) || null,
+          dg_planned_date: (l.dg_planned_date as string) || null,
+          responsible_name: (l.responsible_name as string) || null,
+          status: (l.status as string) || 'ativo',
+          property_name: (l.property_name as string) || null,
+          protocol_name: (l.protocol_name as string) || null,
+          farm_name: (l.farm_name as string) || null,
+          worked_qty: (l.females_count as number) || 0,
+          inseminated_qty: (l.inseminated_count as number) || 0,
+          pregnancies: (l.pregnant_count as number) || 0,
+          empty_count: (l.empty_count as number) || 0,
+          pregnancy_rate: (l.pregnancy_rate as number) || 0,
+          pending_dg: (l.pending_dg as number) || 0,
+        };
+      }
+    } catch (e) {
+      console.warn('Falha ao carregar lote offline:', e);
+    }
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return null;
 
@@ -331,6 +535,20 @@ export interface LotAnimal {
 }
 
 export async function getLotAnimals(lotId: string, forceRefresh = false): Promise<LotAnimal[]> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const offlineAnimals = await offlineDb.lot_animals
+        .where('lot_id')
+        .equals(lotId)
+        .toArray();
+      return offlineAnimals as unknown as LotAnimal[];
+    } catch (e) {
+      console.warn('Falha ao carregar animais do lote offline:', e);
+      return [];
+    }
+  }
+
   const cacheKey = `lot_animals_${lotId}`;
   if (!forceRefresh) {
     const cached = getCached<LotAnimal[]>(cacheKey);
@@ -351,10 +569,35 @@ export async function getLotAnimals(lotId: string, forceRefresh = false): Promis
 
   if (error) {
     console.error('getLotAnimals error:', error);
+    try {
+      const offlineAnimals = await offlineDb.lot_animals
+        .where('lot_id')
+        .equals(lotId)
+        .toArray();
+      if (offlineAnimals.length > 0) {
+        return offlineAnimals as unknown as LotAnimal[];
+      }
+    } catch {
+      // ignore
+    }
     return getCached<LotAnimal[]>(cacheKey) ?? [];
   }
   const result = (data ?? []) as unknown as LotAnimal[];
   setCached(cacheKey, result);
+
+  if (result.length > 0) {
+    try {
+      await offlineDb.lot_animals.bulkPut(
+        result.map((la) => ({
+          ...la,
+          updated_at: new Date().toISOString(),
+        } as unknown as import('./offline/offlineDb').OfflineLotAnimal))
+      );
+    } catch (e) {
+      console.warn('Erro ao salvar animais do lote no IndexedDB:', e);
+    }
+  }
+
   return result;
 }
 
@@ -363,6 +606,20 @@ export async function updateAnimalDG(
   pregnancyStatus: 'prenha' | 'vazia' | 'repeticao',
   eccDg?: number
 ): Promise<boolean> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      await syncEngine.recordOfflineLotAnimalDG(lotAnimalId, pregnancyStatus, eccDg);
+      invalidateCache('lot_animals');
+      invalidateCache('lots');
+      invalidateCache('metrics');
+      return true;
+    } catch (e) {
+      console.error('Erro ao atualizar DG offline:', e);
+      return false;
+    }
+  }
+
   const supabase = createClient();
   const updateData: Record<string, unknown> = {
     pregnancy_status: pregnancyStatus,
@@ -397,6 +654,73 @@ export async function addAnimalsToLot(
   animalIds: string[]
 ): Promise<{ success: boolean; count: number; error?: string }> {
   if (!animalIds.length) return { success: true, count: 0 };
+
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const lot = await offlineDb.lots.get(lotId);
+      const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+      const orgId = (lot?.organization_id as string) || storedOrgId || undefined;
+      const farmId = lot?.farm_id;
+
+      for (const animalId of animalIds) {
+        const lotAnimalId = crypto.randomUUID();
+        const animal = await offlineDb.animals.get(animalId);
+
+        const record: OfflineLotAnimal = {
+          id: lotAnimalId,
+          lot_id: lotId,
+          animal_id: animalId,
+          farm_id: farmId,
+          status: 'active',
+          pregnancy_status: 'pendente',
+          is_pregnant: null,
+          animals: animal ? {
+            tag_number: (animal.tag_number || animal.ear_tag) as string,
+            reproductive_status: (animal.reproductive_status as string) || 'vazia',
+            breeds: animal.breed ? { name: String(animal.breed) } : null,
+            animal_categories: animal.category ? { name: String(animal.category) } : null,
+            properties: null,
+          } : null,
+          bulls: null,
+          semen_batches: null,
+          updated_at: new Date().toISOString(),
+        };
+
+        await offlineDb.lot_animals.put(record);
+
+        await syncEngine.enqueueMutation('insert', 'iatf_lot_animals', lotAnimalId, farmId, {
+          id: lotAnimalId,
+          lot_id: lotId,
+          animal_id: animalId,
+          pregnancy_status: 'pendente',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }, orgId);
+      }
+
+      if (lot) {
+        await offlineDb.lots.update(lotId, {
+          females_count: ((lot.females_count as number) || 0) + animalIds.length,
+          updated_at: new Date().toISOString(),
+        });
+      }
+
+      invalidateCache('lot_animals');
+      invalidateCache('lots');
+      invalidateCache('animals');
+      invalidateCache('metrics');
+      return { success: true, count: animalIds.length };
+    } catch (e: unknown) {
+      console.error('addAnimalsToLot offline error:', e);
+      return {
+        success: false,
+        count: 0,
+        error: 'Erro offline ao vincular matrizes: ' + (e instanceof Error ? e.message : String(e)),
+      };
+    }
+  }
+
   const supabase = createClient();
   const records = animalIds.map((animalId) => ({
     lot_id: lotId,
@@ -416,11 +740,39 @@ export async function addAnimalsToLot(
 
   invalidateCache('lot_animals');
   invalidateCache('lots');
+  invalidateCache('animals');
   invalidateCache('metrics');
   return { success: true, count: data?.length ?? records.length };
 }
 
 export async function removeAnimalFromLot(lotAnimalId: string): Promise<boolean> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const record = await offlineDb.lot_animals.get(lotAnimalId);
+      if (record) {
+        await offlineDb.lot_animals.delete(lotAnimalId);
+        const lot = await offlineDb.lots.get(record.lot_id);
+        if (lot && (lot.females_count as number) > 0) {
+          await offlineDb.lots.update(record.lot_id, {
+            females_count: Math.max(0, ((lot.females_count as number) || 1) - 1),
+            updated_at: new Date().toISOString(),
+          });
+        }
+        await syncEngine.enqueueMutation('delete', 'iatf_lot_animals', lotAnimalId, record.farm_id, {
+          id: lotAnimalId,
+        });
+      }
+      invalidateCache('lot_animals');
+      invalidateCache('lots');
+      invalidateCache('metrics');
+      return true;
+    } catch (e) {
+      console.error('removeAnimalFromLot offline error:', e);
+      return false;
+    }
+  }
+
   const supabase = createClient();
   const { error } = await supabase
     .from('iatf_lot_animals')
@@ -439,6 +791,52 @@ export async function removeAnimalFromLot(lotAnimalId: string): Promise<boolean>
 }
 
 export async function getAvailableAnimalsForLot(lotId: string, search?: string, farmId?: string): Promise<Animal[]> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const lot = await offlineDb.lots.get(lotId);
+      const resolvedFarmId = farmId || lot?.farm_id;
+      const existingInLot = await offlineDb.lot_animals.where('lot_id').equals(lotId).toArray();
+      const existingIds = new Set(existingInLot.map((la) => la.animal_id));
+
+      let allAnimals = await offlineDb.animals.toArray();
+      if (resolvedFarmId && resolvedFarmId !== 'all') {
+        allAnimals = allAnimals.filter((a) => a.farm_id === resolvedFarmId);
+      }
+      allAnimals = allAnimals.filter((a) => a.status !== 'inactive' && !existingIds.has(a.id));
+
+      if (search && search.trim()) {
+        const query = search.trim().toLowerCase();
+        allAnimals = allAnimals.filter((a) => {
+          const tag = ((a.tag_number as string) || a.ear_tag || '').toLowerCase();
+          return tag.includes(query);
+        });
+      }
+
+      return allAnimals.map((a) => ({
+        id: a.id,
+        organization_id: (a.organization_id as string) || '',
+        farm_id: a.farm_id,
+        property_id: (a.property_id as string) || null,
+        tag_number: ((a.tag_number as string) || a.ear_tag) as string,
+        rfid_number: (a.rfid_number as string) || null,
+        breed_id: (a.breed_id as string) || null,
+        category_id: (a.category_id as string) || null,
+        reproductive_status: (a.reproductive_status as string) || 'vazia',
+        birth_date: (a.birth_date as string) || null,
+        sex: (a.sex as string) || 'F',
+        status: (a.status as string) || 'active',
+        breeds: a.breed ? { name: String(a.breed) } : null,
+        animal_categories: a.category ? { name: String(a.category) } : null,
+        properties: null,
+        farms: null,
+      })) as unknown as Animal[];
+    } catch (e) {
+      console.warn('getAvailableAnimalsForLot offline error:', e);
+      return [];
+    }
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
 
@@ -503,6 +901,96 @@ export async function createAndAddAnimalToLot(
     birth_date?: string;
   }
 ): Promise<{ success: boolean; error?: string }> {
+  const cleanTag = animal.tag_number.trim();
+  const isOffline = isSystemOffline();
+
+  if (isOffline) {
+    try {
+      const localLot = await offlineDb.lots.get(lotId);
+      const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+      const targetOrgId = (localLot?.organization_id as string) || storedOrgId || '';
+      const targetFarmId = animal.farm_id || localLot?.farm_id;
+      const targetPropertyId = animal.property_id || (localLot?.property_id as string) || null;
+
+      if (!targetFarmId) {
+        return { success: false, error: 'Fazenda do lote não identificada na base local.' };
+      }
+
+      // 1. Verificar duplicidade de brinco local
+      const existingAnimal = await offlineDb.animals
+        .filter((a) => {
+          const matchFarm = !targetFarmId || a.farm_id === targetFarmId;
+          const matchTag = ((a.ear_tag && a.ear_tag.toLowerCase() === cleanTag.toLowerCase()) ||
+                           (a.tag_number && String(a.tag_number).toLowerCase() === cleanTag.toLowerCase()));
+          return matchFarm && Boolean(matchTag);
+        })
+        .first();
+
+      let animalId = existingAnimal?.id;
+      if (animalId) {
+        const alreadyInLot = await offlineDb.lot_animals
+          .where({ lot_id: lotId, animal_id: animalId })
+          .first();
+
+        if (alreadyInLot) {
+          return {
+            success: false,
+            error: `A matriz com brinco "${cleanTag}" já está cadastrada e vinculada a este lote.`,
+          };
+        }
+
+        return {
+          success: false,
+          error: `Já existe uma matriz cadastrada com o brinco "${cleanTag}" nesta fazenda. Use a aba "Selecionar Existentes" para vinculá-la a este lote.`,
+        };
+      }
+
+      // 2. Gerar IDs locais
+      animalId = crypto.randomUUID();
+      const lotAnimalId = crypto.randomUUID();
+
+      let breedName: string | null = null;
+      if (animal.breed_id) {
+        const localBreed = await offlineDb.breeds.get(animal.breed_id);
+        breedName = localBreed?.name || DEFAULT_BREEDS.find((b) => b.id === animal.breed_id)?.name || null;
+      }
+      let categoryName: string | null = null;
+      if (animal.category_id) {
+        const localCat = await offlineDb.categories.get(animal.category_id);
+        categoryName = localCat?.name || DEFAULT_CATEGORIES.find((c) => c.id === animal.category_id)?.name || null;
+      }
+
+      await syncEngine.recordOfflineCreateAndAddAnimalToLot({
+        lotId,
+        animalId,
+        lotAnimalId,
+        organization_id: targetOrgId,
+        farm_id: targetFarmId,
+        property_id: targetPropertyId,
+        tag_number: cleanTag,
+        rfid_number: animal.rfid_number ? animal.rfid_number.trim() : null,
+        breed_id: animal.breed_id || null,
+        category_id: animal.category_id || null,
+        reproductive_status: animal.reproductive_status || 'vazia',
+        birth_date: animal.birth_date || null,
+        breed_name: breedName,
+        category_name: categoryName,
+      });
+
+      invalidateCache('lot_animals');
+      invalidateCache('lots');
+      invalidateCache('animals');
+      invalidateCache('metrics');
+      return { success: true };
+    } catch (err: unknown) {
+      console.error('createAndAddAnimalToLot offline error:', err);
+      return {
+        success: false,
+        error: 'Erro offline ao cadastrar e vincular matriz: ' + (err instanceof Error ? err.message : String(err)),
+      };
+    }
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return { success: false, error: 'Organização não identificada.' };
 
@@ -522,8 +1010,6 @@ export async function createAndAddAnimalToLot(
   if (!targetFarmId) {
     return { success: false, error: 'Fazenda do lote não identificada.' };
   }
-
-  const cleanTag = animal.tag_number.trim();
 
   // 2. Verificar se o animal com este brinco já existe nesta fazenda/organização
   let existingQuery = supabase
@@ -615,6 +1101,22 @@ export async function createAndAddAnimalToLot(
     return { success: false, error: linkErr.message };
   }
 
+  // Também grava no offlineDb para que esteja imediatamente acessível se o operador ficar offline
+  offlineDb.animals.put({
+    id: animalId,
+    farm_id: targetFarmId,
+    ear_tag: cleanTag,
+    tag_number: cleanTag,
+    name: cleanTag,
+    status: 'active',
+    reproductive_status: animal.reproductive_status || 'vazia',
+    category: animal.category_id || undefined,
+    breed: animal.breed_id || undefined,
+    property_id: targetPropertyId || undefined,
+    organization_id: targetOrgId,
+    updated_at: new Date().toISOString(),
+  }).catch(() => {});
+
   invalidateCache('lot_animals');
   invalidateCache('lots');
   invalidateCache('animals');
@@ -654,6 +1156,50 @@ export interface ManagementEvent {
 }
 
 export async function getManagementEvents(forceRefresh = false, farmId?: string): Promise<ManagementEvent[]> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      let events = await offlineDb.management_events.toArray();
+      if (farmId && farmId !== 'all') {
+        events = events.filter((e) => e.farm_id === farmId);
+      }
+      events.sort((a, b) => (a.planned_date || '').localeCompare(b.planned_date || ''));
+
+      const lotsMap = new Map();
+      const allLots = await offlineDb.lots.toArray();
+      allLots.forEach((l) => lotsMap.set(l.id, l));
+
+      return events.map((e) => {
+        const lot = e.lot_id ? lotsMap.get(e.lot_id) : null;
+        return {
+          id: e.id,
+          lot_id: e.lot_id || null,
+          step_code: e.step_code || '',
+          step_name: e.step_name,
+          planned_date: e.planned_date,
+          execution_date: (e.execution_date as string) || null,
+          responsible_name: (e.responsible_name as string) || null,
+          status: e.status,
+          event_type: e.event_type || 'lote',
+          animals_worked_count: (e.animals_worked_count as number) || null,
+          losses_count: (e.losses_count as number) || 0,
+          created_at: (e.created_at as string) || new Date().toISOString(),
+          updated_at: (e.updated_at as string) || new Date().toISOString(),
+          iatf_lots: lot ? {
+            code: lot.code,
+            name: lot.name || lot.code,
+            farm_id: lot.farm_id,
+            properties: lot.property_name ? { name: lot.property_name } : null,
+            farms: lot.farm_name ? { id: lot.farm_id, name: lot.farm_name } : null,
+          } : null,
+        } as unknown as ManagementEvent;
+      });
+    } catch (err) {
+      console.warn('Erro ao carregar eventos offline:', err);
+      return [];
+    }
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
 
@@ -687,10 +1233,57 @@ export async function getManagementEvents(forceRefresh = false, farmId?: string)
 
   if (error) {
     console.error('getManagementEvents error:', error);
+    try {
+      let events = await offlineDb.management_events.toArray();
+      if (farmId && farmId !== 'all') {
+        events = events.filter((e) => e.farm_id === farmId);
+      }
+      events.sort((a, b) => (a.planned_date || '').localeCompare(b.planned_date || ''));
+      return events as unknown as ManagementEvent[];
+    } catch {}
     return getCached<ManagementEvent[]>(cacheKey) ?? [];
   }
   const result = (data ?? []) as unknown as ManagementEvent[];
   setCached(cacheKey, result);
+
+  if (data && data.length > 0) {
+    offlineDb.management_events.bulkPut(
+      (data as Array<{
+        id: string;
+        organization_id?: string;
+        farm_id?: string;
+        lot_id?: string | null;
+        step_code?: string;
+        step_name?: string;
+        planned_date: string;
+        execution_date?: string | null;
+        responsible_name?: string | null;
+        status?: string;
+        event_type?: string;
+        animals_worked_count?: number | null;
+        losses_count?: number | null;
+        created_at?: string;
+        updated_at?: string;
+      }>).map((e) => ({
+        id: e.id,
+        organization_id: e.organization_id || orgId,
+        farm_id: e.farm_id,
+        lot_id: e.lot_id,
+        step_code: e.step_code,
+        step_name: e.step_name || e.step_code || '',
+        planned_date: e.planned_date,
+        execution_date: e.execution_date,
+        responsible_name: e.responsible_name,
+        status: e.status || 'pendente',
+        event_type: e.event_type || 'lote',
+        animals_worked_count: e.animals_worked_count || undefined,
+        losses_count: e.losses_count || undefined,
+        created_at: e.created_at,
+        updated_at: e.updated_at || new Date().toISOString(),
+      }))
+    ).catch(() => {});
+  }
+
   return result;
 }
 
@@ -699,6 +1292,37 @@ export async function completeManagementEvent(
   animalsWorked: number,
   lossesCount: number = 0
 ): Promise<boolean> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const ev = await offlineDb.management_events.get(eventId);
+      const executionDate = getTodayDateString();
+      if (ev) {
+        await offlineDb.management_events.update(eventId, {
+          status: 'concluido',
+          execution_date: executionDate,
+          animals_worked_count: animalsWorked,
+          losses_count: lossesCount,
+          updated_at: new Date().toISOString(),
+        });
+        await syncEngine.enqueueMutation('update', 'management_events', eventId, ev.farm_id, {
+          status: 'concluido',
+          execution_date: executionDate,
+          animals_worked_count: animalsWorked,
+          losses_count: lossesCount,
+          updated_at: new Date().toISOString(),
+        });
+      }
+      invalidateCache('events');
+      invalidateCache('lots');
+      invalidateCache('metrics');
+      return true;
+    } catch (e) {
+      console.error('completeManagementEvent offline error:', e);
+      return false;
+    }
+  }
+
   const supabase = createClient();
   const { error } = await supabase
     .from('management_events')
@@ -715,6 +1339,14 @@ export async function completeManagementEvent(
     console.error('completeManagementEvent error:', error);
     return false;
   }
+
+  offlineDb.management_events.update(eventId, {
+    status: 'concluido',
+    execution_date: getTodayDateString(),
+    animals_worked_count: animalsWorked,
+    losses_count: lossesCount,
+    updated_at: new Date().toISOString(),
+  }).catch(() => {});
 
   invalidateCache('events');
   invalidateCache('lots');
@@ -736,13 +1368,52 @@ export async function insertManagementEvent(event: {
   notes?: string | null;
   status?: string;
 }): Promise<boolean> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return false;
+
+  const newId = crypto.randomUUID();
+  const eventRecord: import('./offline/offlineDb').OfflineManagementEvent = {
+    id: newId,
+    organization_id: orgId,
+    farm_id: event.farm_id,
+    lot_id: event.lot_id || null,
+    step_code: event.step_code,
+    step_name: event.step_name || event.title || event.step_code,
+    planned_date: event.planned_date,
+    responsible_name: event.responsible_name || 'Equipe de Campo',
+    status: event.status || 'pendente',
+    event_type: event.event_type || (event.lot_id ? 'lote' : 'avulso'),
+    animals_worked_count: 0,
+    losses_count: 0,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  if (isOffline) {
+    try {
+      await offlineDb.management_events.put(eventRecord);
+      await syncEngine.enqueueMutation('insert', 'management_events', newId, event.farm_id, {
+        ...eventRecord,
+        title: event.title || null,
+        start_time: event.start_time || null,
+        end_time: event.end_time || null,
+        notes: event.notes || null,
+      }, orgId);
+      invalidateCache('events');
+      return true;
+    } catch (e) {
+      console.error('insertManagementEvent offline error:', e);
+      return false;
+    }
+  }
 
   const supabase = createClient();
   const { error } = await supabase
     .from('management_events')
     .insert({
+      id: newId,
       organization_id: orgId,
       farm_id: event.farm_id,
       lot_id: event.lot_id || null,
@@ -765,11 +1436,26 @@ export async function insertManagementEvent(event: {
     return false;
   }
 
+  await offlineDb.management_events.put(eventRecord).catch(() => {});
   invalidateCache('events');
   return true;
 }
 
 export async function deleteManagementEvent(eventId: string): Promise<boolean> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const existing = await offlineDb.management_events.get(eventId);
+      await offlineDb.management_events.delete(eventId);
+      await syncEngine.enqueueMutation('delete', 'management_events', eventId, existing?.farm_id, { id: eventId });
+      invalidateCache('events');
+      return true;
+    } catch (e) {
+      console.error('deleteManagementEvent offline error:', e);
+      return false;
+    }
+  }
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('management_events')
@@ -782,6 +1468,7 @@ export async function deleteManagementEvent(eventId: string): Promise<boolean> {
     return false;
   }
 
+  await offlineDb.management_events.delete(eventId).catch(() => {});
   invalidateCache('events');
   return !!(data && data.length > 0);
 }
@@ -792,7 +1479,7 @@ export async function updateManagementEventDate(
   startTime?: string | null,
   endTime?: string | null
 ): Promise<boolean> {
-  const supabase = createClient();
+  const isOffline = isSystemOffline();
   const updateData: Record<string, unknown> = {
     planned_date: newPlannedDate,
     updated_at: new Date().toISOString(),
@@ -800,6 +1487,28 @@ export async function updateManagementEventDate(
   if (startTime !== undefined) updateData.start_time = startTime;
   if (endTime !== undefined) updateData.end_time = endTime;
 
+  if (isOffline) {
+    try {
+      const existing = await offlineDb.management_events.get(eventId);
+      if (existing) {
+        await offlineDb.management_events.update(eventId, {
+          planned_date: newPlannedDate,
+          updated_at: new Date().toISOString(),
+        });
+      }
+      await syncEngine.enqueueMutation('update', 'management_events', eventId, existing?.farm_id, {
+        id: eventId,
+        ...updateData,
+      });
+      invalidateCache('events');
+      return true;
+    } catch (e) {
+      console.error('updateManagementEventDate offline error:', e);
+      return false;
+    }
+  }
+
+  const supabase = createClient();
   const { error } = await supabase
     .from('management_events')
     .update(updateData)
@@ -809,6 +1518,11 @@ export async function updateManagementEventDate(
     console.error('updateManagementEventDate error:', error);
     return false;
   }
+
+  await offlineDb.management_events.update(eventId, {
+    planned_date: newPlannedDate,
+    updated_at: new Date().toISOString(),
+  }).catch(() => {});
 
   invalidateCache('events');
   return true;
@@ -829,8 +1543,46 @@ export interface SemenBatch {
 }
 
 export async function getSemenBatches(forceRefresh = false): Promise<SemenBatch[]> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const offlineBatches = await offlineDb.semen_batches.toArray();
+      if (offlineBatches.length > 0) {
+        return offlineBatches.map((b) => ({
+          id: b.id,
+          batch_number: b.batch_number,
+          supplier_central: b.supplier_central || null,
+          initial_quantity: (b.initial_quantity as number) || 0,
+          used_quantity: (b.used_quantity as number) || 0,
+          lost_quantity: (b.lost_quantity as number) || 0,
+          bulls: (b.bulls as { name: string; code: string | null }) || null,
+        }));
+      }
+    } catch (e) {
+      console.warn('Falha ao carregar sêmen offline:', e);
+    }
+  }
+
   const orgId = await getCurrentOrgId();
-  if (!orgId) return [];
+  if (!orgId) {
+    try {
+      const offlineBatches = await offlineDb.semen_batches.toArray();
+      if (offlineBatches.length > 0) {
+        return offlineBatches.map((b) => ({
+          id: b.id,
+          batch_number: b.batch_number,
+          supplier_central: b.supplier_central || null,
+          initial_quantity: (b.initial_quantity as number) || 0,
+          used_quantity: (b.used_quantity as number) || 0,
+          lost_quantity: (b.lost_quantity as number) || 0,
+          bulls: (b.bulls as { name: string; code: string | null }) || null,
+        }));
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  }
 
   const cacheKey = `semen_${orgId}`;
   if (!forceRefresh) {
@@ -847,10 +1599,47 @@ export async function getSemenBatches(forceRefresh = false): Promise<SemenBatch[
 
   if (error) {
     console.error('getSemenBatches error:', error);
+    try {
+      const offlineBatches = await offlineDb.semen_batches.toArray();
+      if (offlineBatches.length > 0) {
+        return offlineBatches.map((b) => ({
+          id: b.id,
+          batch_number: b.batch_number,
+          supplier_central: b.supplier_central || null,
+          initial_quantity: (b.initial_quantity as number) || 0,
+          used_quantity: (b.used_quantity as number) || 0,
+          lost_quantity: (b.lost_quantity as number) || 0,
+          bulls: (b.bulls as { name: string; code: string | null }) || null,
+        }));
+      }
+    } catch {
+      // ignore
+    }
     return getCached<SemenBatch[]>(cacheKey) ?? [];
   }
   const result = (data ?? []) as unknown as SemenBatch[];
   setCached(cacheKey, result);
+
+  if (result.length > 0) {
+    try {
+      await offlineDb.semen_batches.bulkPut(
+        result.map((b) => ({
+          id: b.id,
+          organization_id: orgId,
+          batch_number: b.batch_number,
+          supplier_central: b.supplier_central,
+          initial_quantity: b.initial_quantity,
+          used_quantity: b.used_quantity,
+          lost_quantity: b.lost_quantity,
+          bulls: b.bulls,
+          updated_at: new Date().toISOString(),
+        } as import('./offline/offlineDb').OfflineSemenBatch))
+      );
+    } catch (e) {
+      console.warn('Erro ao salvar sêmen no IndexedDB:', e);
+    }
+  }
+
   return result;
 }
 
@@ -860,11 +1649,49 @@ export async function insertSemenBatch(batch: {
   supplier_central?: string;
   initial_quantity: number;
 }): Promise<boolean> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return false;
+
+  const newId = crypto.randomUUID();
+
+  if (isOffline) {
+    try {
+      const bull = await offlineDb.bulls.get(batch.bull_id);
+      await offlineDb.semen_batches.put({
+        id: newId,
+        organization_id: orgId,
+        bull_id: batch.bull_id,
+        batch_number: batch.batch_number.trim(),
+        supplier_central: batch.supplier_central?.trim() || null,
+        initial_quantity: Number(batch.initial_quantity) || 0,
+        used_quantity: 0,
+        lost_quantity: 0,
+        bulls: bull ? { name: bull.name, code: (bull.code as string) || null } : null,
+        updated_at: new Date().toISOString(),
+      });
+      await syncEngine.enqueueMutation('insert', 'semen_batches', newId, undefined, {
+        id: newId,
+        organization_id: orgId,
+        bull_id: batch.bull_id,
+        batch_number: batch.batch_number.trim(),
+        supplier_central: batch.supplier_central?.trim() || null,
+        initial_quantity: Number(batch.initial_quantity) || 0,
+        used_quantity: 0,
+        lost_quantity: 0,
+      }, orgId);
+      invalidateCache('semen');
+      return true;
+    } catch (e) {
+      console.error('insertSemenBatch offline error:', e);
+      return false;
+    }
+  }
 
   const supabase = createClient();
   const { error } = await supabase.from('semen_batches').insert({
+    id: newId,
     ...batch,
     organization_id: orgId,
   });
@@ -872,6 +1699,22 @@ export async function insertSemenBatch(batch: {
     console.error('insertSemenBatch error:', error);
     return false;
   }
+
+  try {
+    const bull = await offlineDb.bulls.get(batch.bull_id);
+    await offlineDb.semen_batches.put({
+      id: newId,
+      organization_id: orgId,
+      bull_id: batch.bull_id,
+      batch_number: batch.batch_number.trim(),
+      supplier_central: batch.supplier_central?.trim() || null,
+      initial_quantity: Number(batch.initial_quantity) || 0,
+      used_quantity: 0,
+      lost_quantity: 0,
+      bulls: bull ? { name: bull.name, code: (bull.code as string) || null } : null,
+      updated_at: new Date().toISOString(),
+    });
+  } catch {}
 
   invalidateCache('semen');
   return true;
@@ -894,6 +1737,38 @@ export interface Animal {
 }
 
 export async function getAnimals(limit = 50, forceRefresh = false, farmId?: string): Promise<Animal[]> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      let localAnimals = await offlineDb.animals.toArray();
+      if (farmId && farmId !== 'all') {
+        localAnimals = localAnimals.filter((a) => a.farm_id === farmId);
+      }
+      localAnimals = localAnimals.filter((a) => a.status !== 'inactive');
+      return localAnimals.slice(0, limit).map((a) => ({
+        id: a.id,
+        organization_id: (a.organization_id as string) || '',
+        farm_id: a.farm_id,
+        property_id: (a.property_id as string) || null,
+        tag_number: ((a.tag_number as string) || a.ear_tag) as string,
+        rfid_number: (a.rfid_number as string) || null,
+        breed_id: (a.breed_id as string) || null,
+        category_id: (a.category_id as string) || null,
+        reproductive_status: (a.reproductive_status as string) || 'vazia',
+        birth_date: (a.birth_date as string) || null,
+        sex: (a.sex as string) || 'F',
+        status: (a.status as string) || 'active',
+        breeds: a.breed ? { name: String(a.breed) } : null,
+        animal_categories: a.category ? { name: String(a.category) } : null,
+        properties: null,
+        farms: null,
+      })) as unknown as Animal[];
+    } catch (e) {
+      console.warn('getAnimals offline error:', e);
+      return [];
+    }
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
 
@@ -920,14 +1795,111 @@ export async function getAnimals(limit = 50, forceRefresh = false, farmId?: stri
 
   if (error) {
     console.error('getAnimals error:', error);
+    try {
+      let localAnimals = await offlineDb.animals.toArray();
+      if (farmId && farmId !== 'all') {
+        localAnimals = localAnimals.filter((a) => a.farm_id === farmId);
+      }
+      return localAnimals.slice(0, limit).map((a) => ({
+        id: a.id,
+        organization_id: (a.organization_id as string) || '',
+        farm_id: a.farm_id,
+        property_id: (a.property_id as string) || null,
+        tag_number: ((a.tag_number as string) || a.ear_tag) as string,
+        rfid_number: (a.rfid_number as string) || null,
+        breed_id: (a.breed_id as string) || null,
+        category_id: (a.category_id as string) || null,
+        reproductive_status: (a.reproductive_status as string) || 'vazia',
+        birth_date: (a.birth_date as string) || null,
+        sex: (a.sex as string) || 'F',
+        status: (a.status as string) || 'active',
+        breeds: a.breed ? { name: String(a.breed) } : null,
+        animal_categories: a.category ? { name: String(a.category) } : null,
+        properties: null,
+        farms: null,
+      })) as unknown as Animal[];
+    } catch {}
     return getCached<Animal[]>(cacheKey) ?? [];
   }
   const result = (data ?? []) as unknown as Animal[];
   setCached(cacheKey, result);
+
+  if (data && data.length > 0) {
+    offlineDb.animals.bulkPut(
+      (data as Array<{
+        id: string;
+        farm_id: string;
+        tag_number: string;
+        status?: string;
+        reproductive_status?: string;
+        animal_categories?: { name: string } | null;
+        breeds?: { name: string } | null;
+        breed_id?: string | null;
+        category_id?: string | null;
+        property_id?: string | null;
+        organization_id?: string;
+        updated_at?: string;
+      }>).map((a) => ({
+        id: a.id,
+        farm_id: a.farm_id,
+        ear_tag: a.tag_number,
+        tag_number: a.tag_number,
+        name: a.tag_number,
+        status: a.status || 'active',
+        reproductive_status: a.reproductive_status || 'vazia',
+        category: a.animal_categories?.name || a.category_id || undefined,
+        breed: a.breeds?.name || a.breed_id || undefined,
+        breed_id: a.breed_id || undefined,
+        category_id: a.category_id || undefined,
+        property_id: a.property_id || undefined,
+        organization_id: a.organization_id || orgId,
+        updated_at: a.updated_at || new Date().toISOString(),
+      }))
+    ).catch(() => {});
+  }
+
   return result;
 }
 
 export async function searchAnimals(query: string, farmId?: string): Promise<Animal[]> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const q = query.trim().toLowerCase();
+      let localAnimals = await offlineDb.animals.toArray();
+      if (farmId && farmId !== 'all') {
+        localAnimals = localAnimals.filter((a) => a.farm_id === farmId);
+      }
+      localAnimals = localAnimals.filter(
+        (a) =>
+          a.status !== 'inactive' &&
+          ((a.tag_number && String(a.tag_number).toLowerCase().includes(q)) ||
+            (a.ear_tag && a.ear_tag.toLowerCase().includes(q)))
+      );
+      return localAnimals.slice(0, 20).map((a) => ({
+        id: a.id,
+        organization_id: (a.organization_id as string) || '',
+        farm_id: a.farm_id,
+        property_id: (a.property_id as string) || null,
+        tag_number: ((a.tag_number as string) || a.ear_tag) as string,
+        rfid_number: (a.rfid_number as string) || null,
+        breed_id: (a.breed_id as string) || null,
+        category_id: (a.category_id as string) || null,
+        reproductive_status: (a.reproductive_status as string) || 'vazia',
+        birth_date: (a.birth_date as string) || null,
+        sex: (a.sex as string) || 'F',
+        status: (a.status as string) || 'active',
+        breeds: a.breed ? { name: String(a.breed) } : null,
+        animal_categories: a.category ? { name: String(a.category) } : null,
+        properties: null,
+        farms: null,
+      })) as unknown as Animal[];
+    } catch (e) {
+      console.warn('searchAnimals offline error:', e);
+      return [];
+    }
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
 
@@ -947,6 +1919,37 @@ export async function searchAnimals(query: string, farmId?: string): Promise<Ani
 
   if (error) {
     console.error('searchAnimals error:', error);
+    try {
+      const qStr = query.trim().toLowerCase();
+      let localAnimals = await offlineDb.animals.toArray();
+      if (farmId && farmId !== 'all') {
+        localAnimals = localAnimals.filter((a) => a.farm_id === farmId);
+      }
+      localAnimals = localAnimals.filter(
+        (a) =>
+          a.status !== 'inactive' &&
+          ((a.tag_number && String(a.tag_number).toLowerCase().includes(qStr)) ||
+            (a.ear_tag && a.ear_tag.toLowerCase().includes(qStr)))
+      );
+      return localAnimals.slice(0, 20).map((a) => ({
+        id: a.id,
+        organization_id: (a.organization_id as string) || '',
+        farm_id: a.farm_id,
+        property_id: (a.property_id as string) || null,
+        tag_number: ((a.tag_number as string) || a.ear_tag) as string,
+        rfid_number: (a.rfid_number as string) || null,
+        breed_id: (a.breed_id as string) || null,
+        category_id: (a.category_id as string) || null,
+        reproductive_status: (a.reproductive_status as string) || 'vazia',
+        birth_date: (a.birth_date as string) || null,
+        sex: (a.sex as string) || 'F',
+        status: (a.status as string) || 'active',
+        breeds: a.breed ? { name: String(a.breed) } : null,
+        animal_categories: a.category ? { name: String(a.category) } : null,
+        properties: null,
+        farms: null,
+      })) as unknown as Animal[];
+    } catch {}
     return [];
   }
   return (data ?? []) as unknown as Animal[];
@@ -962,15 +1965,68 @@ export async function createAnimal(animal: {
   reproductive_status?: string;
   birth_date?: string;
 }): Promise<{ success: boolean; error?: string }> {
+  const cleanTag = animal.tag_number.trim();
+  const isOffline = isSystemOffline();
+
+  if (isOffline) {
+    try {
+      const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+      const orgId = (await getCurrentOrgId()) || storedOrgId || '';
+
+      // 1. Verificar duplicidade de brinco local
+      const existing = await offlineDb.animals
+        .filter((a) => {
+          const matchFarm = !animal.farm_id || a.farm_id === animal.farm_id;
+          const matchTag = ((a.ear_tag && a.ear_tag.toLowerCase() === cleanTag.toLowerCase()) ||
+                           (a.tag_number && String(a.tag_number).toLowerCase() === cleanTag.toLowerCase()));
+          return matchFarm && Boolean(matchTag);
+        })
+        .first();
+
+      if (existing) {
+        return {
+          success: false,
+          error: `Já existe uma matriz cadastrada com o brinco "${cleanTag}" nesta fazenda (local).`,
+        };
+      }
+
+      const animalId = crypto.randomUUID();
+      await syncEngine.recordOfflineAnimal({
+        id: animalId,
+        organization_id: orgId,
+        farm_id: animal.farm_id,
+        property_id: animal.property_id || null,
+        tag_number: cleanTag,
+        rfid_number: animal.rfid_number ? animal.rfid_number.trim() : null,
+        breed_id: animal.breed_id || null,
+        category_id: animal.category_id || null,
+        reproductive_status: animal.reproductive_status || 'vazia',
+        birth_date: animal.birth_date || null,
+        sex: 'F',
+        status: 'active',
+      });
+
+      invalidateCache('animals');
+      invalidateCache('metrics');
+      return { success: true };
+    } catch (err: unknown) {
+      console.error('createAnimal offline error:', err);
+      return {
+        success: false,
+        error: 'Erro offline ao cadastrar matriz: ' + (err instanceof Error ? err.message : String(err)),
+      };
+    }
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return { success: false, error: 'Organização não identificada.' };
 
   const supabase = createClient();
-  const { error } = await supabase.from('animals').insert({
+  const { data: newAnimal, error } = await supabase.from('animals').insert({
     organization_id: orgId,
     farm_id: animal.farm_id,
     property_id: animal.property_id || null,
-    tag_number: animal.tag_number.trim(),
+    tag_number: cleanTag,
     rfid_number: animal.rfid_number ? animal.rfid_number.trim() : null,
     breed_id: animal.breed_id || null,
     category_id: animal.category_id || null,
@@ -978,17 +2034,34 @@ export async function createAnimal(animal: {
     birth_date: animal.birth_date || null,
     sex: 'F',
     status: 'active',
-  });
+  }).select('id').maybeSingle();
 
   if (error) {
     console.error('createAnimal error:', error.message, error.details, error.code);
     if (error.code === '23505' || error.message?.includes('unique constraint') || error.message?.includes('duplicate key')) {
       return {
         success: false,
-        error: `Já existe uma matriz cadastrada com o brinco "${animal.tag_number.trim()}" nesta fazenda.`,
+        error: `Já existe uma matriz cadastrada com o brinco "${cleanTag}" nesta fazenda.`,
       };
     }
     return { success: false, error: error.message };
+  }
+
+  if (newAnimal?.id) {
+    offlineDb.animals.put({
+      id: newAnimal.id,
+      farm_id: animal.farm_id,
+      ear_tag: cleanTag,
+      tag_number: cleanTag,
+      name: cleanTag,
+      status: 'active',
+      reproductive_status: animal.reproductive_status || 'vazia',
+      category: animal.category_id || undefined,
+      breed: animal.breed_id || undefined,
+      property_id: animal.property_id || undefined,
+      organization_id: orgId,
+      updated_at: new Date().toISOString(),
+    }).catch(() => {});
   }
 
   invalidateCache('animals');
@@ -1145,8 +2218,47 @@ export interface Protocol {
 }
 
 export async function getProtocols(forceRefresh = false, includeArchived = false): Promise<Protocol[]> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const offlineProtos = await offlineDb.protocols.toArray();
+      return offlineProtos
+        .filter((p) => includeArchived || p.status !== 'archived')
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          description: (p.description as string) || null,
+          number_of_managements: (p.number_of_managements as number) || 3,
+          status: (p.status as string) || 'active',
+          protocol_steps: (p.protocol_steps as Protocol['protocol_steps']) || [],
+        }));
+    } catch (e) {
+      console.warn('Falha ao carregar protocolos offline:', e);
+      return [];
+    }
+  }
+
   const orgId = await getCurrentOrgId();
-  if (!orgId) return [];
+  if (!orgId) {
+    try {
+      const offlineProtos = await offlineDb.protocols.toArray();
+      if (offlineProtos.length > 0) {
+        return offlineProtos
+          .filter((p) => includeArchived || p.status !== 'archived')
+          .map((p) => ({
+            id: p.id,
+            name: p.name,
+            description: (p.description as string) || null,
+            number_of_managements: (p.number_of_managements as number) || 3,
+            status: (p.status as string) || 'active',
+            protocol_steps: (p.protocol_steps as Protocol['protocol_steps']) || [],
+          }));
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  }
 
   const cacheKey = `protocols_${orgId}_${includeArchived ? 'all' : 'active'}`;
   if (!forceRefresh) {
@@ -1168,10 +2280,47 @@ export async function getProtocols(forceRefresh = false, includeArchived = false
 
   if (error) {
     console.error('getProtocols error:', error);
+    try {
+      const offlineProtos = await offlineDb.protocols.toArray();
+      if (offlineProtos.length > 0) {
+        return offlineProtos
+          .filter((p) => includeArchived || p.status !== 'archived')
+          .map((p) => ({
+            id: p.id,
+            name: p.name,
+            description: (p.description as string) || null,
+            number_of_managements: (p.number_of_managements as number) || 3,
+            status: (p.status as string) || 'active',
+            protocol_steps: (p.protocol_steps as Protocol['protocol_steps']) || [],
+          }));
+      }
+    } catch {
+      // ignore
+    }
     return getCached<Protocol[]>(cacheKey) ?? [];
   }
   const result = (data ?? []) as unknown as Protocol[];
   setCached(cacheKey, result);
+
+  if (result.length > 0) {
+    try {
+      await offlineDb.protocols.bulkPut(
+        result.map((p) => ({
+          id: p.id,
+          organization_id: orgId,
+          name: p.name,
+          description: p.description || undefined,
+          number_of_managements: p.number_of_managements,
+          status: p.status,
+          protocol_steps: p.protocol_steps,
+          updated_at: new Date().toISOString(),
+        } as unknown as import('./offline/offlineDb').OfflineProtocol))
+      );
+    } catch (e) {
+      console.warn('Erro ao salvar protocolos no IndexedDB:', e);
+    }
+  }
+
   return result;
 }
 
@@ -1186,13 +2335,61 @@ export async function createProtocol(protocol: {
     dosage_instruction?: string;
   }[];
 }): Promise<boolean> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return false;
+
+  const newId = crypto.randomUUID();
+  const stepsWithIds = protocol.steps.map((step, idx) => ({
+    id: crypto.randomUUID(),
+    protocol_id: newId,
+    step_order: idx + 1,
+    code: step.code.trim(),
+    name: step.name.trim(),
+    day_offset: Number(step.day_offset) || 0,
+    dosage_instruction: step.dosage_instruction?.trim() || null,
+  }));
+
+  if (isOffline) {
+    try {
+      await offlineDb.protocols.put({
+        id: newId,
+        organization_id: orgId,
+        name: protocol.name.trim(),
+        description: protocol.description?.trim() || undefined,
+        number_of_managements: protocol.number_of_managements,
+        status: 'active',
+        protocol_steps: stepsWithIds,
+        updated_at: new Date().toISOString(),
+      } as unknown as import('./offline/offlineDb').OfflineProtocol);
+
+      await syncEngine.enqueueMutation('insert', 'protocols', newId, undefined, {
+        id: newId,
+        organization_id: orgId,
+        name: protocol.name.trim(),
+        description: protocol.description?.trim() || null,
+        number_of_managements: protocol.number_of_managements,
+        status: 'active',
+      }, orgId);
+
+      for (const st of stepsWithIds) {
+        await syncEngine.enqueueMutation('insert', 'protocol_steps', st.id, undefined, st, orgId);
+      }
+
+      invalidateCache('protocols');
+      return true;
+    } catch (e) {
+      console.error('createProtocol offline error:', e);
+      return false;
+    }
+  }
 
   const supabase = createClient();
   const { data: created, error: protoErr } = await supabase
     .from('protocols')
     .insert({
+      id: newId,
       organization_id: orgId,
       name: protocol.name.trim(),
       description: protocol.description?.trim() || null,
@@ -1207,23 +2404,27 @@ export async function createProtocol(protocol: {
     return false;
   }
 
-  const stepsToInsert = protocol.steps.map((step, idx) => ({
-    protocol_id: created.id,
-    step_order: idx + 1,
-    code: step.code.trim(),
-    name: step.name.trim(),
-    day_offset: Number(step.day_offset) || 0,
-    dosage_instruction: step.dosage_instruction?.trim() || null,
-  }));
-
   const { error: stepsErr } = await supabase
     .from('protocol_steps')
-    .insert(stepsToInsert);
+    .insert(stepsWithIds);
 
   if (stepsErr) {
     console.error('createProtocol steps error:', stepsErr);
     return false;
   }
+
+  try {
+    await offlineDb.protocols.put({
+      id: newId,
+      organization_id: orgId,
+      name: protocol.name.trim(),
+      description: protocol.description?.trim() || undefined,
+      number_of_managements: protocol.number_of_managements,
+      status: 'active',
+      protocol_steps: stepsWithIds,
+      updated_at: new Date().toISOString(),
+    } as unknown as import('./offline/offlineDb').OfflineProtocol);
+  } catch {}
 
   invalidateCache('protocols');
   return true;
@@ -1244,8 +2445,52 @@ export async function updateProtocol(
     }[];
   }
 ): Promise<boolean> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return false;
+
+  if (isOffline) {
+    try {
+      const existing = await offlineDb.protocols.get(id);
+      const stepsToSave = protocol.steps ? protocol.steps.map((step, idx) => ({
+        id: crypto.randomUUID(),
+        protocol_id: id,
+        step_order: idx + 1,
+        code: step.code.trim(),
+        name: step.name.trim(),
+        day_offset: Number(step.day_offset) || 0,
+        dosage_instruction: step.dosage_instruction?.trim() || null,
+      })) : (existing?.protocol_steps || []);
+
+      await offlineDb.protocols.put({
+        ...existing,
+        id,
+        organization_id: orgId,
+        name: protocol.name.trim(),
+        description: protocol.description?.trim() || undefined,
+        number_of_managements: protocol.number_of_managements,
+        status: protocol.status || existing?.status || 'active',
+        protocol_steps: stepsToSave,
+        updated_at: new Date().toISOString(),
+      } as unknown as import('./offline/offlineDb').OfflineProtocol);
+
+      await syncEngine.enqueueMutation('update', 'protocols', id, undefined, {
+        id,
+        name: protocol.name.trim(),
+        description: protocol.description?.trim() || null,
+        number_of_managements: protocol.number_of_managements,
+        status: protocol.status || 'active',
+        updated_at: new Date().toISOString(),
+      }, orgId);
+
+      invalidateCache('protocols');
+      return true;
+    } catch (e) {
+      console.error('updateProtocol offline error:', e);
+      return false;
+    }
+  }
 
   const supabase = createClient();
 
@@ -1269,15 +2514,7 @@ export async function updateProtocol(
 
   // 2. Se etapas foram fornecidas, sincronizar as etapas
   if (protocol.steps && protocol.steps.length > 0) {
-    const { error: delErr } = await supabase
-      .from('protocol_steps')
-      .delete()
-      .eq('protocol_id', id);
-
-    if (delErr) {
-      console.error('updateProtocol delete steps error:', delErr);
-      return false;
-    }
+    await supabase.from('protocol_steps').delete().eq('protocol_id', id);
 
     const stepsToInsert = protocol.steps.map((step, idx) => ({
       protocol_id: id,
@@ -1288,14 +2525,7 @@ export async function updateProtocol(
       dosage_instruction: step.dosage_instruction?.trim() || null,
     }));
 
-    const { error: stepsErr } = await supabase
-      .from('protocol_steps')
-      .insert(stepsToInsert);
-
-    if (stepsErr) {
-      console.error('updateProtocol insert steps error:', stepsErr);
-      return false;
-    }
+    await supabase.from('protocol_steps').insert(stepsToInsert);
   }
 
   try {
@@ -1304,32 +2534,41 @@ export async function updateProtocol(
       await offlineDb.protocols.update(id, {
         name: protocol.name.trim(),
         description: protocol.description?.trim() || undefined,
+        number_of_managements: protocol.number_of_managements,
         updated_at: new Date().toISOString(),
       });
     }
-  } catch (err) {
-    console.warn('Offline protocol update warning:', err);
-  }
+  } catch {}
 
   invalidateCache('protocols');
   return true;
 }
 
 export async function deleteProtocol(id: string): Promise<{ success: boolean; error?: string }> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return { success: false, error: 'Sessão inválida' };
+
+  if (isOffline) {
+    try {
+      await offlineDb.protocols.delete(id);
+      await syncEngine.enqueueMutation('delete', 'protocols', id, undefined, { id }, orgId);
+      invalidateCache('protocols');
+      return { success: true };
+    } catch (e) {
+      console.error('deleteProtocol offline error:', e);
+      return { success: false, error: 'Erro offline ao excluir protocolo.' };
+    }
+  }
 
   const supabase = createClient();
 
   // 1. Verificar se existem lotes de IATF vinculados a este protocolo
-  const { count: lotsCount, error: countErr } = await supabase
+  const { count: lotsCount } = await supabase
     .from('iatf_lots')
     .select('id', { count: 'exact', head: true })
     .eq('protocol_id', id);
-
-  if (countErr) {
-    console.error('deleteProtocol check lots error:', countErr);
-  }
 
   if (lotsCount && lotsCount > 0) {
     return {
@@ -1338,13 +2577,8 @@ export async function deleteProtocol(id: string): Promise<{ success: boolean; er
     };
   }
 
-  // 2. Excluir etapas do protocolo
-  await supabase
-    .from('protocol_steps')
-    .delete()
-    .eq('protocol_id', id);
+  await supabase.from('protocol_steps').delete().eq('protocol_id', id);
 
-  // 3. Excluir protocolo
   const { error } = await supabase
     .from('protocols')
     .delete()
@@ -1358,25 +2592,44 @@ export async function deleteProtocol(id: string): Promise<{ success: boolean; er
 
   try {
     await offlineDb.protocols.delete(id);
-  } catch (e) {
-    console.warn('Offline protocol delete warning:', e);
-  }
+  } catch {}
 
   invalidateCache('protocols');
   return { success: true };
 }
 
 export async function toggleProtocolStatus(id: string, newStatus: 'active' | 'archived'): Promise<boolean> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return false;
+
+  if (isOffline) {
+    try {
+      const existing = await offlineDb.protocols.get(id);
+      if (existing) {
+        await offlineDb.protocols.update(id, {
+          status: newStatus,
+          updated_at: new Date().toISOString(),
+        });
+      }
+      await syncEngine.enqueueMutation('update', 'protocols', id, undefined, {
+        id,
+        status: newStatus,
+        updated_at: new Date().toISOString(),
+      }, orgId);
+      invalidateCache('protocols');
+      return true;
+    } catch (e) {
+      console.error('toggleProtocolStatus offline error:', e);
+      return false;
+    }
+  }
 
   const supabase = createClient();
   const { error } = await supabase
     .from('protocols')
-    .update({
-      status: newStatus,
-      updated_at: new Date().toISOString(),
-    })
+    .update({ status: newStatus, updated_at: new Date().toISOString() })
     .eq('id', id)
     .eq('organization_id', orgId);
 
@@ -1385,13 +2638,16 @@ export async function toggleProtocolStatus(id: string, newStatus: 'active' | 'ar
     return false;
   }
 
+  try {
+    await offlineDb.protocols.update(id, {
+      status: newStatus,
+      updated_at: new Date().toISOString(),
+    });
+  } catch {}
+
   invalidateCache('protocols');
   return true;
 }
-
-// ============================================================
-// BULLS
-// ============================================================
 
 // ============================================================
 // BULLS & CENTRAIS (GENETIC CENTERS)
@@ -1411,8 +2667,49 @@ export interface Bull {
 }
 
 export async function getBulls(forceRefresh = false): Promise<Bull[]> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const offlineBulls = await offlineDb.bulls.toArray();
+      return offlineBulls.map((b) => ({
+        id: b.id,
+        name: b.name,
+        code: (b.code as string) || null,
+        registration_number: (b.registration_number as string) || null,
+        owner_central: (b.central as string) || null,
+        status: (b.status as string) || 'active',
+        created_at: (b.created_at as string) || undefined,
+        updated_at: (b.updated_at as string) || undefined,
+        breeds: (b.breeds as { id: string; name: string }) || null,
+      }));
+    } catch (e) {
+      console.warn('Falha ao carregar touros offline:', e);
+      return [];
+    }
+  }
+
   const orgId = await getCurrentOrgId();
-  if (!orgId) return [];
+  if (!orgId) {
+    try {
+      const offlineBulls = await offlineDb.bulls.toArray();
+      if (offlineBulls.length > 0) {
+        return offlineBulls.map((b) => ({
+          id: b.id,
+          name: b.name,
+          code: (b.code as string) || null,
+          registration_number: (b.registration_number as string) || null,
+          owner_central: (b.central as string) || null,
+          status: (b.status as string) || 'active',
+          created_at: (b.created_at as string) || undefined,
+          updated_at: (b.updated_at as string) || undefined,
+          breeds: (b.breeds as { id: string; name: string }) || null,
+        }));
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  }
 
   const cacheKey = `bulls_${orgId}`;
   if (!forceRefresh) {
@@ -1429,10 +2726,49 @@ export async function getBulls(forceRefresh = false): Promise<Bull[]> {
 
   if (error) {
     console.error('getBulls error:', error);
+    try {
+      const offlineBulls = await offlineDb.bulls.toArray();
+      if (offlineBulls.length > 0) {
+        return offlineBulls.map((b) => ({
+          id: b.id,
+          name: b.name,
+          code: (b.code as string) || null,
+          registration_number: (b.registration_number as string) || null,
+          owner_central: (b.central as string) || null,
+          status: (b.status as string) || 'active',
+          created_at: (b.created_at as string) || undefined,
+          updated_at: (b.updated_at as string) || undefined,
+          breeds: (b.breeds as { id: string; name: string }) || null,
+        }));
+      }
+    } catch {
+      // ignore
+    }
     return getCached<Bull[]>(cacheKey) ?? [];
   }
   const result = (data ?? []) as Bull[];
   setCached(cacheKey, result);
+
+  if (result.length > 0) {
+    try {
+      await offlineDb.bulls.bulkPut(
+        result.map((b) => ({
+          id: b.id,
+          organization_id: orgId,
+          name: b.name,
+          code: b.code || undefined,
+          central: b.owner_central || undefined,
+          registration_number: b.registration_number || undefined,
+          status: b.status,
+          breeds: b.breeds,
+          updated_at: new Date().toISOString(),
+        } as unknown as import('./offline/offlineDb').OfflineBull))
+      );
+    } catch (e) {
+      console.warn('Erro ao salvar touros no IndexedDB:', e);
+    }
+  }
+
   return result;
 }
 
@@ -1444,13 +2780,71 @@ export async function createBull(bull: {
   breed_id?: string;
   status?: string;
 }): Promise<{ success: boolean; data?: Bull; error?: string }> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return { success: false, error: 'Organização não identificada.' };
+
+  const newId = crypto.randomUUID();
+  let breedObj: { id: string; name: string } | null = null;
+  if (bull.breed_id) {
+    try {
+      const b = await offlineDb.breeds.get(bull.breed_id);
+      if (b) breedObj = { id: b.id, name: b.name };
+    } catch {}
+  }
+
+  const bullRecord: Bull = {
+    id: newId,
+    name: bull.name.trim(),
+    code: bull.code?.trim() || null,
+    owner_central: bull.owner_central?.trim() || null,
+    registration_number: bull.registration_number?.trim() || null,
+    breed_id: bull.breed_id || null,
+    status: bull.status || 'active',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    breeds: breedObj,
+  };
+
+  if (isOffline) {
+    try {
+      await offlineDb.bulls.put({
+        id: newId,
+        organization_id: orgId,
+        name: bull.name.trim(),
+        code: bull.code?.trim() || undefined,
+        central: bull.owner_central?.trim() || undefined,
+        registration_number: bull.registration_number?.trim() || undefined,
+        status: bull.status || 'active',
+        breeds: breedObj || undefined,
+        updated_at: new Date().toISOString(),
+      } as unknown as import('./offline/offlineDb').OfflineBull);
+
+      await syncEngine.enqueueMutation('insert', 'bulls', newId, undefined, {
+        id: newId,
+        organization_id: orgId,
+        name: bull.name.trim(),
+        code: bull.code?.trim() || null,
+        owner_central: bull.owner_central?.trim() || null,
+        registration_number: bull.registration_number?.trim() || null,
+        breed_id: bull.breed_id || null,
+        status: bull.status || 'active',
+      }, orgId);
+
+      invalidateCache('bulls');
+      return { success: true, data: bullRecord };
+    } catch (e) {
+      console.error('createBull offline error:', e);
+      return { success: false, error: 'Erro offline ao cadastrar touro.' };
+    }
+  }
 
   const supabase = createClient();
   const { data, error } = await supabase
     .from('bulls')
     .insert({
+      id: newId,
       ...bull,
       organization_id: orgId,
       status: bull.status || 'active',
@@ -1462,6 +2856,20 @@ export async function createBull(bull: {
     console.error('createBull error:', error);
     return { success: false, error: error.message };
   }
+
+  try {
+    await offlineDb.bulls.put({
+      id: newId,
+      organization_id: orgId,
+      name: bull.name.trim(),
+      code: bull.code?.trim() || undefined,
+      central: bull.owner_central?.trim() || undefined,
+      registration_number: bull.registration_number?.trim() || undefined,
+      status: bull.status || 'active',
+      breeds: (data as Bull)?.breeds || undefined,
+      updated_at: new Date().toISOString(),
+    } as unknown as import('./offline/offlineDb').OfflineBull);
+  } catch {}
 
   invalidateCache('bulls');
   return { success: true, data: data as Bull };
@@ -1478,6 +2886,36 @@ export async function updateBull(
     status?: string;
   }
 ): Promise<{ success: boolean; error?: string }> {
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
+
+  if (isOffline) {
+    try {
+      const existing = await offlineDb.bulls.get(id);
+      if (existing) {
+        await offlineDb.bulls.update(id, {
+          name: bull.name !== undefined ? bull.name.trim() : existing.name,
+          code: bull.code !== undefined ? (bull.code?.trim() || undefined) : existing.code,
+          central: bull.owner_central !== undefined ? (bull.owner_central?.trim() || undefined) : existing.central,
+          registration_number: bull.registration_number !== undefined ? (bull.registration_number?.trim() || undefined) : existing.registration_number,
+          status: bull.status || existing.status,
+          updated_at: new Date().toISOString(),
+        });
+      }
+      await syncEngine.enqueueMutation('update', 'bulls', id, undefined, {
+        id,
+        ...bull,
+        updated_at: new Date().toISOString(),
+      }, orgId || undefined);
+      invalidateCache('bulls');
+      return { success: true };
+    } catch (e) {
+      console.error('updateBull offline error:', e);
+      return { success: false, error: 'Erro offline ao atualizar touro.' };
+    }
+  }
+
   const supabase = createClient();
   const { error } = await supabase
     .from('bulls')
@@ -1492,11 +2930,41 @@ export async function updateBull(
     return { success: false, error: error.message };
   }
 
+  try {
+    const existing = await offlineDb.bulls.get(id);
+    if (existing) {
+      await offlineDb.bulls.update(id, {
+        name: bull.name !== undefined ? bull.name.trim() : existing.name,
+        code: bull.code !== undefined ? (bull.code?.trim() || undefined) : existing.code,
+        central: bull.owner_central !== undefined ? (bull.owner_central?.trim() || undefined) : existing.central,
+        registration_number: bull.registration_number !== undefined ? (bull.registration_number?.trim() || undefined) : existing.registration_number,
+        status: bull.status || existing.status,
+        updated_at: new Date().toISOString(),
+      });
+    }
+  } catch {}
+
   invalidateCache('bulls');
   return { success: true };
 }
 
 export async function deleteBull(id: string): Promise<{ success: boolean; error?: string }> {
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
+
+  if (isOffline) {
+    try {
+      await offlineDb.bulls.delete(id);
+      await syncEngine.enqueueMutation('delete', 'bulls', id, undefined, { id }, orgId || undefined);
+      invalidateCache('bulls');
+      return { success: true };
+    } catch (e) {
+      console.error('deleteBull offline error:', e);
+      return { success: false, error: 'Erro offline ao excluir touro.' };
+    }
+  }
+
   const supabase = createClient();
 
   // Verificar se o touro possui registros vinculados antes de deletar
@@ -1524,6 +2992,10 @@ export async function deleteBull(id: string): Promise<{ success: boolean; error?
     console.error('deleteBull error:', error);
     return { success: false, error: error.message };
   }
+
+  try {
+    await offlineDb.bulls.delete(id);
+  } catch {}
 
   invalidateCache('bulls');
   return { success: true };
@@ -1674,6 +3146,197 @@ export async function deleteGeneticCenter(id: string): Promise<{ success: boolea
 // CREATE LOT
 // ============================================================
 
+async function createLotOffline(
+  lot: {
+    property_id: string;
+    protocol_id: string;
+    code: string;
+    start_date: string;
+    responsible_name: string;
+    season_id?: string;
+  },
+  orgId: string
+): Promise<string | null> {
+  try {
+    // 1. Obter fazenda e propriedade da base local
+    let farmId: string | undefined = undefined;
+    let propertyName: string | null = null;
+    if (lot.property_id) {
+      const prop = await offlineDb.properties.get(lot.property_id);
+      farmId = prop?.farm_id;
+      propertyName = prop?.name || null;
+    }
+    if (!farmId) {
+      const farm = await offlineDb.farms.toCollection().first();
+      farmId = farm?.id;
+    }
+
+    // 2. Obter estação de monta local
+    let targetSeasonId = lot.season_id;
+    if (targetSeasonId) {
+      const s = await offlineDb.seasons.get(targetSeasonId);
+      if (!s) targetSeasonId = undefined;
+    }
+    if (!targetSeasonId) {
+      const activeSeason = await offlineDb.seasons
+        .filter((s) => (!farmId || s.farm_id === farmId) && s.status === 'active')
+        .first();
+      if (activeSeason) {
+        targetSeasonId = activeSeason.id;
+      } else {
+        const anySeason = await offlineDb.seasons.toCollection().first();
+        targetSeasonId = anySeason?.id;
+      }
+    }
+
+    if (!targetSeasonId) {
+      const currentYear = new Date().getFullYear();
+      targetSeasonId = crypto.randomUUID();
+      const seasonName = `Estação ${currentYear}/${currentYear + 1}`;
+      await offlineDb.seasons.put({
+        id: targetSeasonId,
+        farm_id: farmId,
+        organization_id: orgId,
+        name: seasonName,
+        start_date: `${currentYear}-10-01`,
+        end_date: `${currentYear + 1}-03-31`,
+        status: 'active',
+        updated_at: new Date().toISOString(),
+      });
+      await syncEngine.enqueueMutation('insert', 'reproductive_seasons', targetSeasonId, farmId, {
+        id: targetSeasonId,
+        organization_id: orgId,
+        farm_id: farmId,
+        name: seasonName,
+        start_date: `${currentYear}-10-01`,
+        end_date: `${currentYear + 1}-03-31`,
+        status: 'active',
+      }, orgId);
+    }
+
+    // 3. Obter protocolo e passos para cálculo de IA e DG
+    let protocolName: string | null = null;
+    let steps: { code: string; name?: string; day_offset: number }[] = [];
+    if (lot.protocol_id) {
+      const proto = await offlineDb.protocols.get(lot.protocol_id);
+      protocolName = proto?.name || null;
+      if (proto && Array.isArray((proto as Record<string, unknown>).protocol_steps)) {
+        steps = (proto as Record<string, unknown>).protocol_steps as { code: string; name?: string; day_offset: number }[];
+      } else if (proto && Array.isArray(proto.steps)) {
+        steps = proto.steps as { code: string; name?: string; day_offset: number }[];
+      }
+    }
+
+    const addDays = (n: number) => addDaysToDateString(lot.start_date, n);
+    const iaStep = steps.find((s) => s.code === 'IA');
+    const dgStep = steps.find((s) => s.code === 'DG');
+    const iaDate = iaStep ? addDays(iaStep.day_offset) : addDays(11);
+    const dgDate = dgStep ? addDays(dgStep.day_offset) : addDays(41);
+
+    // 4. Gravar lote no IndexedDB
+    const lotId = crypto.randomUUID();
+    const farmRecord = farmId ? await offlineDb.farms.get(farmId) : null;
+    const farmName = farmRecord?.name || null;
+
+    const newLotRecord: import('./offline/offlineDb').OfflineLot = {
+      id: lotId,
+      organization_id: orgId,
+      season_id: targetSeasonId,
+      farm_id: farmId || '',
+      property_id: lot.property_id,
+      protocol_id: lot.protocol_id,
+      code: lot.code.trim(),
+      name: lot.code.trim(),
+      start_date: lot.start_date,
+      ia_planned_date: iaDate,
+      dg_planned_date: dgDate,
+      responsible_name: lot.responsible_name,
+      status: 'planejado',
+      property_name: propertyName,
+      protocol_name: protocolName,
+      farm_name: farmName,
+      females_count: 0,
+      inseminated_count: 0,
+      pregnant_count: 0,
+      empty_count: 0,
+      pregnancy_rate: 0,
+      pending_dg: 0,
+      updated_at: new Date().toISOString(),
+    };
+
+    await offlineDb.lots.put(newLotRecord);
+
+    // 5. Enfileirar mutação do lote para sincronização
+    await syncEngine.enqueueMutation('insert', 'iatf_lots', lotId, farmId, {
+      id: lotId,
+      organization_id: orgId,
+      season_id: targetSeasonId,
+      farm_id: farmId,
+      property_id: lot.property_id,
+      protocol_id: lot.protocol_id,
+      code: lot.code.trim(),
+      start_date: lot.start_date,
+      ia_planned_date: iaDate,
+      dg_planned_date: dgDate,
+      responsible_name: lot.responsible_name,
+      status: 'planejado',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, orgId);
+
+    // 6. Gerar e enfileirar eventos de manejo do lote
+    const stepsToGenerate = steps.length > 0 ? steps : [
+      { code: 'D0', name: 'D0 - Implante & Benzoato', day_offset: 0 },
+      { code: 'D9', name: 'D9 - Retirada & Indutores', day_offset: 9 },
+      { code: 'IA', name: 'IA - Inseminação Artificial', day_offset: 11 },
+      { code: 'DG', name: 'DG - Diagnóstico de Gestação', day_offset: 41 },
+    ];
+
+    for (const step of stepsToGenerate) {
+      const eventId = crypto.randomUUID();
+      const plannedDate = addDays(step.day_offset);
+
+      await offlineDb.management_events.put({
+        id: eventId,
+        organization_id: orgId,
+        farm_id: farmId,
+        lot_id: lotId,
+        step_code: step.code,
+        step_name: step.name ?? step.code,
+        planned_date: plannedDate,
+        responsible_name: lot.responsible_name,
+        status: 'pendente',
+        event_type: 'lote',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      await syncEngine.enqueueMutation('insert', 'management_events', eventId, farmId, {
+        id: eventId,
+        organization_id: orgId,
+        farm_id: farmId,
+        lot_id: lotId,
+        step_code: step.code,
+        step_name: step.name ?? step.code,
+        planned_date: plannedDate,
+        responsible_name: lot.responsible_name,
+        status: 'pendente',
+        event_type: 'lote',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }, orgId);
+    }
+
+    invalidateCache('lots');
+    invalidateCache('events');
+    invalidateCache('metrics');
+    return lotId;
+  } catch (e) {
+    console.error('createLotOffline error:', e);
+    return null;
+  }
+}
+
 export async function createLot(lot: {
   property_id: string;
   protocol_id: string;
@@ -1682,120 +3345,185 @@ export async function createLot(lot: {
   responsible_name: string;
   season_id?: string;
 }): Promise<string | null> {
-  const orgId = await getCurrentOrgId();
-  if (!orgId) return null;
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const resolvedOrg = (await getCurrentOrgId().catch(() => null))
+    || storedOrgId
+    || (await offlineDb.farms.toCollection().first())?.organization_id
+    || (await offlineDb.lots.toCollection().first())?.organization_id
+    || 'local-org';
+  const orgId = String(resolvedOrg);
 
-  const supabase = createClient();
-
-  // Resolve target season: use provided season_id or find active season
-  let targetSeasonId = lot.season_id;
-  if (!targetSeasonId) {
-    const { data: season } = await supabase
-      .from('reproductive_seasons')
-      .select('id')
-      .eq('organization_id', orgId)
-      .eq('status', 'active')
-      .limit(1)
-      .maybeSingle();
-
-    targetSeasonId = season?.id;
+  if (isOffline) {
+    return createLotOffline(lot, orgId);
   }
 
-  // Fallback: pick any available season
-  if (!targetSeasonId) {
-    const { data: anySeason } = await supabase
-      .from('reproductive_seasons')
-      .select('id')
-      .eq('organization_id', orgId)
-      .limit(1)
-      .maybeSingle();
+  try {
+    const supabase = createClient();
 
-    targetSeasonId = anySeason?.id;
-  }
+    // Resolve target season: use provided season_id or find active season
+    let targetSeasonId = lot.season_id;
+    if (!targetSeasonId) {
+      const { data: season } = await supabase
+        .from('reproductive_seasons')
+        .select('id')
+        .eq('organization_id', orgId)
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle();
 
-  // If none exists, create a default active season
-  if (!targetSeasonId) {
-    const currentYear = new Date().getFullYear();
-    const defaultName = `Estação ${currentYear}/${currentYear + 1}`;
-    const { data: createdSeason } = await supabase
-      .from('reproductive_seasons')
+      targetSeasonId = season?.id;
+    }
+
+    if (!targetSeasonId) {
+      const { data: anySeason } = await supabase
+        .from('reproductive_seasons')
+        .select('id')
+        .eq('organization_id', orgId)
+        .limit(1)
+        .maybeSingle();
+
+      targetSeasonId = anySeason?.id;
+    }
+
+    if (!targetSeasonId) {
+      const currentYear = new Date().getFullYear();
+      const defaultName = `Estação ${currentYear}/${currentYear + 1}`;
+      const { data: createdSeason } = await supabase
+        .from('reproductive_seasons')
+        .insert({
+          organization_id: orgId,
+          name: defaultName,
+          start_date: `${currentYear}-10-01`,
+          end_date: `${currentYear + 1}-03-31`,
+          status: 'active',
+        })
+        .select('id')
+        .single();
+
+      targetSeasonId = createdSeason?.id;
+    }
+
+    // Fetch protocol steps to calculate dates
+    const { data: proto } = await supabase
+      .from('protocols')
+      .select('protocol_steps(*)')
+      .eq('id', lot.protocol_id)
+      .single() as { data: { protocol_steps: { code: string; name?: string; day_offset: number }[] } | null };
+
+    const steps = proto?.protocol_steps ?? [];
+    const addDays = (n: number) => addDaysToDateString(lot.start_date, n);
+
+    const iaStep = steps.find((s) => s.code === 'IA');
+    const dgStep = steps.find((s) => s.code === 'DG');
+
+    // Get farm_id from property
+    const { data: prop } = await supabase
+      .from('properties')
+      .select('farm_id')
+      .eq('id', lot.property_id)
+      .single();
+
+    const { data: inserted, error } = await supabase
+      .from('iatf_lots')
       .insert({
         organization_id: orgId,
-        name: defaultName,
-        start_date: `${currentYear}-10-01`,
-        end_date: `${currentYear + 1}-03-31`,
-        status: 'active',
+        season_id: targetSeasonId,
+        farm_id: prop?.farm_id,
+        property_id: lot.property_id,
+        protocol_id: lot.protocol_id,
+        code: lot.code,
+        start_date: lot.start_date,
+        ia_planned_date: iaStep ? addDays(iaStep.day_offset) : null,
+        dg_planned_date: dgStep ? addDays(dgStep.day_offset) : null,
+        responsible_name: lot.responsible_name,
+        status: 'planejado',
       })
       .select('id')
       .single();
 
-    targetSeasonId = createdSeason?.id;
+    if (error) {
+      console.warn('createLot Supabase error, falling back to offline:', error);
+      syncEngine.markOffline();
+      return createLotOffline(lot, orgId);
+    }
+
+    // Auto-generate management events
+    for (const step of steps) {
+      await supabase.from('management_events').insert({
+        organization_id: orgId,
+        farm_id: prop?.farm_id,
+        lot_id: inserted.id,
+        step_code: step.code,
+        step_name: step.name ?? step.code,
+        planned_date: addDays(step.day_offset),
+        responsible_name: lot.responsible_name,
+        status: 'pendente',
+        event_type: 'lote',
+      });
+    }
+
+    // Salva também no IndexedDB imediatamente para disponibilidade offline
+    try {
+      const protoObj = await offlineDb.protocols.get(lot.protocol_id);
+      const propObj = await offlineDb.properties.get(lot.property_id);
+      const farmObj = prop?.farm_id ? await offlineDb.farms.get(prop.farm_id) : null;
+
+      await offlineDb.lots.put({
+        id: inserted.id,
+        organization_id: orgId,
+        season_id: targetSeasonId,
+        farm_id: prop?.farm_id || '',
+        property_id: lot.property_id,
+        protocol_id: lot.protocol_id,
+        code: lot.code.trim(),
+        name: lot.code.trim(),
+        start_date: lot.start_date,
+        ia_planned_date: iaStep ? addDays(iaStep.day_offset) : undefined,
+        dg_planned_date: dgStep ? addDays(dgStep.day_offset) : undefined,
+        responsible_name: lot.responsible_name,
+        status: 'planejado',
+        property_name: propObj?.name || null,
+        protocol_name: protoObj?.name || null,
+        farm_name: farmObj?.name || null,
+        females_count: 0,
+        inseminated_count: 0,
+        pregnant_count: 0,
+        empty_count: 0,
+        pregnancy_rate: 0,
+        pending_dg: 0,
+        updated_at: new Date().toISOString(),
+      });
+
+      for (const step of steps) {
+        await offlineDb.management_events.put({
+          id: crypto.randomUUID(),
+          organization_id: orgId,
+          farm_id: prop?.farm_id,
+          lot_id: inserted.id,
+          step_code: step.code,
+          step_name: step.name ?? step.code,
+          planned_date: addDays(step.day_offset),
+          responsible_name: lot.responsible_name,
+          status: 'pendente',
+          event_type: 'lote',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      }
+    } catch (err) {
+      console.warn('Aviso ao cachear novo lote no IndexedDB:', err);
+    }
+
+    invalidateCache('lots');
+    invalidateCache('events');
+    invalidateCache('metrics');
+    return inserted.id;
+  } catch (err) {
+    console.warn('createLot exception, falling back to offline:', err);
+    syncEngine.markOffline();
+    return createLotOffline(lot, orgId);
   }
-
-  if (!targetSeasonId) return null;
-
-  // Fetch protocol steps to calculate dates
-  const { data: proto } = await supabase
-    .from('protocols')
-    .select('protocol_steps(*)')
-    .eq('id', lot.protocol_id)
-    .single() as { data: { protocol_steps: { code: string; name?: string; day_offset: number }[] } | null };
-
-  const steps = proto?.protocol_steps ?? [];
-  const addDays = (n: number) => addDaysToDateString(lot.start_date, n);
-
-  const iaStep = steps.find((s) => s.code === 'IA');
-  const dgStep = steps.find((s) => s.code === 'DG');
-
-  // Get farm_id from property
-  const { data: prop } = await supabase
-    .from('properties')
-    .select('farm_id')
-    .eq('id', lot.property_id)
-    .single();
-
-  const { data: inserted, error } = await supabase
-    .from('iatf_lots')
-    .insert({
-      organization_id: orgId,
-      season_id: targetSeasonId,
-      farm_id: prop?.farm_id,
-      property_id: lot.property_id,
-      protocol_id: lot.protocol_id,
-      code: lot.code,
-      start_date: lot.start_date,
-      ia_planned_date: iaStep ? addDays(iaStep.day_offset) : null,
-      dg_planned_date: dgStep ? addDays(dgStep.day_offset) : null,
-      responsible_name: lot.responsible_name,
-      status: 'planejado',
-    })
-    .select('id')
-    .single();
-
-  if (error) {
-    console.error('createLot error:', error);
-    return null;
-  }
-
-  // Auto-generate management events
-  for (const step of steps) {
-    await supabase.from('management_events').insert({
-      organization_id: orgId,
-      farm_id: prop?.farm_id,
-      lot_id: inserted.id,
-      step_code: step.code,
-      step_name: step.name ?? step.code,
-      planned_date: addDays(step.day_offset),
-      responsible_name: lot.responsible_name,
-      status: 'pendente',
-      event_type: 'lote',
-    });
-  }
-
-  invalidateCache('lots');
-  invalidateCache('events');
-  invalidateCache('metrics');
-  return inserted.id;
 }
 
 // ============================================================
@@ -1809,6 +3537,31 @@ export async function updateLotCode(
   const cleanCode = newCode.trim();
   if (!cleanCode) {
     return { success: false, error: 'O nome do lote não pode ser vazio.' };
+  }
+
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const lot = await offlineDb.lots.get(lotId);
+      if (lot) {
+        await offlineDb.lots.update(lotId, {
+          code: cleanCode,
+          name: cleanCode,
+          updated_at: new Date().toISOString(),
+        });
+        await syncEngine.enqueueMutation('update', 'iatf_lots', lotId, lot.farm_id, {
+          code: cleanCode,
+          updated_at: new Date().toISOString(),
+        });
+      }
+      invalidateCache('lots');
+      invalidateCache('events');
+      invalidateCache('metrics');
+      return { success: true };
+    } catch (e: unknown) {
+      console.error('updateLotCode offline error:', e);
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
   }
 
   const supabase = createClient();
@@ -1825,6 +3578,12 @@ export async function updateLotCode(
     return { success: false, error: error.message };
   }
 
+  offlineDb.lots.update(lotId, {
+    code: cleanCode,
+    name: cleanCode,
+    updated_at: new Date().toISOString(),
+  }).catch(() => {});
+
   invalidateCache('lots');
   invalidateCache('events');
   invalidateCache('metrics');
@@ -1838,6 +3597,29 @@ export async function updateLotCode(
 export async function deleteLot(
   lotId: string
 ): Promise<{ success: boolean; error?: string }> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const lot = await offlineDb.lots.get(lotId);
+      if (lot) {
+        await offlineDb.lot_animals.where('lot_id').equals(lotId).delete();
+        await offlineDb.management_events.where('lot_id').equals(lotId).delete();
+        await offlineDb.lots.delete(lotId);
+        await syncEngine.enqueueMutation('delete', 'iatf_lots', lotId, lot.farm_id, {
+          id: lotId,
+        });
+      }
+      invalidateCache('lots');
+      invalidateCache('lot_animals');
+      invalidateCache('events');
+      invalidateCache('metrics');
+      return { success: true };
+    } catch (e: unknown) {
+      console.error('deleteLot offline error:', e);
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
   const supabase = createClient();
 
   try {
@@ -1881,10 +3663,15 @@ export async function deleteLot(
       return { success: false, error: 'Falha ao excluir lote: ' + lotErr.message };
     }
 
+    // Também remove do banco offline local
+    offlineDb.lot_animals.where('lot_id').equals(lotId).delete().catch(() => {});
+    offlineDb.management_events.where('lot_id').equals(lotId).delete().catch(() => {});
+    offlineDb.lots.delete(lotId).catch(() => {});
+
     // 5. Invalidar caches
     invalidateCache('lots');
-    invalidateCache('events');
     invalidateCache('lot_animals');
+    invalidateCache('events');
     invalidateCache('metrics');
 
     return { success: true };
@@ -1911,8 +3698,35 @@ export interface Farm {
 }
 
 export async function getFarms(forceRefresh = false, includeFrozen = false): Promise<Farm[]> {
-  const isOffline = typeof window !== 'undefined' && !navigator.onLine;
+  const isOffline = isSystemOffline();
   if (isOffline) {
+    try {
+      const offlineFarms = await offlineDb.farms.toArray();
+      return offlineFarms
+        .filter((f) => includeFrozen || (f as { status?: string }).status !== 'frozen')
+        .map((f) => ({
+          id: f.id,
+          name: f.name,
+          owner_name: (f.owner_name as string) || null,
+          technical_responsible: (f.technical_responsible as string) || null,
+          city: (f.city as string) || null,
+          state: (f.state as string) || null,
+          status: ((f as { status?: string }).status as 'active' | 'frozen') || 'active',
+          properties: [],
+        }));
+    } catch (e) {
+      console.warn('Falha ao carregar fazendas offline:', e);
+      return cachedFarms ?? [];
+    }
+  }
+
+  const now = Date.now();
+  if (!forceRefresh && cachedFarms && !includeFrozen && now - cachedFarmsTimestamp < CACHE_TTL_MS) {
+    return cachedFarms;
+  }
+
+  const orgId = await getCurrentOrgId();
+  if (!orgId) {
     try {
       const offlineFarms = await offlineDb.farms.toArray();
       if (offlineFarms.length > 0) {
@@ -1929,18 +3743,11 @@ export async function getFarms(forceRefresh = false, includeFrozen = false): Pro
             properties: [],
           }));
       }
-    } catch (e) {
-      console.warn('Falha ao carregar fazendas offline:', e);
+    } catch {
+      // ignore
     }
+    return cachedFarms ?? [];
   }
-
-  const now = Date.now();
-  if (!forceRefresh && cachedFarms && !includeFrozen && now - cachedFarmsTimestamp < CACHE_TTL_MS) {
-    return cachedFarms;
-  }
-
-  const orgId = await getCurrentOrgId();
-  if (!orgId) return [];
 
   const supabase = createClient();
   let query = supabase
@@ -1983,6 +3790,28 @@ export async function getFarms(forceRefresh = false, includeFrozen = false): Pro
     cachedFarms = farmsList;
     cachedFarmsTimestamp = now;
   }
+
+  if (farmsList.length > 0) {
+    try {
+      await offlineDb.farms.bulkPut(
+        farmsList.map((f) => ({
+          id: f.id,
+          organization_id: orgId,
+          name: f.name,
+          owner_name: f.owner_name,
+          technical_responsible: f.technical_responsible,
+          city: f.city,
+          state: f.state,
+          status: f.status,
+          properties: f.properties || [],
+          updated_at: new Date().toISOString(),
+        } as import('./offline/offlineDb').OfflineFarm))
+      );
+    } catch (e) {
+      console.warn('Erro ao salvar fazendas no IndexedDB:', e);
+    }
+  }
+
   return farmsList;
 }
 
@@ -2035,13 +3864,54 @@ export async function createFarm(farm: {
   city?: string;
   state?: string;
 }): Promise<string | null> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return null;
+
+  const newId = crypto.randomUUID();
+  const farmRecord: import('./offline/offlineDb').OfflineFarm = {
+    id: newId,
+    organization_id: orgId,
+    name: farm.name.trim(),
+    owner_name: farm.owner_name?.trim() || null,
+    technical_responsible: farm.technical_responsible?.trim() || null,
+    city: farm.city?.trim() || null,
+    state: farm.state?.trim() ? farm.state.trim().toUpperCase() : null,
+    status: 'active',
+    properties: [],
+    updated_at: new Date().toISOString(),
+  };
+
+  if (isOffline) {
+    try {
+      await offlineDb.farms.put(farmRecord);
+      await syncEngine.enqueueMutation('insert', 'farms', newId, newId, {
+        id: newId,
+        organization_id: orgId,
+        name: farm.name.trim(),
+        owner_name: farm.owner_name?.trim() || null,
+        technical_responsible: farm.technical_responsible?.trim() || null,
+        city: farm.city?.trim() || null,
+        state: farm.state?.trim() ? farm.state.trim().toUpperCase() : null,
+        status: 'active',
+      }, orgId);
+      clearFarmsCache();
+      return newId;
+    } catch (e) {
+      console.error('createFarm offline error:', e);
+      return null;
+    }
+  }
 
   const supabase = createClient();
   const { data, error } = await supabase
     .from('farms')
-    .insert({ ...farm, organization_id: orgId })
+    .insert({
+      id: newId,
+      ...farm,
+      organization_id: orgId,
+    })
     .select('id')
     .single();
 
@@ -2050,8 +3920,12 @@ export async function createFarm(farm: {
     return null;
   }
 
+  try {
+    await offlineDb.farms.put(farmRecord);
+  } catch {}
+
   clearFarmsCache();
-  return data?.id ?? null;
+  return data?.id ?? newId;
 }
 
 export async function updateFarm(
@@ -2064,20 +3938,42 @@ export async function updateFarm(
     state?: string | null;
   }
 ): Promise<boolean> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return false;
+
+  const farmUpdates = {
+    name: farm.name.trim(),
+    owner_name: farm.owner_name?.trim() || null,
+    technical_responsible: farm.technical_responsible?.trim() || null,
+    city: farm.city?.trim() || null,
+    state: farm.state?.trim() ? farm.state.trim().toUpperCase() : null,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (isOffline) {
+    try {
+      const existing = await offlineDb.farms.get(id);
+      if (existing) {
+        await offlineDb.farms.update(id, farmUpdates);
+      }
+      await syncEngine.enqueueMutation('update', 'farms', id, id, {
+        id,
+        ...farmUpdates,
+      }, orgId);
+      clearFarmsCache();
+      return true;
+    } catch (e) {
+      console.error('updateFarm offline error:', e);
+      return false;
+    }
+  }
 
   const supabase = createClient();
   const { error } = await supabase
     .from('farms')
-    .update({
-      name: farm.name.trim(),
-      owner_name: farm.owner_name?.trim() || null,
-      technical_responsible: farm.technical_responsible?.trim() || null,
-      city: farm.city?.trim() || null,
-      state: farm.state?.trim() ? farm.state.trim().toUpperCase() : null,
-      updated_at: new Date().toISOString(),
-    })
+    .update(farmUpdates)
     .eq('id', id)
     .eq('organization_id', orgId);
 
@@ -2089,14 +3985,7 @@ export async function updateFarm(
   try {
     const existing = await offlineDb.farms.get(id);
     if (existing) {
-      await offlineDb.farms.update(id, {
-        name: farm.name.trim(),
-        owner_name: farm.owner_name?.trim() || null,
-        technical_responsible: farm.technical_responsible?.trim() || null,
-        city: farm.city?.trim() || null,
-        state: farm.state?.trim() ? farm.state.trim().toUpperCase() : null,
-        updated_at: new Date().toISOString(),
-      });
+      await offlineDb.farms.update(id, farmUpdates);
     }
   } catch (err) {
     console.warn('Offline farm update warning:', err);
@@ -2107,18 +3996,32 @@ export async function updateFarm(
 }
 
 export async function deleteFarm(id: string): Promise<{ success: boolean; error?: string }> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return { success: false, error: 'Sessão inválida' };
+
+  if (isOffline) {
+    try {
+      await offlineDb.farms.delete(id);
+      await syncEngine.enqueueMutation('delete', 'farms', id, id, { id }, orgId);
+      clearFarmsCache();
+      return { success: true };
+    } catch (e) {
+      console.error('deleteFarm offline error:', e);
+      return { success: false, error: 'Erro offline ao excluir fazenda.' };
+    }
+  }
 
   const supabase = createClient();
 
   // 1. Verificar se existem lotes vinculados à fazenda
-  const { count: lotsCount, error: lotsErr } = await supabase
+  const { count: lotsCount } = await supabase
     .from('iatf_lots')
     .select('id', { count: 'exact', head: true })
     .eq('farm_id', id);
 
-  if (!lotsErr && lotsCount && lotsCount > 0) {
+  if (lotsCount && lotsCount > 0) {
     return {
       success: false,
       error: `Não é possível excluir esta fazenda pois existem ${lotsCount} lote(s) de IATF vinculados a ela. Você pode congelá-la para desativar sem perder os dados.`,
@@ -2126,12 +4029,12 @@ export async function deleteFarm(id: string): Promise<{ success: boolean; error?
   }
 
   // 2. Verificar se existem animais vinculados à fazenda
-  const { count: animalsCount, error: animalsErr } = await supabase
+  const { count: animalsCount } = await supabase
     .from('animals')
     .select('id', { count: 'exact', head: true })
     .eq('farm_id', id);
 
-  if (!animalsErr && animalsCount && animalsCount > 0) {
+  if (animalsCount && animalsCount > 0) {
     return {
       success: false,
       error: `Não é possível excluir esta fazenda pois existem ${animalsCount} animal(is) vinculados a ela. Você pode congelá-la para desativar com segurança.`,
@@ -2168,6 +4071,25 @@ export interface Property {
 }
 
 export async function getProperties(forceRefresh = false, farmId?: string): Promise<Property[]> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      let local = await offlineDb.properties.toArray();
+      if (farmId && farmId !== 'all') {
+        local = local.filter((p) => p.farm_id === farmId);
+      }
+      return local.map((p) => ({
+        id: p.id,
+        name: p.name,
+        code: p.code || null,
+        farm_id: p.farm_id,
+      }));
+    } catch (e) {
+      console.warn('Erro ao carregar propriedades offline:', e);
+      return [];
+    }
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
 
@@ -2191,10 +4113,36 @@ export async function getProperties(forceRefresh = false, farmId?: string): Prom
 
   if (error) {
     console.error('getProperties error:', error);
+    try {
+      let local = await offlineDb.properties.toArray();
+      if (farmId && farmId !== 'all') {
+        local = local.filter((p) => p.farm_id === farmId);
+      }
+      return local.map((p) => ({
+        id: p.id,
+        name: p.name,
+        code: p.code || null,
+        farm_id: p.farm_id,
+      }));
+    } catch {}
     return getCached<Property[]>(cacheKey) ?? [];
   }
   const result = (data ?? []) as Property[];
   setCached(cacheKey, result);
+
+  if (data && data.length > 0) {
+    offlineDb.properties.bulkPut(
+      data.map((p) => ({
+        id: p.id,
+        farm_id: p.farm_id,
+        name: p.name,
+        code: p.code || null,
+        organization_id: p.organization_id || orgId,
+        updated_at: new Date().toISOString(),
+      }))
+    ).catch(() => {});
+  }
+
   return result;
 }
 
@@ -2203,6 +4151,36 @@ export async function createProperty(prop: {
   name: string;
   code?: string;
 }): Promise<boolean> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+      const orgId = (await getCurrentOrgId()) || storedOrgId || '';
+      const newId = crypto.randomUUID();
+      await offlineDb.properties.put({
+        id: newId,
+        farm_id: prop.farm_id,
+        name: prop.name.trim(),
+        code: prop.code?.trim() || null,
+        organization_id: orgId,
+        updated_at: new Date().toISOString(),
+      });
+      await syncEngine.enqueueMutation('insert', 'properties', newId, prop.farm_id, {
+        id: newId,
+        farm_id: prop.farm_id,
+        name: prop.name.trim(),
+        code: prop.code?.trim() || null,
+        organization_id: orgId,
+      }, orgId);
+      invalidateCache('properties');
+      clearFarmsCache();
+      return true;
+    } catch (e) {
+      console.error('createProperty offline error:', e);
+      return false;
+    }
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return false;
 
@@ -2228,16 +4206,40 @@ export async function updateProperty(
     code?: string | null;
   }
 ): Promise<boolean> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return false;
+
+  const propUpdates = {
+    name: prop.name.trim(),
+    code: prop.code?.trim() || null,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (isOffline) {
+    try {
+      const existing = await offlineDb.properties.get(id);
+      if (existing) {
+        await offlineDb.properties.update(id, propUpdates);
+      }
+      await syncEngine.enqueueMutation('update', 'properties', id, existing?.farm_id, {
+        id,
+        ...propUpdates,
+      }, orgId);
+      invalidateCache('properties');
+      clearFarmsCache();
+      return true;
+    } catch (e) {
+      console.error('updateProperty offline error:', e);
+      return false;
+    }
+  }
 
   const supabase = createClient();
   const { error } = await supabase
     .from('properties')
-    .update({
-      name: prop.name.trim(),
-      code: prop.code?.trim() || null,
-    })
+    .update(propUpdates)
     .eq('id', id)
     .eq('organization_id', orgId);
 
@@ -2246,14 +4248,37 @@ export async function updateProperty(
     return false;
   }
 
+  try {
+    const existing = await offlineDb.properties.get(id);
+    if (existing) {
+      await offlineDb.properties.update(id, propUpdates);
+    }
+  } catch {}
+
   invalidateCache('properties');
   clearFarmsCache();
   return true;
 }
 
 export async function deleteProperty(id: string): Promise<{ success: boolean; error?: string }> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return { success: false, error: 'Sessão inválida' };
+
+  if (isOffline) {
+    try {
+      const existing = await offlineDb.properties.get(id);
+      await offlineDb.properties.delete(id);
+      await syncEngine.enqueueMutation('delete', 'properties', id, existing?.farm_id, { id }, orgId);
+      invalidateCache('properties');
+      clearFarmsCache();
+      return { success: true };
+    } catch (e) {
+      console.error('deleteProperty offline error:', e);
+      return { success: false, error: 'Erro offline ao excluir retiro.' };
+    }
+  }
 
   const supabase = createClient();
 
@@ -2281,6 +4306,10 @@ export async function deleteProperty(id: string): Promise<{ success: boolean; er
     return { success: false, error: 'Erro ao excluir retiro no banco de dados.' };
   }
 
+  try {
+    await offlineDb.properties.delete(id);
+  } catch {}
+
   invalidateCache('properties');
   clearFarmsCache();
   return { success: true };
@@ -2296,8 +4325,27 @@ export interface Breed {
 }
 
 export async function getBreeds(forceRefresh = false): Promise<Breed[]> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const local = await offlineDb.breeds.toArray();
+      if (local && local.length > 0) {
+        return local.map((b) => ({ id: b.id, name: b.name }));
+      }
+    } catch (e) {
+      console.warn('Erro ao carregar raças offline do banco local:', e);
+    }
+    return DEFAULT_BREEDS;
+  }
+
   const orgId = await getCurrentOrgId();
-  if (!orgId) return [];
+  if (!orgId) {
+    try {
+      const local = await offlineDb.breeds.toArray();
+      if (local && local.length > 0) return local.map((b) => ({ id: b.id, name: b.name }));
+    } catch {}
+    return DEFAULT_BREEDS;
+  }
 
   const cacheKey = `breeds_${orgId}`;
   if (!forceRefresh) {
@@ -2314,14 +4362,56 @@ export async function getBreeds(forceRefresh = false): Promise<Breed[]> {
 
   if (error) {
     console.error('getBreeds error:', error);
-    return getCached<Breed[]>(cacheKey) ?? [];
+    try {
+      const local = await offlineDb.breeds.toArray();
+      if (local && local.length > 0) return local.map((b) => ({ id: b.id, name: b.name }));
+    } catch {}
+    return getCached<Breed[]>(cacheKey) ?? DEFAULT_BREEDS;
   }
-  const result = (data ?? []) as Breed[];
+
+  const result = (data && data.length > 0 ? data : DEFAULT_BREEDS) as Breed[];
   setCached(cacheKey, result);
+
+  if (data && data.length > 0) {
+    offlineDb.breeds.bulkPut(
+      data.map((b) => ({
+        id: b.id,
+        name: b.name,
+        organization_id: b.organization_id || orgId,
+        updated_at: new Date().toISOString(),
+      }))
+    ).catch(() => {});
+  }
+
   return result;
 }
 
 export async function createBreed(name: string): Promise<boolean> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+      const orgId = (await getCurrentOrgId()) || storedOrgId || '';
+      const newId = crypto.randomUUID();
+      await offlineDb.breeds.put({
+        id: newId,
+        name: name.trim(),
+        organization_id: orgId,
+        updated_at: new Date().toISOString(),
+      });
+      await syncEngine.enqueueMutation('insert', 'breeds', newId, undefined, {
+        id: newId,
+        name: name.trim(),
+        organization_id: orgId,
+      }, orgId);
+      invalidateCache('breeds');
+      return true;
+    } catch (e) {
+      console.error('createBreed offline error:', e);
+      return false;
+    }
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return false;
 
@@ -2345,8 +4435,27 @@ export interface AnimalCategory {
 }
 
 export async function getAnimalCategories(forceRefresh = false): Promise<AnimalCategory[]> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const local = await offlineDb.categories.toArray();
+      if (local && local.length > 0) {
+        return local.map((c) => ({ id: c.id, name: c.name }));
+      }
+    } catch (e) {
+      console.warn('Erro ao carregar categorias offline do banco local:', e);
+    }
+    return DEFAULT_CATEGORIES;
+  }
+
   const orgId = await getCurrentOrgId();
-  if (!orgId) return [];
+  if (!orgId) {
+    try {
+      const local = await offlineDb.categories.toArray();
+      if (local && local.length > 0) return local.map((c) => ({ id: c.id, name: c.name }));
+    } catch {}
+    return DEFAULT_CATEGORIES;
+  }
 
   const cacheKey = `categories_${orgId}`;
   if (!forceRefresh) {
@@ -2363,14 +4472,56 @@ export async function getAnimalCategories(forceRefresh = false): Promise<AnimalC
 
   if (error) {
     console.error('getAnimalCategories error:', error);
-    return getCached<AnimalCategory[]>(cacheKey) ?? [];
+    try {
+      const local = await offlineDb.categories.toArray();
+      if (local && local.length > 0) return local.map((c) => ({ id: c.id, name: c.name }));
+    } catch {}
+    return getCached<AnimalCategory[]>(cacheKey) ?? DEFAULT_CATEGORIES;
   }
-  const result = (data ?? []) as AnimalCategory[];
+
+  const result = (data && data.length > 0 ? data : DEFAULT_CATEGORIES) as AnimalCategory[];
   setCached(cacheKey, result);
+
+  if (data && data.length > 0) {
+    offlineDb.categories.bulkPut(
+      data.map((c) => ({
+        id: c.id,
+        name: c.name,
+        organization_id: c.organization_id || orgId,
+        updated_at: new Date().toISOString(),
+      }))
+    ).catch(() => {});
+  }
+
   return result;
 }
 
 export async function createAnimalCategory(name: string): Promise<boolean> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+      const orgId = (await getCurrentOrgId()) || storedOrgId || '';
+      const newId = crypto.randomUUID();
+      await offlineDb.categories.put({
+        id: newId,
+        name: name.trim(),
+        organization_id: orgId,
+        updated_at: new Date().toISOString(),
+      });
+      await syncEngine.enqueueMutation('insert', 'animal_categories', newId, undefined, {
+        id: newId,
+        name: name.trim(),
+        organization_id: orgId,
+      }, orgId);
+      invalidateCache('categories');
+      return true;
+    } catch (e) {
+      console.error('createAnimalCategory offline error:', e);
+      return false;
+    }
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return false;
 
@@ -2403,8 +4554,43 @@ export interface ReproductiveSeason {
 }
 
 export async function getReproductiveSeasons(forceRefresh = false): Promise<ReproductiveSeason[]> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const offlineSeasons = await offlineDb.seasons.toArray();
+      return offlineSeasons.map((s) => ({
+        id: s.id,
+        name: s.name,
+        start_date: (s.start_date as string) || '',
+        end_date: (s.end_date as string) || '',
+        status: s.status || 'closed',
+        created_at: (s.created_at as string) || undefined,
+      }));
+    } catch (e) {
+      console.warn('Falha ao ler estações offline:', e);
+      return [];
+    }
+  }
+
   const orgId = await getCurrentOrgId();
-  if (!orgId) return [];
+  if (!orgId) {
+    try {
+      const offlineSeasons = await offlineDb.seasons.toArray();
+      if (offlineSeasons.length > 0) {
+        return offlineSeasons.map((s) => ({
+          id: s.id,
+          name: s.name,
+          start_date: (s.start_date as string) || '',
+          end_date: (s.end_date as string) || '',
+          status: s.status || 'closed',
+          created_at: (s.created_at as string) || undefined,
+        }));
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  }
 
   const cacheKey = `seasons_${orgId}`;
   if (!forceRefresh) {
@@ -2421,11 +4607,46 @@ export async function getReproductiveSeasons(forceRefresh = false): Promise<Repr
 
   if (error) {
     console.error('getReproductiveSeasons error:', error);
+    try {
+      const offlineSeasons = await offlineDb.seasons.toArray();
+      if (offlineSeasons.length > 0) {
+        return offlineSeasons.map((s) => ({
+          id: s.id,
+          name: s.name,
+          start_date: (s.start_date as string) || '',
+          end_date: (s.end_date as string) || '',
+          status: s.status || 'closed',
+          created_at: (s.created_at as string) || undefined,
+        }));
+      }
+    } catch {
+      // ignore
+    }
     return getCached<ReproductiveSeason[]>(cacheKey) ?? [];
   }
 
   const result = (data ?? []) as ReproductiveSeason[];
   setCached(cacheKey, result);
+
+  if (result.length > 0) {
+    try {
+      await offlineDb.seasons.bulkPut(
+        result.map((s) => ({
+          id: s.id,
+          organization_id: orgId,
+          name: s.name,
+          start_date: s.start_date,
+          end_date: s.end_date,
+          status: s.status,
+          created_at: s.created_at,
+          updated_at: new Date().toISOString(),
+        } as import('./offline/offlineDb').OfflineSeason))
+      );
+    } catch (e) {
+      console.warn('Erro ao salvar estações no IndexedDB:', e);
+    }
+  }
+
   return result;
 }
 
@@ -2435,11 +4656,60 @@ export async function createReproductiveSeason(season: {
   end_date: string;
   status?: 'active' | 'closed';
 }): Promise<ReproductiveSeason | null> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return null;
 
-  const supabase = createClient();
+  const newId = crypto.randomUUID();
   const status = season.status || 'closed';
+
+  const seasonRecord: ReproductiveSeason = {
+    id: newId,
+    organization_id: orgId,
+    name: season.name.trim(),
+    start_date: season.start_date,
+    end_date: season.end_date,
+    status,
+    created_at: new Date().toISOString(),
+  };
+
+  if (isOffline) {
+    try {
+      if (status === 'active') {
+        const all = await offlineDb.seasons.toArray();
+        for (const s of all) {
+          if (s.status === 'active') {
+            await offlineDb.seasons.update(s.id, { status: 'closed', updated_at: new Date().toISOString() });
+          }
+        }
+      }
+
+      await offlineDb.seasons.put({
+        ...seasonRecord,
+        updated_at: new Date().toISOString(),
+      } as import('./offline/offlineDb').OfflineSeason);
+
+      await syncEngine.enqueueMutation('insert', 'reproductive_seasons', newId, undefined, {
+        id: newId,
+        organization_id: orgId,
+        name: season.name.trim(),
+        start_date: season.start_date,
+        end_date: season.end_date,
+        status,
+      }, orgId);
+
+      invalidateCache('seasons');
+      invalidateCache('lots');
+      invalidateCache('metrics');
+      return seasonRecord;
+    } catch (e) {
+      console.error('createReproductiveSeason offline error:', e);
+      return null;
+    }
+  }
+
+  const supabase = createClient();
 
   // If new season is set to active, mark other seasons of this org as closed
   if (status === 'active') {
@@ -2452,6 +4722,7 @@ export async function createReproductiveSeason(season: {
   const { data, error } = await supabase
     .from('reproductive_seasons')
     .insert({
+      id: newId,
       organization_id: orgId,
       name: season.name.trim(),
       start_date: season.start_date,
@@ -2465,6 +4736,21 @@ export async function createReproductiveSeason(season: {
     console.error('createReproductiveSeason error:', error);
     return null;
   }
+
+  try {
+    if (status === 'active') {
+      const all = await offlineDb.seasons.toArray();
+      for (const s of all) {
+        if (s.status === 'active') {
+          await offlineDb.seasons.update(s.id, { status: 'closed' });
+        }
+      }
+    }
+    await offlineDb.seasons.put({
+      ...seasonRecord,
+      updated_at: new Date().toISOString(),
+    } as import('./offline/offlineDb').OfflineSeason);
+  } catch {}
 
   invalidateCache('seasons');
   invalidateCache('lots');
@@ -2481,8 +4767,46 @@ export async function updateReproductiveSeason(
     status?: 'active' | 'closed';
   }
 ): Promise<boolean> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return false;
+
+  const payload: Record<string, unknown> = {};
+  if (updates.name !== undefined) payload.name = updates.name.trim();
+  if (updates.start_date !== undefined) payload.start_date = updates.start_date;
+  if (updates.end_date !== undefined) payload.end_date = updates.end_date;
+  if (updates.status !== undefined) payload.status = updates.status;
+
+  if (isOffline) {
+    try {
+      if (updates.status === 'active') {
+        const all = await offlineDb.seasons.toArray();
+        for (const s of all) {
+          if (s.id !== id && s.status === 'active') {
+            await offlineDb.seasons.update(s.id, { status: 'closed' });
+          }
+        }
+      }
+      await offlineDb.seasons.update(id, {
+        ...payload,
+        updated_at: new Date().toISOString(),
+      });
+      await syncEngine.enqueueMutation('update', 'reproductive_seasons', id, undefined, {
+        id,
+        ...payload,
+        updated_at: new Date().toISOString(),
+      }, orgId);
+
+      invalidateCache('seasons');
+      invalidateCache('lots');
+      invalidateCache('metrics');
+      return true;
+    } catch (e) {
+      console.error('updateReproductiveSeason offline error:', e);
+      return false;
+    }
+  }
 
   const supabase = createClient();
 
@@ -2495,12 +4819,6 @@ export async function updateReproductiveSeason(
       .neq('id', id);
   }
 
-  const payload: Record<string, unknown> = {};
-  if (updates.name !== undefined) payload.name = updates.name.trim();
-  if (updates.start_date !== undefined) payload.start_date = updates.start_date;
-  if (updates.end_date !== undefined) payload.end_date = updates.end_date;
-  if (updates.status !== undefined) payload.status = updates.status;
-
   const { error } = await supabase
     .from('reproductive_seasons')
     .update(payload)
@@ -2512,6 +4830,21 @@ export async function updateReproductiveSeason(
     return false;
   }
 
+  try {
+    if (updates.status === 'active') {
+      const all = await offlineDb.seasons.toArray();
+      for (const s of all) {
+        if (s.id !== id && s.status === 'active') {
+          await offlineDb.seasons.update(s.id, { status: 'closed' });
+        }
+      }
+    }
+    await offlineDb.seasons.update(id, {
+      ...payload,
+      updated_at: new Date().toISOString(),
+    });
+  } catch {}
+
   invalidateCache('seasons');
   invalidateCache('lots');
   invalidateCache('metrics');
@@ -2519,8 +4852,31 @@ export async function updateReproductiveSeason(
 }
 
 export async function setActiveReproductiveSeason(id: string): Promise<boolean> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return false;
+
+  if (isOffline) {
+    try {
+      const all = await offlineDb.seasons.toArray();
+      for (const s of all) {
+        await offlineDb.seasons.update(s.id, {
+          status: s.id === id ? 'active' : 'closed',
+          updated_at: new Date().toISOString(),
+        });
+      }
+      await syncEngine.enqueueMutation('update', 'reproductive_seasons', id, undefined, {
+        id,
+        status: 'active',
+        updated_at: new Date().toISOString(),
+      }, orgId);
+
+        } catch (e) {
+      console.error('setActiveReproductiveSeason offline error:', e);
+      return false;
+    }
+  }
 
   const supabase = createClient();
 
@@ -2542,6 +4898,16 @@ export async function setActiveReproductiveSeason(id: string): Promise<boolean> 
     return false;
   }
 
+  try {
+    const all = await offlineDb.seasons.toArray();
+    for (const s of all) {
+      await offlineDb.seasons.update(s.id, {
+        status: s.id === id ? 'active' : 'closed',
+        updated_at: new Date().toISOString(),
+      });
+    }
+  } catch {}
+
   invalidateCache('seasons');
   invalidateCache('lots');
   invalidateCache('metrics');
@@ -2549,8 +4915,31 @@ export async function setActiveReproductiveSeason(id: string): Promise<boolean> 
 }
 
 export async function deleteReproductiveSeason(id: string): Promise<{ success: boolean; error?: string }> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return { success: false, error: 'Sessão inválida' };
+
+  if (isOffline) {
+    try {
+      const lotsUsing = await offlineDb.lots.where('season_id').equals(id).count();
+      if (lotsUsing > 0) {
+        return {
+          success: false,
+          error: `Não é possível excluir esta estação pois existem ${lotsUsing} lote(s) vinculados a ela localmente.`,
+        };
+      }
+      await offlineDb.seasons.delete(id);
+      await syncEngine.enqueueMutation('delete', 'reproductive_seasons', id, undefined, { id }, orgId);
+      invalidateCache('seasons');
+      invalidateCache('lots');
+      invalidateCache('metrics');
+      return { success: true };
+    } catch (e) {
+      console.error('deleteReproductiveSeason offline error:', e);
+      return { success: false, error: 'Erro offline ao excluir estação.' };
+    }
+  }
 
   const supabase = createClient();
 
@@ -2582,6 +4971,10 @@ export async function deleteReproductiveSeason(id: string): Promise<{ success: b
     return { success: false, error: error.message };
   }
 
+  try {
+    await offlineDb.seasons.delete(id);
+  } catch {}
+
   invalidateCache('seasons');
   invalidateCache('lots');
   invalidateCache('metrics');
@@ -2604,8 +4997,41 @@ export interface Veterinarian {
 }
 
 export async function getVeterinarians(forceRefresh = false): Promise<Veterinarian[]> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const offlineVets = await offlineDb.veterinarians.toArray();
+      if (offlineVets.length > 0) {
+        return offlineVets.map((v) => ({
+          id: v.id,
+          organization_id: v.organization_id,
+          name: v.name,
+          crmv: v.crmv || null,
+          phone: v.phone || null,
+          email: v.email || null,
+          is_default: !!v.is_default,
+        }));
+      }
+    } catch {}
+    return [
+      {
+        id: 'default-vet',
+        name: 'MV. DR. SAMOEL DUARTE',
+        crmv: 'CRMV-MT',
+        is_default: true,
+      },
+    ];
+  }
+
   const orgId = await getCurrentOrgId();
-  if (!orgId) return [];
+  if (!orgId) return [
+    {
+      id: 'default-vet',
+      name: 'MV. DR. SAMOEL DUARTE',
+      crmv: 'CRMV-MT',
+      is_default: true,
+    },
+  ];
 
   const cacheKey = `vets_${orgId}`;
   if (!forceRefresh) {
@@ -2623,7 +5049,20 @@ export async function getVeterinarians(forceRefresh = false): Promise<Veterinari
 
   if (error) {
     console.error('getVeterinarians error:', error);
-    // Fallback in memory if table not yet seeded or error
+    try {
+      const offlineVets = await offlineDb.veterinarians.toArray();
+      if (offlineVets.length > 0) {
+        return offlineVets.map((v) => ({
+          id: v.id,
+          organization_id: v.organization_id,
+          name: v.name,
+          crmv: v.crmv || null,
+          phone: v.phone || null,
+          email: v.email || null,
+          is_default: !!v.is_default,
+        }));
+      }
+    } catch {}
     return getCached<Veterinarian[]>(cacheKey) ?? [
       {
         id: 'default-vet',
@@ -2655,6 +5094,21 @@ export async function getVeterinarians(forceRefresh = false): Promise<Veterinari
     }
   }
 
+  try {
+    await offlineDb.veterinarians.bulkPut(
+      result.map((v) => ({
+        id: v.id,
+        organization_id: orgId,
+        name: v.name,
+        crmv: v.crmv || null,
+        phone: v.phone || null,
+        email: v.email || null,
+        is_default: !!v.is_default,
+        updated_at: new Date().toISOString(),
+      }))
+    );
+  } catch {}
+
   setCached(cacheKey, result);
   return result;
 }
@@ -2666,11 +5120,56 @@ export async function createVeterinarian(vet: {
   email?: string;
   is_default?: boolean;
 }): Promise<Veterinarian | null> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return null;
 
-  const supabase = createClient();
+  const newId = crypto.randomUUID();
   const isDefault = !!vet.is_default;
+  const vetRecord: Veterinarian = {
+    id: newId,
+    organization_id: orgId,
+    name: vet.name.trim(),
+    crmv: vet.crmv ? vet.crmv.trim() : null,
+    phone: vet.phone ? vet.phone.trim() : null,
+    email: vet.email ? vet.email.trim() : null,
+    is_default: isDefault,
+    created_at: new Date().toISOString(),
+  };
+
+  if (isOffline) {
+    try {
+      if (isDefault) {
+        const all = await offlineDb.veterinarians.toArray();
+        for (const v of all) {
+          if (v.is_default) {
+            await offlineDb.veterinarians.update(v.id, { is_default: false });
+          }
+        }
+      }
+      await offlineDb.veterinarians.put({
+        ...vetRecord,
+        updated_at: new Date().toISOString(),
+      });
+      await syncEngine.enqueueMutation('insert', 'veterinarians', newId, undefined, {
+        id: newId,
+        organization_id: orgId,
+        name: vet.name.trim(),
+        crmv: vet.crmv ? vet.crmv.trim() : null,
+        phone: vet.phone ? vet.phone.trim() : null,
+        email: vet.email ? vet.email.trim() : null,
+        is_default: isDefault,
+      }, orgId);
+      invalidateCache('vets');
+      return vetRecord;
+    } catch (e) {
+      console.error('createVeterinarian offline error:', e);
+      return null;
+    }
+  }
+
+  const supabase = createClient();
 
   if (isDefault) {
     await supabase
@@ -2682,6 +5181,7 @@ export async function createVeterinarian(vet: {
   const { data, error } = await supabase
     .from('veterinarians')
     .insert({
+      id: newId,
       organization_id: orgId,
       name: vet.name.trim(),
       crmv: vet.crmv ? vet.crmv.trim() : null,
@@ -2697,6 +5197,21 @@ export async function createVeterinarian(vet: {
     return null;
   }
 
+  try {
+    if (isDefault) {
+      const all = await offlineDb.veterinarians.toArray();
+      for (const v of all) {
+        if (v.is_default) {
+          await offlineDb.veterinarians.update(v.id, { is_default: false });
+        }
+      }
+    }
+    await offlineDb.veterinarians.put({
+      ...vetRecord,
+      updated_at: new Date().toISOString(),
+    });
+  } catch {}
+
   invalidateCache('vets');
   return data as Veterinarian;
 }
@@ -2705,8 +5220,44 @@ export async function updateVeterinarian(
   id: string,
   updates: Partial<Veterinarian>
 ): Promise<boolean> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return false;
+
+  const payload: Record<string, unknown> = {};
+  if (updates.name !== undefined) payload.name = updates.name.trim();
+  if (updates.crmv !== undefined) payload.crmv = updates.crmv ? updates.crmv.trim() : null;
+  if (updates.phone !== undefined) payload.phone = updates.phone ? updates.phone.trim() : null;
+  if (updates.email !== undefined) payload.email = updates.email ? updates.email.trim() : null;
+  if (updates.is_default !== undefined) payload.is_default = updates.is_default;
+
+  if (isOffline) {
+    try {
+      if (updates.is_default) {
+        const all = await offlineDb.veterinarians.toArray();
+        for (const v of all) {
+          if (v.id !== id && v.is_default) {
+            await offlineDb.veterinarians.update(v.id, { is_default: false });
+          }
+        }
+      }
+      await offlineDb.veterinarians.update(id, {
+        ...payload,
+        updated_at: new Date().toISOString(),
+      });
+      await syncEngine.enqueueMutation('update', 'veterinarians', id, undefined, {
+        id,
+        ...payload,
+        updated_at: new Date().toISOString(),
+      }, orgId);
+      invalidateCache('vets');
+      return true;
+    } catch (e) {
+      console.error('updateVeterinarian offline error:', e);
+      return false;
+    }
+  }
 
   const supabase = createClient();
 
@@ -2717,13 +5268,6 @@ export async function updateVeterinarian(
       .eq('organization_id', orgId)
       .neq('id', id);
   }
-
-  const payload: Record<string, unknown> = {};
-  if (updates.name !== undefined) payload.name = updates.name.trim();
-  if (updates.crmv !== undefined) payload.crmv = updates.crmv ? updates.crmv.trim() : null;
-  if (updates.phone !== undefined) payload.phone = updates.phone ? updates.phone.trim() : null;
-  if (updates.email !== undefined) payload.email = updates.email ? updates.email.trim() : null;
-  if (updates.is_default !== undefined) payload.is_default = updates.is_default;
 
   const { error } = await supabase
     .from('veterinarians')
@@ -2736,13 +5280,52 @@ export async function updateVeterinarian(
     return false;
   }
 
+  try {
+    if (updates.is_default) {
+      const all = await offlineDb.veterinarians.toArray();
+      for (const v of all) {
+        if (v.id !== id && v.is_default) {
+          await offlineDb.veterinarians.update(v.id, { is_default: false });
+        }
+      }
+    }
+    await offlineDb.veterinarians.update(id, {
+      ...payload,
+      updated_at: new Date().toISOString(),
+    });
+  } catch {}
+
   invalidateCache('vets');
   return true;
 }
 
 export async function setDefaultVeterinarian(id: string): Promise<boolean> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return false;
+
+  if (isOffline) {
+    try {
+      const all = await offlineDb.veterinarians.toArray();
+      for (const v of all) {
+        await offlineDb.veterinarians.update(v.id, {
+          is_default: v.id === id,
+          updated_at: new Date().toISOString(),
+        });
+      }
+      await syncEngine.enqueueMutation('update', 'veterinarians', id, undefined, {
+        id,
+        is_default: true,
+        updated_at: new Date().toISOString(),
+      }, orgId);
+      invalidateCache('vets');
+      return true;
+    } catch (e) {
+      console.error('setDefaultVeterinarian offline error:', e);
+      return false;
+    }
+  }
 
   const supabase = createClient();
 
@@ -2762,13 +5345,37 @@ export async function setDefaultVeterinarian(id: string): Promise<boolean> {
     return false;
   }
 
+  try {
+    const all = await offlineDb.veterinarians.toArray();
+    for (const v of all) {
+      await offlineDb.veterinarians.update(v.id, {
+        is_default: v.id === id,
+        updated_at: new Date().toISOString(),
+      });
+    }
+  } catch {}
+
   invalidateCache('vets');
   return true;
 }
 
 export async function deleteVeterinarian(id: string): Promise<{ success: boolean; error?: string }> {
-  const orgId = await getCurrentOrgId();
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return { success: false, error: 'Sessão inválida' };
+
+  if (isOffline) {
+    try {
+      await offlineDb.veterinarians.delete(id);
+      await syncEngine.enqueueMutation('delete', 'veterinarians', id, undefined, { id }, orgId);
+      invalidateCache('vets');
+      return { success: true };
+    } catch (e) {
+      console.error('deleteVeterinarian offline error:', e);
+      return { success: false, error: 'Erro offline ao excluir veterinário.' };
+    }
+  }
 
   const supabase = createClient();
 
@@ -2782,6 +5389,10 @@ export async function deleteVeterinarian(id: string): Promise<{ success: boolean
     console.error('deleteVeterinarian error:', error);
     return { success: false, error: error.message };
   }
+
+  try {
+    await offlineDb.veterinarians.delete(id);
+  } catch {}
 
   invalidateCache('vets');
   return { success: true };
@@ -2887,6 +5498,30 @@ export async function startAnimalManagement(params: {
   custom_ia_date?: string | null;
   custom_dg_date?: string | null;
 }): Promise<{ success: boolean; managementId?: string; error?: string }> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    const offlineMgmtId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'mgmt_' + Date.now();
+    await syncEngine.recordOfflineManagementStart({
+      id: offlineMgmtId,
+      organization_id: (typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : '') || '',
+      farm_id: params.farm_id,
+      animal_id: params.animal_id,
+      season_id: params.season_id || null,
+      protocol_id: params.protocol_id,
+      lot_id: params.lot_id || null,
+      start_date: params.start_date,
+      d0_executed_at: params.d0_executed !== false ? params.start_date : null,
+      d0_responsible: params.d0_responsible || null,
+      d0_notes: params.notes || null,
+      custom_d9_date: params.custom_d9_date || null,
+      custom_ia_date: params.custom_ia_date || null,
+      custom_dg_date: params.custom_dg_date || null,
+    });
+    invalidateCache('animal_managements');
+    invalidateCache('animals');
+    return { success: true, managementId: offlineMgmtId };
+  }
+
   const orgId = await getCurrentOrgId();
   if (!orgId) return { success: false, error: 'Sessão inválida.' };
 
@@ -2978,6 +5613,13 @@ export async function executeStepD0(
   managementId: string,
   data: { executed_at: string; responsible?: string | null; notes?: string | null }
 ): Promise<boolean> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    await syncEngine.recordOfflineStepD0(managementId, data);
+    invalidateCache('animal_managements');
+    return true;
+  }
+
   const supabase = createClient();
   const { error } = await supabase
     .from('animal_managements')
@@ -3001,6 +5643,13 @@ export async function executeStepD9(
   managementId: string,
   data: { executed_at: string; responsible?: string | null; device_loss?: boolean; notes?: string | null }
 ): Promise<boolean> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    await syncEngine.recordOfflineStepD9(managementId, data);
+    invalidateCache('animal_managements');
+    return true;
+  }
+
   const supabase = createClient();
   const { error } = await supabase
     .from('animal_managements')
@@ -3033,6 +5682,24 @@ export async function executeStepIA(
     notes?: string | null;
   }
 ): Promise<{ success: boolean; error?: string }> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    await syncEngine.recordOfflineStepIA(managementId, {
+      animal_id: data.animal_id,
+      executed_at: data.executed_at,
+      bull_id: data.bull_id || '',
+      semen_batch_id: data.semen_batch_id || '',
+      inseminator_name: data.inseminator_name || null,
+      ecc_ia: data.ecc_ia !== undefined && data.ecc_ia !== null ? String(data.ecc_ia) : null,
+      notes: data.notes || null,
+    });
+    invalidateCache('animal_managements');
+    invalidateCache('animals');
+    invalidateCache('semen');
+    invalidateCache('metrics');
+    return { success: true };
+  }
+
   const supabase = createClient();
 
   // 1. Atualizar o registro do manejo individual
@@ -3150,6 +5817,22 @@ export async function executeStepDG(
     notes?: string | null;
   }
 ): Promise<{ success: boolean; error?: string }> {
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    await syncEngine.recordOfflineStepDG(managementId, {
+      animal_id: data.animal_id,
+      executed_at: data.executed_at,
+      pregnancy_status: data.pregnancy_status,
+      ecc_dg: data.ecc_dg,
+      notes: data.notes,
+    });
+    invalidateCache('animal_managements');
+    invalidateCache('animals');
+    invalidateCache('lots');
+    invalidateCache('metrics');
+    return { success: true };
+  }
+
   const supabase = createClient();
 
   let expectedParturition: string | null = null;
@@ -3230,7 +5913,7 @@ export async function recordDirectDG(params: {
   expected_parturition_date?: string | null;
   management_id?: string | null;
 }): Promise<{ success: boolean; error?: string }> {
-  const isOffline = typeof window !== 'undefined' && !navigator.onLine;
+  const isOffline = isSystemOffline();
   if (isOffline) {
     try {
       const offlineId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'mgmt_' + Date.now();
