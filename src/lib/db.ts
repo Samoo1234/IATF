@@ -1796,7 +1796,7 @@ export async function getAnimals(limit = 50, forceRefresh = false, farmId?: stri
   }
 
   const { data, error } = await query
-    .order('created_at', { ascending: false })
+    .order('created_at', { ascending: true })
     .limit(limit);
 
   if (error) {
@@ -1828,6 +1828,220 @@ export async function getAnimals(limit = 50, forceRefresh = false, farmId?: stri
     return getCached<Animal[]>(cacheKey) ?? [];
   }
   const result = (data ?? []) as unknown as Animal[];
+  setCached(cacheKey, result);
+
+  if (data && data.length > 0) {
+    offlineDb.animals.bulkPut(
+      (data as Array<{
+        id: string;
+        farm_id: string;
+        tag_number: string;
+        status?: string;
+        reproductive_status?: string;
+        animal_categories?: { name: string } | null;
+        breeds?: { name: string } | null;
+        breed_id?: string | null;
+        category_id?: string | null;
+        property_id?: string | null;
+        organization_id?: string;
+        updated_at?: string;
+      }>).map((a) => ({
+        id: a.id,
+        farm_id: a.farm_id,
+        ear_tag: a.tag_number,
+        tag_number: a.tag_number,
+        name: a.tag_number,
+        status: a.status || 'active',
+        reproductive_status: a.reproductive_status || 'vazia',
+        category: a.animal_categories?.name || a.category_id || undefined,
+        breed: a.breeds?.name || a.breed_id || undefined,
+        breed_id: a.breed_id || undefined,
+        category_id: a.category_id || undefined,
+        property_id: a.property_id || undefined,
+        organization_id: a.organization_id || orgId,
+        updated_at: a.updated_at || new Date().toISOString(),
+      }))
+    ).catch(() => {});
+  }
+
+  return result;
+}
+
+export interface PaginatedAnimalsResult {
+  data: Animal[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+export async function getAnimalsPaginated(params: {
+  page?: number;
+  pageSize?: number;
+  farmId?: string;
+  query?: string;
+  sortOrder?: 'asc' | 'desc';
+  sortBy?: 'created_at' | 'tag_number';
+  forceRefresh?: boolean;
+} = {}): Promise<PaginatedAnimalsResult> {
+  const page = Math.max(1, params.page || 1);
+  const pageSize = Math.max(1, params.pageSize || 25);
+  const farmId = params.farmId;
+  const qStr = params.query?.trim() || '';
+  const sortOrder = params.sortOrder || 'asc';
+  const sortBy = params.sortBy || 'created_at';
+  const forceRefresh = params.forceRefresh || false;
+
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      let localAnimals = await offlineDb.animals.toArray();
+      if (farmId && farmId !== 'all') {
+        localAnimals = localAnimals.filter((a) => a.farm_id === farmId);
+      }
+      localAnimals = localAnimals.filter((a) => a.status !== 'inactive');
+      if (qStr) {
+        const lowerQ = qStr.toLowerCase();
+        localAnimals = localAnimals.filter(
+          (a) =>
+            ((a.tag_number && String(a.tag_number).toLowerCase().includes(lowerQ)) ||
+             (a.ear_tag && a.ear_tag.toLowerCase().includes(lowerQ)))
+        );
+      }
+      localAnimals.sort((a, b) => {
+        if (sortBy === 'tag_number') {
+          const valA = ((a.tag_number || a.ear_tag || '') as string).localeCompare(
+            (b.tag_number || b.ear_tag || '') as string,
+            undefined,
+            { numeric: true }
+          );
+          return sortOrder === 'asc' ? valA : -valA;
+        }
+        const timeA = new Date((a as { created_at?: string }).created_at || 0).getTime();
+        const timeB = new Date((b as { created_at?: string }).created_at || 0).getTime();
+        return sortOrder === 'asc' ? timeA - timeB : timeB - timeA;
+      });
+
+      const totalCount = localAnimals.length;
+      const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+      const from = (page - 1) * pageSize;
+      const sliced = localAnimals.slice(from, from + pageSize).map((a) => ({
+        id: a.id,
+        organization_id: (a.organization_id as string) || '',
+        farm_id: a.farm_id,
+        property_id: (a.property_id as string) || null,
+        tag_number: ((a.tag_number as string) || a.ear_tag) as string,
+        rfid_number: (a.rfid_number as string) || null,
+        breed_id: (a.breed_id as string) || null,
+        category_id: (a.category_id as string) || null,
+        reproductive_status: (a.reproductive_status as string) || 'vazia',
+        birth_date: (a.birth_date as string) || null,
+        sex: (a.sex as string) || 'F',
+        status: (a.status as string) || 'active',
+        breeds: a.breed ? { name: String(a.breed) } : null,
+        animal_categories: a.category ? { name: String(a.category) } : null,
+        properties: null,
+        farms: null,
+      })) as unknown as Animal[];
+
+      return {
+        data: sliced,
+        totalCount,
+        page,
+        pageSize,
+        totalPages,
+      };
+    } catch (e) {
+      console.warn('getAnimalsPaginated offline error:', e);
+      return { data: [], totalCount: 0, page, pageSize, totalPages: 1 };
+    }
+  }
+
+  const orgId = await getCurrentOrgId();
+  if (!orgId) {
+    return { data: [], totalCount: 0, page, pageSize, totalPages: 1 };
+  }
+
+  const cacheKey = `animals_pg_${orgId}_${farmId || 'all'}_${qStr}_${page}_${pageSize}_${sortBy}_${sortOrder}`;
+  if (!forceRefresh) {
+    const cached = getCached<PaginatedAnimalsResult>(cacheKey);
+    if (cached) return cached;
+  }
+
+  const supabase = createClient();
+  let queryBuilder = supabase
+    .from('animals')
+    .select('*, breeds(name), animal_categories(name), properties(name), farms(name)', { count: 'exact' })
+    .eq('organization_id', orgId)
+    .eq('status', 'active');
+
+  if (farmId && farmId !== 'all') {
+    queryBuilder = queryBuilder.eq('farm_id', farmId);
+  }
+
+  if (qStr) {
+    queryBuilder = queryBuilder.ilike('tag_number', `%${qStr}%`);
+  }
+
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+
+  const { data, error, count } = await queryBuilder
+    .order(sortBy, { ascending: sortOrder === 'asc' })
+    .range(from, to);
+
+  if (error) {
+    console.error('getAnimalsPaginated error:', error);
+    try {
+      let localAnimals = await offlineDb.animals.toArray();
+      if (farmId && farmId !== 'all') {
+        localAnimals = localAnimals.filter((a) => a.farm_id === farmId);
+      }
+      if (qStr) {
+        const lowerQ = qStr.toLowerCase();
+        localAnimals = localAnimals.filter(
+          (a) =>
+            ((a.tag_number && String(a.tag_number).toLowerCase().includes(lowerQ)) ||
+             (a.ear_tag && a.ear_tag.toLowerCase().includes(lowerQ)))
+        );
+      }
+      const totalCount = localAnimals.length;
+      const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+      const fallbackSliced = localAnimals.slice(from, from + pageSize).map((a) => ({
+        id: a.id,
+        organization_id: (a.organization_id as string) || '',
+        farm_id: a.farm_id,
+        property_id: (a.property_id as string) || null,
+        tag_number: ((a.tag_number as string) || a.ear_tag) as string,
+        rfid_number: (a.rfid_number as string) || null,
+        breed_id: (a.breed_id as string) || null,
+        category_id: (a.category_id as string) || null,
+        reproductive_status: (a.reproductive_status as string) || 'vazia',
+        birth_date: (a.birth_date as string) || null,
+        sex: (a.sex as string) || 'F',
+        status: (a.status as string) || 'active',
+        breeds: a.breed ? { name: String(a.breed) } : null,
+        animal_categories: a.category ? { name: String(a.category) } : null,
+        properties: null,
+        farms: null,
+      })) as unknown as Animal[];
+      return { data: fallbackSliced, totalCount, page, pageSize, totalPages };
+    } catch {}
+    return { data: [], totalCount: 0, page, pageSize, totalPages: 1 };
+  }
+
+  const totalCount = count ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const resultData = (data ?? []) as unknown as Animal[];
+
+  const result: PaginatedAnimalsResult = {
+    data: resultData,
+    totalCount,
+    page,
+    pageSize,
+    totalPages,
+  };
+
   setCached(cacheKey, result);
 
   if (data && data.length > 0) {
@@ -1921,7 +2135,7 @@ export async function searchAnimals(query: string, farmId?: string): Promise<Ani
     q = q.eq('farm_id', farmId);
   }
 
-  const { data, error } = await q.limit(20);
+  const { data, error } = await q.limit(100);
 
   if (error) {
     console.error('searchAnimals error:', error);
@@ -1937,7 +2151,7 @@ export async function searchAnimals(query: string, farmId?: string): Promise<Ani
           ((a.tag_number && String(a.tag_number).toLowerCase().includes(qStr)) ||
             (a.ear_tag && a.ear_tag.toLowerCase().includes(qStr)))
       );
-      return localAnimals.slice(0, 20).map((a) => ({
+      return localAnimals.slice(0, 100).map((a) => ({
         id: a.id,
         organization_id: (a.organization_id as string) || '',
         farm_id: a.farm_id,

@@ -1,13 +1,12 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { 
-  searchAnimals, 
-  getAnimals, 
+  getAnimalsPaginated,
   getAnimalHistory, 
   createAnimal, 
-  updateAnimal,
-  deleteAnimal,
+  updateAnimal, 
+  deleteAnimal, 
   getFarms, 
   getBreeds, 
   getAnimalCategories, 
@@ -31,11 +30,29 @@ import {
   Building2,
   Dna,
   Edit2,
-  Trash2
+  Trash2,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  ArrowUpDown
 } from 'lucide-react';
 import Link from 'next/link';
 import { useActiveFarm } from '@/context/FarmContext';
 import AnimalManagementModal, { type ManagementModalMode } from '@/components/AnimalManagementModal';
+
+function getPageNumbers(current: number, total: number): (number | string)[] {
+  if (total <= 5) {
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+  if (current <= 3) {
+    return [1, 2, 3, 4, '...', total];
+  }
+  if (current >= total - 2) {
+    return [1, '...', total - 3, total - 2, total - 1, total];
+  }
+  return [1, '...', current - 1, current, current + 1, '...', total];
+}
 
 export default function AnimalsPage() {
   const { activeFarmId, activeFarm } = useActiveFarm();
@@ -45,6 +62,15 @@ export default function AnimalsPage() {
   const [history, setHistory] = useState<Record<string, unknown>[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [selectedFarmFilter, setSelectedFarmFilter] = useState<string>('all');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const listTopRef = useRef<HTMLDivElement>(null);
 
   // Aux state for creation & edit modal
   const [farms, setFarms] = useState<Farm[]>([]);
@@ -80,10 +106,40 @@ export default function AnimalsPage() {
     status: 'active',
   });
 
+  const fetchAnimals = useCallback(
+    async (
+      targetPage = page,
+      targetPageSize = pageSize,
+      targetFarm = selectedFarmFilter,
+      targetQuery = query,
+      targetSortOrder = sortOrder,
+      force = false
+    ) => {
+      setLoading(true);
+      try {
+        const res = await getAnimalsPaginated({
+          page: targetPage,
+          pageSize: targetPageSize,
+          farmId: targetFarm === 'all' ? undefined : targetFarm,
+          query: targetQuery.trim() || undefined,
+          sortOrder: targetSortOrder,
+          forceRefresh: force,
+        });
+        setAnimals(res.data);
+        setTotalCount(res.totalCount);
+        setTotalPages(res.totalPages);
+        setPage(res.page);
+      } catch (err) {
+        console.error('Erro ao buscar matrizes paginadas:', err);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [page, pageSize, selectedFarmFilter, query, sortOrder]
+  );
+
   const loadInitialData = useCallback(async () => {
-    setLoading(true);
-    const [animalsList, farmsList, breedsList, categoriesList] = await Promise.all([
-      getAnimals(50, false, activeFarmId || undefined),
+    const [farmsList, breedsList, categoriesList] = await Promise.all([
       getFarms(),
       getBreeds(),
       getAnimalCategories(),
@@ -95,40 +151,62 @@ export default function AnimalsPage() {
       if (!xIsNelore && yIsNelore) return 1;
       return x.name.localeCompare(y.name);
     });
-    setAnimals(animalsList);
     setFarms(farmsList);
     setBreeds(sortedBreeds);
     setCategories(categoriesList);
 
     const farmToUse = activeFarmId || farmsList[0]?.id || '';
-    const activeFarmObj = farmsList.find(f => f.id === farmToUse);
-    const neloreBreed = sortedBreeds.find(b => b.name.toLowerCase().includes('nelore'))?.id || sortedBreeds[0]?.id || '';
+    const activeFarmObj = farmsList.find((f) => f.id === farmToUse);
+    const neloreBreed =
+      sortedBreeds.find((b) => b.name.toLowerCase().includes('nelore'))?.id ||
+      sortedBreeds[0]?.id ||
+      '';
     setAnimalForm((f) => ({
       ...f,
       farm_id: farmToUse,
       property_id: activeFarmObj?.properties?.[0]?.id || '',
       breed_id: neloreBreed,
     }));
-    setLoading(false);
   }, [activeFarmId]);
 
   useEffect(() => {
     loadInitialData();
   }, [loadInitialData]);
 
+  // Carregamento paginado com debounce para busca
   useEffect(() => {
-    if (query.trim().length >= 1) {
-      const t = setTimeout(async () => {
-        setLoading(true);
-        const data = await searchAnimals(query.trim(), activeFarmId || undefined);
-        setAnimals(data);
-        setLoading(false);
-      }, 300);
-      return () => clearTimeout(t);
-    } else if (query.trim().length === 0) {
-      getAnimals(50, false, activeFarmId || undefined).then((data) => setAnimals(data));
+    const timer = setTimeout(() => {
+      fetchAnimals(page, pageSize, selectedFarmFilter, query, sortOrder);
+    }, query ? 300 : 0);
+    return () => clearTimeout(timer);
+  }, [page, pageSize, selectedFarmFilter, query, sortOrder, fetchAnimals]);
+
+  const handleQueryChange = (val: string) => {
+    setQuery(val);
+    setPage(1);
+  };
+
+  const handleFarmFilterChange = (val: string) => {
+    setSelectedFarmFilter(val);
+    setPage(1);
+  };
+
+  const handlePageSizeChange = (val: number) => {
+    setPageSize(val);
+    setPage(1);
+  };
+
+  const handleSortToggle = () => {
+    setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    setPage(1);
+  };
+
+  const handlePageChange = (newPage: number) => {
+    setPage(newPage);
+    if (listTopRef.current) {
+      listTopRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-  }, [query, activeFarmId]);
+  };
 
   async function selectAnimal(a: Animal) {
     setSelectedAnimal(a);
@@ -238,13 +316,8 @@ export default function AnimalsPage() {
       setShowModal(false);
       setEditingAnimalId(null);
 
-      // Recarregar lista
-      const updated = await getAnimals(50, true, activeFarmId || undefined);
-      setAnimals(updated);
-      if (selectedAnimal && editingAnimalId === selectedAnimal.id) {
-        const refreshed = updated.find(a => a.id === editingAnimalId);
-        if (refreshed) setSelectedAnimal(refreshed);
-      }
+      // Recarregar lista paginada
+      await fetchAnimals(page, pageSize, selectedFarmFilter, query, sortOrder, true);
       setTimeout(() => setFeedbackMsg(null), 4000);
     } else {
       const errorText = res.error || (editingAnimalId ? 'Erro ao atualizar matriz.' : 'Erro ao cadastrar matriz.');
@@ -268,8 +341,7 @@ export default function AnimalsPage() {
       if (selectedAnimal?.id === a.id) {
         setSelectedAnimal(null);
       }
-      const updated = await getAnimals(50, true, activeFarmId || undefined);
-      setAnimals(updated);
+      await fetchAnimals(page, pageSize, selectedFarmFilter, query, sortOrder, true);
       setTimeout(() => setFeedbackMsg(null), 4000);
     } else if (res.hasRelations) {
       setAnimalToDelete({
@@ -295,11 +367,10 @@ export default function AnimalsPage() {
         type: 'success',
         text: `Matriz Brinco "${a.tag_number}" marcada como inativa/descarte com sucesso! Histórico preservado.`,
       });
-      const updated = await getAnimals(50, true, activeFarmId || undefined);
-      setAnimals(updated);
       if (selectedAnimal?.id === a.id) {
         setSelectedAnimal(null);
       }
+      await fetchAnimals(page, pageSize, selectedFarmFilter, query, sortOrder, true);
       setTimeout(() => setFeedbackMsg(null), 4000);
     } else {
       setFeedbackMsg({ type: 'error', text: res.error || 'Erro ao inativar matriz.' });
@@ -337,32 +408,106 @@ export default function AnimalsPage() {
       )}
 
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/80 p-6 rounded-2xl border border-slate-800">
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-slate-900/80 p-6 rounded-2xl border border-slate-800">
         <div>
           <h1 className="text-2xl font-bold text-white flex items-center gap-2">
             <Syringe className="w-6 h-6 text-emerald-400" />
             Matrizes & Rebanho Bovino
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            {loading ? 'Carregando...' : `${animals.length} matrizes da ${activeFarm?.name || 'fazenda ativa'}`}
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                Carregando matrizes...
+              </span>
+            ) : (
+              <>
+                <span className="font-semibold text-white">{totalCount}</span> {totalCount === 1 ? 'matriz' : 'matrizes'}
+                {selectedFarmFilter === 'all' 
+                  ? ' em todas as fazendas' 
+                  : ` na ${farms.find((f) => f.id === selectedFarmFilter)?.name || activeFarm?.name || 'fazenda selecionada'}`}
+              </>
+            )}
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          {/* Filtro de Fazenda */}
+          <div className="relative">
+            <select
+              value={selectedFarmFilter}
+              onChange={(e) => handleFarmFilterChange(e.target.value)}
+              className="bg-slate-950 border border-slate-700 text-white font-medium text-xs px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500 transition-all cursor-pointer"
+            >
+              <option value="all">🌐 Todas as Fazendas</option>
+              {farms.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name} {f.id === activeFarmId ? '(Ativa)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Campo de Busca */}
           <div className="relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               placeholder="Buscar brinco..."
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="bg-slate-950 border border-slate-700 text-white font-bold text-sm pl-9 pr-4 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500 transition-all w-48 sm:w-60"
+              onChange={(e) => handleQueryChange(e.target.value)}
+              className="bg-slate-950 border border-slate-700 text-white font-bold text-sm pl-9 pr-8 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500 transition-all w-36 sm:w-52"
             />
+            {query && (
+              <button
+                type="button"
+                onClick={() => handleQueryChange('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
+                title="Limpar busca"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
+          {/* Seletor de Itens por Página */}
+          <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+            <span className="text-[10px] text-slate-500 uppercase px-1 font-bold hidden sm:inline">Pág:</span>
+            {[25, 50, 100].map((size) => (
+              <button
+                key={size}
+                type="button"
+                onClick={() => handlePageSizeChange(size)}
+                className={`px-2 py-1 rounded-lg font-semibold transition-all cursor-pointer ${
+                  pageSize === size
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title={`Exibir ${size} matrizes por página`}
+              >
+                {size}
+              </button>
+            ))}
+          </div>
+
+          {/* Botão de Ordenação */}
           <button
-            onClick={() => { setModalError(null); setShowModal(true); }}
-            className="flex items-center gap-2 bg-linear-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold px-4 py-2.5 rounded-xl text-sm transition-all shadow-md shadow-emerald-500/20"
+            type="button"
+            onClick={handleSortToggle}
+            className="flex items-center gap-1.5 bg-slate-950 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer"
+            title={
+              sortOrder === 'asc'
+                ? 'Ordenação: Menor para o Maior (Clique para inverter)'
+                : 'Ordenação: Maior para o Menor (Clique para inverter)'
+            }
+          >
+            <ArrowUpDown className="w-3.5 h-3.5 text-emerald-400" />
+            <span>{sortOrder === 'asc' ? 'Menor → Maior' : 'Maior → Menor'}</span>
+          </button>
+
+          <button
+            onClick={handleOpenCreateAnimal}
+            className="flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold px-4 py-2.5 rounded-xl text-sm transition-all shadow-md shadow-emerald-500/20 cursor-pointer"
           >
             <Plus className="w-4 h-4 stroke-3" />
             <span>Cadastrar Matriz</span>
@@ -370,15 +515,21 @@ export default function AnimalsPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div ref={listTopRef} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Animals List / Search Results */}
         <div className="space-y-3">
           <div className="flex items-center justify-between px-1">
             <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
               {query ? 'Resultados da Busca' : 'Matrizes Cadastradas'}
             </span>
-            <span className="text-xs text-slate-500 font-mono">
-              {animals.length} {animals.length === 1 ? 'matriz' : 'matrizes'}
+            <span className="text-xs text-slate-400 font-mono">
+              {totalCount > 0 ? (
+                <>
+                  <span className="text-white font-semibold">{totalCount === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalCount)}</span> de <span className="text-white font-semibold">{totalCount}</span>
+                </>
+              ) : (
+                '0 matrizes'
+              )}
             </span>
           </div>
 
@@ -398,7 +549,7 @@ export default function AnimalsPage() {
                   setAnimalForm((f) => ({ ...f, tag_number: query.trim() }));
                   setShowModal(true);
                 }}
-                className="text-xs text-emerald-400 hover:underline font-semibold mt-2 inline-block"
+                className="text-xs text-emerald-400 hover:underline font-semibold mt-2 inline-block cursor-pointer"
               >
                 + Cadastrar brinco &quot;{query}&quot; agora
               </button>
@@ -408,11 +559,15 @@ export default function AnimalsPage() {
           {!loading && animals.length === 0 && query.length === 0 && (
             <div className="glass-card p-8 rounded-2xl border border-slate-800 text-center space-y-3">
               <Syringe className="w-10 h-10 text-slate-600 mx-auto" />
-              <p className="text-slate-300 font-medium text-sm">Nenhuma matriz cadastrada ainda.</p>
-              <p className="text-slate-500 text-xs">Comece cadastrando suas fêmeas ou importe via planilha Excel.</p>
+              <p className="text-slate-300 font-medium text-sm">Nenhuma matriz cadastrada nesta seleção.</p>
+              <p className="text-slate-500 text-xs">
+                {selectedFarmFilter !== 'all'
+                  ? 'Esta fazenda não possui matrizes ativas. Tente selecionar "Todas as Fazendas" para ver o rebanho completo.'
+                  : 'Comece cadastrando suas fêmeas ou importe via planilha Excel.'}
+              </p>
               <button
-                onClick={() => setShowModal(true)}
-                className="mt-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs"
+                onClick={handleOpenCreateAnimal}
+                className="mt-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs cursor-pointer"
               >
                 Cadastrar Primeira Matriz
               </button>
@@ -462,6 +617,87 @@ export default function AnimalsPage() {
               )}
             </div>
           ))}
+
+          {/* Paginação */}
+          {totalPages > 1 && (
+            <div className="glass-card p-3 rounded-2xl border border-slate-800 space-y-2 mt-3">
+              <div className="flex items-center justify-between text-xs text-slate-400 px-1">
+                <span>
+                  Página <span className="text-white font-bold">{page}</span> de <span className="text-white font-bold">{totalPages}</span>
+                </span>
+                <span className="text-slate-500 font-mono">
+                  {totalCount} matrizes
+                </span>
+              </div>
+
+              <div className="flex items-center justify-center gap-1">
+                <button
+                  type="button"
+                  disabled={page <= 1 || loading}
+                  onClick={() => handlePageChange(1)}
+                  className="p-1.5 rounded-lg border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white disabled:opacity-25 disabled:pointer-events-none transition-all cursor-pointer"
+                  title="Primeira página"
+                >
+                  <ChevronsLeft className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  disabled={page <= 1 || loading}
+                  onClick={() => handlePageChange(Math.max(1, page - 1))}
+                  className="p-1.5 rounded-lg border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white disabled:opacity-25 disabled:pointer-events-none transition-all cursor-pointer"
+                  title="Página anterior"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+
+                {/* Números das páginas */}
+                <div className="flex items-center gap-1">
+                  {getPageNumbers(page, totalPages).map((p, idx) =>
+                    p === '...' ? (
+                      <span key={`ellipsis-${idx}`} className="px-1.5 text-slate-600 select-none text-xs">
+                        ...
+                      </span>
+                    ) : (
+                      <button
+                        key={`page-${p}`}
+                        type="button"
+                        disabled={loading}
+                        onClick={() => handlePageChange(Number(p))}
+                        className={`min-w-7 h-7 px-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          page === p
+                            ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    )
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  disabled={page >= totalPages || loading}
+                  onClick={() => handlePageChange(Math.min(totalPages, page + 1))}
+                  className="p-1.5 rounded-lg border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white disabled:opacity-25 disabled:pointer-events-none transition-all cursor-pointer"
+                  title="Próxima página"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  disabled={page >= totalPages || loading}
+                  onClick={() => handlePageChange(totalPages)}
+                  className="p-1.5 rounded-lg border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white disabled:opacity-25 disabled:pointer-events-none transition-all cursor-pointer"
+                  title="Última página"
+                >
+                  <ChevronsRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Animal Detail */}
@@ -909,8 +1145,7 @@ export default function AnimalsPage() {
             if (selectedAnimal) {
               selectAnimal(selectedAnimal);
             }
-            const updated = await getAnimals(50, true, activeFarmId || undefined);
-            setAnimals(updated);
+            await fetchAnimals(page, pageSize, selectedFarmFilter, query, sortOrder, true);
           }}
           animalId={selectedAnimal.id}
           animalTag={selectedAnimal.tag_number}
