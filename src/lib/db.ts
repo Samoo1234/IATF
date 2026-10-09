@@ -290,6 +290,7 @@ export interface LotStat {
   empty_count: number;
   pregnancy_rate: number;
   pending_dg: number;
+  notes?: string | null;
 }
 
 export async function getLots(forceRefresh = false, farmId?: string): Promise<LotStat[]> {
@@ -320,6 +321,7 @@ export async function getLots(forceRefresh = false, farmId?: string): Promise<Lo
         empty_count: (l.empty_count as number) || 0,
         pregnancy_rate: (l.pregnancy_rate as number) || 0,
         pending_dg: (l.pending_dg as number) || 0,
+        notes: (l.notes as string) || null,
       }));
     } catch (e) {
       console.warn('Falha ao carregar lotes offline:', e);
@@ -354,6 +356,7 @@ export async function getLots(forceRefresh = false, farmId?: string): Promise<Lo
         empty_count: (l.empty_count as number) || 0,
         pregnancy_rate: (l.pregnancy_rate as number) || 0,
         pending_dg: (l.pending_dg as number) || 0,
+        notes: (l.notes as string) || null,
       }));
     } catch {
       // ignore
@@ -406,6 +409,7 @@ export async function getLots(forceRefresh = false, farmId?: string): Promise<Lo
         empty_count: (l.empty_count as number) || 0,
         pregnancy_rate: (l.pregnancy_rate as number) || 0,
         pending_dg: (l.pending_dg as number) || 0,
+        notes: (l.notes as string) || null,
       }));
     } catch {
       // ignore
@@ -438,6 +442,7 @@ export async function getLots(forceRefresh = false, farmId?: string): Promise<Lo
           empty_count: l.empty_count,
           pregnancy_rate: l.pregnancy_rate,
           pending_dg: l.pending_dg,
+          notes: l.notes || undefined,
           organization_id: orgId,
           updated_at: new Date().toISOString(),
         } as unknown as import('./offline/offlineDb').OfflineLot))
@@ -1226,13 +1231,13 @@ export async function getManagementEvents(forceRefresh = false, farmId?: string)
     .eq('organization_id', orgId);
 
   if (farmId && farmId !== 'all') {
-    query = query.or(`farm_id.eq.${farmId},iatf_lots.farm_id.eq.${farmId}`);
+    query = query.eq('farm_id', farmId);
   }
 
   const { data, error } = await query.order('planned_date', { ascending: true });
 
   if (error) {
-    console.error('getManagementEvents error:', error);
+    console.error('getManagementEvents error:', error.message || error);
     try {
       let events = await offlineDb.management_events.toArray();
       if (farmId && farmId !== 'all') {
@@ -3568,6 +3573,7 @@ async function createLotOffline(
     start_date: string;
     responsible_name: string;
     season_id?: string;
+    notes?: string;
   },
   orgId: string
 ): Promise<string | null> {
@@ -3675,6 +3681,7 @@ async function createLotOffline(
       empty_count: 0,
       pregnancy_rate: 0,
       pending_dg: 0,
+      notes: lot.notes ? lot.notes.trim() : null,
       updated_at: new Date().toISOString(),
     };
 
@@ -3694,6 +3701,7 @@ async function createLotOffline(
       dg_planned_date: dgDate,
       responsible_name: lot.responsible_name,
       status: 'planejado',
+      notes: lot.notes ? lot.notes.trim() : null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }, orgId);
@@ -3758,6 +3766,7 @@ export async function createLot(lot: {
   start_date: string;
   responsible_name: string;
   season_id?: string;
+  notes?: string;
 }): Promise<string | null> {
   const isOffline = isSystemOffline();
   const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
@@ -3852,6 +3861,7 @@ export async function createLot(lot: {
         dg_planned_date: dgStep ? addDays(dgStep.day_offset) : null,
         responsible_name: lot.responsible_name,
         status: 'planejado',
+        notes: lot.notes ? lot.notes.trim() : null,
       })
       .select('id')
       .single();
@@ -3903,6 +3913,7 @@ export async function createLot(lot: {
         females_count: 0,
         inseminated_count: 0,
         pregnant_count: 0,
+        notes: lot.notes ? lot.notes.trim() : undefined,
         empty_count: 0,
         pregnancy_rate: 0,
         pending_dg: 0,
@@ -4001,6 +4012,57 @@ export async function updateLotCode(
   invalidateCache('lots');
   invalidateCache('events');
   invalidateCache('metrics');
+  return { success: true };
+}
+
+export async function updateLotNotes(
+  lotId: string,
+  newNotes: string
+): Promise<{ success: boolean; error?: string }> {
+  const cleanNotes = newNotes.trim() || null;
+
+  const isOffline = isSystemOffline();
+  if (isOffline) {
+    try {
+      const lot = await offlineDb.lots.get(lotId);
+      if (lot) {
+        await offlineDb.lots.update(lotId, {
+          notes: cleanNotes,
+          updated_at: new Date().toISOString(),
+        });
+        await syncEngine.enqueueMutation('update', 'iatf_lots', lotId, lot.farm_id, {
+          notes: cleanNotes,
+          updated_at: new Date().toISOString(),
+        });
+      }
+      invalidateCache('lots');
+      return { success: true };
+    } catch (e: unknown) {
+      console.error('updateLotNotes offline error:', e);
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('iatf_lots')
+    .update({
+      notes: cleanNotes,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', lotId);
+
+  if (error) {
+    console.error('updateLotNotes error:', error);
+    return { success: false, error: error.message };
+  }
+
+  offlineDb.lots.update(lotId, {
+    notes: cleanNotes,
+    updated_at: new Date().toISOString(),
+  }).catch(() => {});
+
+  invalidateCache('lots');
   return { success: true };
 }
 

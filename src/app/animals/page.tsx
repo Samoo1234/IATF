@@ -68,7 +68,7 @@ export default function AnimalsPage() {
   const [pageSize, setPageSize] = useState(25);
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
-  const [selectedFarmFilter, setSelectedFarmFilter] = useState<string>('all');
+  const [selectedFarmFilter, setSelectedFarmFilter] = useState<string>(activeFarmId || 'all');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const listTopRef = useRef<HTMLDivElement>(null);
 
@@ -172,6 +172,14 @@ export default function AnimalsPage() {
   useEffect(() => {
     loadInitialData();
   }, [loadInitialData]);
+
+  // Sincroniza o filtro de fazenda quando a fazenda ativa global é carregada ou alterada
+  useEffect(() => {
+    if (activeFarmId) {
+      setSelectedFarmFilter(activeFarmId);
+      setPage(1);
+    }
+  }, [activeFarmId]);
 
   // Carregamento paginado com debounce para busca
   useEffect(() => {
