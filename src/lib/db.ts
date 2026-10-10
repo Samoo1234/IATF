@@ -286,6 +286,7 @@ export interface LotStat {
   farm_name: string | null;
   worked_qty: number;
   inseminated_qty: number;
+  diagnosed_qty?: number;
   pregnancies: number;
   empty_count: number;
   pregnancy_rate: number;
@@ -1747,7 +1748,12 @@ export interface Animal {
   farms: { name: string } | null;
 }
 
-export async function getAnimals(limit = 50, forceRefresh = false, farmId?: string): Promise<Animal[]> {
+export async function getAnimals(
+  limit = 1000,
+  forceRefresh = false,
+  farmId?: string,
+  includeInactive = true
+): Promise<Animal[]> {
   const isOffline = isSystemOffline();
   if (isOffline) {
     try {
@@ -1755,7 +1761,9 @@ export async function getAnimals(limit = 50, forceRefresh = false, farmId?: stri
       if (farmId && farmId !== 'all') {
         localAnimals = localAnimals.filter((a) => a.farm_id === farmId);
       }
-      localAnimals = localAnimals.filter((a) => a.status !== 'inactive');
+      if (!includeInactive) {
+        localAnimals = localAnimals.filter((a) => a.status !== 'inactive');
+      }
       return localAnimals.slice(0, limit).map((a) => ({
         id: a.id,
         organization_id: (a.organization_id as string) || '',
@@ -1783,7 +1791,7 @@ export async function getAnimals(limit = 50, forceRefresh = false, farmId?: stri
   const orgId = await getCurrentOrgId();
   if (!orgId) return [];
 
-  const cacheKey = `animals_${orgId}_${farmId || 'all'}_${limit}`;
+  const cacheKey = `animals_${orgId}_${farmId || 'all'}_${limit}_${includeInactive}`;
   if (!forceRefresh) {
     const cached = getCached<Animal[]>(cacheKey);
     if (cached) return cached;
@@ -1793,8 +1801,11 @@ export async function getAnimals(limit = 50, forceRefresh = false, farmId?: stri
   let query = supabase
     .from('animals')
     .select('*, breeds(name), animal_categories(name), properties(name), farms(name)')
-    .eq('organization_id', orgId)
-    .eq('status', 'active');
+    .eq('organization_id', orgId);
+
+  if (!includeInactive) {
+    query = query.eq('status', 'active');
+  }
 
   if (farmId && farmId !== 'all') {
     query = query.eq('farm_id', farmId);

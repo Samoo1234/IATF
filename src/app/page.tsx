@@ -5,12 +5,11 @@ import {
   getOrgMetrics,
   getLots,
   getSemenBatches,
-  getFarms,
   type OrgMetrics,
   type LotStat,
   type SemenBatch,
-  type Farm,
 } from '@/lib/db';
+import { getGeneticInventoryBalancesByFarm } from '@/lib/services/geneticInventoryService';
 import { useActiveFarm } from '@/context/FarmContext';
 import { useActiveSeason } from '@/context/SeasonContext';
 import {
@@ -39,21 +38,24 @@ export default function DashboardPage() {
   const [metrics, setMetrics] = useState<OrgMetrics | null>(null);
   const [lots, setLots] = useState<LotStat[]>([]);
   const [semenBatches, setSemenBatches] = useState<SemenBatch[]>([]);
+  const [farmBalances, setFarmBalances] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
     async function load() {
       setLoading(true);
-      const [m, l, s] = await Promise.all([
-        getOrgMetrics(),
-        getLots(),
-        getSemenBatches(),
+      const [m, l, s, balancesMap] = await Promise.all([
+        getOrgMetrics(true),
+        getLots(true),
+        getSemenBatches(true),
+        getGeneticInventoryBalancesByFarm(true),
       ]);
       if (!mounted) return;
       setMetrics(m);
       setLots(l);
       setSemenBatches(s);
+      setFarmBalances(balancesMap);
       setLoading(false);
     }
     load();
@@ -70,21 +72,31 @@ export default function DashboardPage() {
 
   const selectedFarm = activeFarm;
 
-  // Compute stats for each farm using accurate farm_id
+  // Compute stats for each farm using accurate farm_id and trimmed name
   const farmStats = useMemo(() => {
     return farms.map((farm) => {
       const farmLotsList = lots.filter(
         (l) =>
           l.farm_id === farm.id ||
-          l.farm_name?.toLowerCase() === farm.name.toLowerCase()
+          (l.farm_name && l.farm_name.trim().toLowerCase() === farm.name.trim().toLowerCase())
       );
 
       const totalLots = farmLotsList.length;
       const totalWorked = farmLotsList.reduce((acc, l) => acc + (l.worked_qty || 0), 0);
       const totalInseminated = farmLotsList.reduce((acc, l) => acc + (l.inseminated_qty || 0), 0);
+      const totalDiagnosed = farmLotsList.reduce(
+        (acc, l) => acc + (l.diagnosed_qty ?? (l.pregnancies + l.empty_count)),
+        0
+      );
       const totalPregnancies = farmLotsList.reduce((acc, l) => acc + (l.pregnancies || 0), 0);
       const totalEmpty = farmLotsList.reduce((acc, l) => acc + (l.empty_count || 0), 0);
-      const rate = totalInseminated > 0 ? (totalPregnancies / totalInseminated) * 100 : 0;
+      const totalPendingDg = farmLotsList.reduce((acc, l) => acc + (l.pending_dg || 0), 0);
+
+      // Taxa real de prenhez: sobre diagnosticadas se houver diagnósticos; senão 0
+      const rate = totalDiagnosed > 0 ? (totalPregnancies / totalDiagnosed) * 100 : 0;
+      
+      // Saldo de sêmen específico desta fazenda (no botijão da propriedade)
+      const farmSemenBalance = farmBalances[farm.id] ?? 0;
       const dosesUsed = totalInseminated;
 
       return {
@@ -92,22 +104,29 @@ export default function DashboardPage() {
         totalLots,
         totalWorked,
         totalInseminated,
+        totalDiagnosed,
         totalPregnancies,
         totalEmpty,
+        totalPendingDg,
         rate,
         dosesUsed,
+        semenBalance: farmSemenBalance,
         lots: farmLotsList,
       };
     });
-  }, [farms, lots]);
+  }, [farms, lots, farmBalances]);
 
-  // Total semen balance available across batches
+  // Total semen balance available across batches / inventory
   const totalSemenAvailable = useMemo(() => {
+    const balanceVals = Object.values(farmBalances);
+    if (balanceVals.length > 0) {
+      return balanceVals.reduce((acc, b) => acc + b, 0);
+    }
     return semenBatches.reduce(
       (acc, b) => acc + Math.max(0, b.initial_quantity - b.used_quantity - b.lost_quantity),
       0
     );
-  }, [semenBatches]);
+  }, [farmBalances, semenBatches]);
 
   // Filter lots based on selected viewScope
   const displayedLots = useMemo(() => {
@@ -115,7 +134,7 @@ export default function DashboardPage() {
     return lots.filter(
       (l) =>
         l.farm_id === activeFarmId ||
-        (selectedFarm && l.farm_name?.toLowerCase() === selectedFarm.name.toLowerCase())
+        (selectedFarm && l.farm_name?.trim().toLowerCase() === selectedFarm.name.trim().toLowerCase())
     );
   }, [lots, activeFarmId, selectedFarm, viewScope]);
 
@@ -143,7 +162,7 @@ export default function DashboardPage() {
     : (metrics?.total_pregnancies ?? 0);
 
   const totalDiagnoses = isFarmView
-    ? activeFarmStat.totalInseminated
+    ? activeFarmStat.totalDiagnosed
     : (metrics?.total_diagnoses ?? 0);
 
   const totalAnimals = isFarmView
@@ -154,6 +173,11 @@ export default function DashboardPage() {
   const totalInseminations = isFarmView
     ? activeFarmStat.totalInseminated
     : (metrics?.total_inseminations ?? 0);
+
+  const totalPendingDg = isFarmView
+    ? activeFarmStat.totalPendingDg
+    : displayedLots.reduce((acc, l) => acc + (l.pending_dg || 0), 0);
+
   const deviceLosses = metrics?.total_device_losses ?? 0;
 
   return (
@@ -169,6 +193,11 @@ export default function DashboardPage() {
             <span>•</span>
             <span className="font-semibold text-slate-200">
               {viewScope === 'farm' ? (selectedFarm?.name || 'Fazenda Ativa') : 'Visão Geral Consolidada'}
+            </span>
+            <span>•</span>
+            <span className="inline-flex items-center gap-1 text-xs text-amber-300 font-semibold bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">
+              <Package className="w-3 h-3 text-amber-400" />
+              {totalSemenAvailable.toLocaleString('pt-BR')} doses em estoque
             </span>
             <span className="inline-flex items-center gap-1 text-xs text-emerald-500 font-semibold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full ml-1">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse" />
@@ -226,7 +255,7 @@ export default function DashboardPage() {
           <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-full blur-2xl group-hover:bg-emerald-500/20 transition-all"></div>
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              {selectedFarm ? `Taxa Prenhez (${selectedFarm.name})` : 'Taxa de Prenhez Geral'}
+              {selectedFarm && viewScope === 'farm' ? `Taxa Prenhez (${selectedFarm.name})` : 'Taxa de Prenhez Geral'}
             </span>
             <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400">
               <TrendingUp className="w-5 h-5" />
@@ -238,7 +267,13 @@ export default function DashboardPage() {
             </div>
             <p className="text-xs font-medium text-emerald-400 mt-1 flex items-center gap-1">
               <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>{totalPregnancies} prenhas / {totalDiagnoses} diagnosticadas</span>
+              <span>
+                {totalDiagnoses > 0
+                  ? `${totalPregnancies} prenhas / ${totalDiagnoses} diagnosticadas`
+                  : totalInseminations > 0
+                    ? `${totalInseminations} inseminadas (aguardando DG)`
+                    : `${totalAnimals} matrizes em sincronização`}
+              </span>
             </p>
           </div>
         </div>
@@ -261,10 +296,10 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* KPI 3: Inseminações */}
+        {/* KPI 3: Inseminações Realizadas */}
         <div className="glass-card p-5 rounded-2xl border border-slate-800 bg-slate-900/60">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Inseminações / DG</span>
+            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Inseminações Realizadas</span>
             <div className="p-2 rounded-xl bg-purple-500/20 text-purple-400">
               <BarChart3 className="w-5 h-5" />
             </div>
@@ -274,7 +309,11 @@ export default function DashboardPage() {
               {totalInseminations}
             </div>
             <p className="text-xs text-purple-300 mt-1 font-medium">
-              {totalDiagnoses} diagnósticos realizados
+              {totalDiagnoses > 0 || totalPendingDg > 0
+                ? `${totalDiagnoses} diagnosticadas • ${totalPendingDg} aguardando DG`
+                : totalAnimals > 0
+                  ? 'Manejo IA agendado no calendário'
+                  : 'Nenhum lote ativo'}
             </p>
           </div>
         </div>
@@ -332,7 +371,7 @@ export default function DashboardPage() {
             <p className="text-sm text-slate-400 text-center py-8">Nenhuma fazenda cadastrada ainda.</p>
           ) : (
             <div className="space-y-3 pt-2">
-              {farmStats.map(({ farm, totalLots, totalInseminated, totalPregnancies, rate }) => {
+              {farmStats.map(({ farm, totalLots, totalWorked, totalInseminated, totalDiagnosed, totalPregnancies, rate }) => {
                 const isSelected = activeFarmId === farm.id;
                 return (
                   <div
@@ -377,7 +416,11 @@ export default function DashboardPage() {
                           {rate.toFixed(1)}%
                         </div>
                         <span className="text-xs text-slate-400">
-                          {totalPregnancies} prenhas / {totalInseminated} inseminadas • {totalLots} lotes
+                          {totalDiagnosed > 0
+                            ? `${totalPregnancies} prenhas / ${totalDiagnosed} diagnosticadas • ${totalLots} lotes`
+                            : totalInseminated > 0
+                              ? `${totalInseminated} inseminadas (aguardando DG) • ${totalLots} lotes`
+                              : `${totalWorked} matrizes programadas • ${totalLots} lotes`}
                         </span>
                       </div>
                     </div>
@@ -424,13 +467,13 @@ export default function DashboardPage() {
               </h2>
               <p className="text-xs text-slate-400">Consumo e disponibilidade nas propriedades</p>
             </div>
-            <Link href="/inputs" className="text-xs text-slate-400 hover:text-white cursor-pointer">
+            <Link href="/estoque-semen" className="text-xs text-slate-400 hover:text-white cursor-pointer">
               Gerenciar Estoque
             </Link>
           </div>
 
           <div className="space-y-3 pt-1">
-            {farmStats.map(({ farm, dosesUsed }) => {
+            {farmStats.map(({ farm, dosesUsed, semenBalance }) => {
               const isSelected = activeFarmId === farm.id;
               return (
                 <div
@@ -447,8 +490,14 @@ export default function DashboardPage() {
                       <Building2 className="w-3.5 h-3.5 text-slate-400" />
                       {farm.name}
                     </span>
-                    <span className="text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded">
-                      Botijão Ativo
+                    <span
+                      className={`text-[10px] font-mono border px-2 py-0.5 rounded ${
+                        semenBalance > 0
+                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                          : 'bg-slate-800/80 text-slate-400 border-slate-700/80'
+                      }`}
+                    >
+                      {semenBalance > 0 ? 'Botijão com Estoque' : 'Sem Botijão / Saldo 0'}
                     </span>
                   </div>
 
@@ -459,7 +508,9 @@ export default function DashboardPage() {
                     </div>
                     <div>
                       <span className="text-slate-500 text-[10px] block">SALDO BOTIJÃO</span>
-                      <span className="font-bold text-emerald-400">{totalSemenAvailable}</span>
+                      <span className={`font-bold ${semenBalance > 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                        {semenBalance}
+                      </span>
                     </div>
                   </div>
 

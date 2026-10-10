@@ -114,6 +114,7 @@ export default function RegistriesPage() {
   const [editingAnimalId, setEditingAnimalId] = useState<string | null>(null);
   const [animalSearchQuery, setAnimalSearchQuery] = useState('');
   const [animalStatusFilter, setAnimalStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
+  const [animalFarmFilter, setAnimalFarmFilter] = useState<string>('all');
   const [animalToDelete, setAnimalToDelete] = useState<{
     animal: Animal;
     hasRelations: boolean;
@@ -144,7 +145,7 @@ export default function RegistriesPage() {
   const [farmForm, setFarmForm] = useState({
     name: '',
     owner_name: '',
-    technical_responsible: 'MV. DR. SAMOEL DUARTE',
+    technical_responsible: '',
     city: '',
     state: 'MT',
   });
@@ -161,12 +162,12 @@ export default function RegistriesPage() {
   const loadAllData = useCallback(async () => {
     setLoading(true);
     const [a, b, f, br, c, v, gc] = await Promise.all([
-      getAnimals(100, false, activeFarmId || undefined),
+      getAnimals(1000, true),
       getBulls(true),
       getFarms(true, true),
       getBreeds(),
       getAnimalCategories(),
-      getVeterinarians(),
+      getVeterinarians(true),
       getGeneticCenters(true),
     ]);
     setAnimals(a);
@@ -177,11 +178,12 @@ export default function RegistriesPage() {
     setVeterinarians(v);
     setCenters(gc);
 
-    const defaultVet = v.find((vet) => vet.is_default);
-    if (defaultVet && !farmForm.technical_responsible) {
+    const defaultVet = v.find((vet) => vet.is_default) || v[0];
+    if (defaultVet) {
+      const vetName = defaultVet.crmv ? `${defaultVet.name} (${defaultVet.crmv})` : defaultVet.name;
       setFarmForm((prev) => ({
         ...prev,
-        technical_responsible: defaultVet.crmv ? `${defaultVet.name} (${defaultVet.crmv})` : defaultVet.name,
+        technical_responsible: prev.technical_responsible || vetName,
       }));
     }
 
@@ -570,11 +572,11 @@ export default function RegistriesPage() {
 
   const handleOpenCreateFarm = () => {
     setEditingFarmId(null);
-    const defaultVet = veterinarians.find((vet) => vet.is_default);
+    const defaultVet = veterinarians.find((vet) => vet.is_default) || veterinarians[0];
     setFarmForm({
       name: '',
       owner_name: '',
-      technical_responsible: defaultVet ? (defaultVet.crmv ? `${defaultVet.name} (${defaultVet.crmv})` : defaultVet.name) : 'MV. DR. SAMOEL DUARTE',
+      technical_responsible: defaultVet ? (defaultVet.crmv ? `${defaultVet.name} (${defaultVet.crmv})` : defaultVet.name) : '',
       city: '',
       state: 'MT',
     });
@@ -948,6 +950,7 @@ export default function RegistriesPage() {
   const availableProperties = selectedFarmObj?.properties || [];
 
   const filteredAnimals = animals.filter((a) => {
+    if (animalFarmFilter !== 'all' && a.farm_id !== animalFarmFilter) return false;
     if (animalStatusFilter === 'active' && a.status === 'inactive') return false;
     if (animalStatusFilter === 'inactive' && a.status !== 'inactive') return false;
 
@@ -1221,7 +1224,23 @@ export default function RegistriesPage() {
                 className="w-full pl-10 pr-4 py-2 bg-slate-950/80 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors"
               />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={animalFarmFilter}
+                onChange={(e) => setAnimalFarmFilter(e.target.value)}
+                className="bg-slate-950 text-xs text-slate-200 border border-slate-800 rounded-xl px-3 py-1.5 focus:outline-none focus:border-emerald-500 cursor-pointer font-medium"
+              >
+                <option value="all">Todas as Fazendas ({animals.length})</option>
+                {farms.map((f) => {
+                  const farmCount = animals.filter((an) => an.farm_id === f.id).length;
+                  return (
+                    <option key={f.id} value={f.id}>
+                      {f.name} ({farmCount})
+                    </option>
+                  );
+                })}
+              </select>
+
               <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
                 <button
                   type="button"

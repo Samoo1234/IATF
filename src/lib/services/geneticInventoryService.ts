@@ -1205,3 +1205,34 @@ export function exportMovementsToExcel(movements: InventoryMovement[], farmName 
   const dateStr = getTodayDateString();
   XLSX.writeFile(workbook, `Movimentacoes_Estoque_Genetico_${farmName.replace(/\s+/g, '_')}_${dateStr}.xlsx`);
 }
+
+export async function getGeneticInventoryBalancesByFarm(forceRefresh = false): Promise<Record<string, number>> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return {};
+
+  const cacheKey = `gen_balances_by_farm_${orgId}`;
+  if (!forceRefresh) {
+    const cached = getCached<Record<string, number>>(cacheKey, 30 * 1000);
+    if (cached) return cached;
+  }
+
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('genetic_inventory_balances')
+    .select('farm_id, quantity_available')
+    .eq('organization_id', orgId);
+
+  if (error || !data) {
+    return {};
+  }
+
+  const farmMap: Record<string, number> = {};
+  data.forEach((b: { farm_id: string; quantity_available: number | null }) => {
+    if (b.farm_id) {
+      farmMap[b.farm_id] = (farmMap[b.farm_id] || 0) + (b.quantity_available || 0);
+    }
+  });
+
+  setCached(cacheKey, farmMap);
+  return farmMap;
+}
