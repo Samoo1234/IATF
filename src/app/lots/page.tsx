@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import AnimalManagementModal from '@/components/AnimalManagementModal';
@@ -12,6 +12,7 @@ import {
   createLot,
   updateLotCode,
   updateLotNotes,
+  updateLotProtocol,
   deleteLot,
   addAnimalsToLot,
   removeAnimalFromLot,
@@ -241,6 +242,48 @@ export default function LotsPage() {
   const [selectedAnimalIds, setSelectedAnimalIds] = useState<string[]>([]);
   const [submittingAdd, setSubmittingAdd] = useState(false);
   const [deletingAnimalId, setDeletingAnimalId] = useState<string | null>(null);
+
+  // Edit Protocol Modal State
+  const [editingProtocolLot, setEditingProtocolLot] = useState<LotStat | null>(null);
+  const [selectedNewProtocolId, setSelectedNewProtocolId] = useState('');
+  const [editStartDate, setEditStartDate] = useState('');
+  const [editResponsibleName, setEditResponsibleName] = useState('');
+  const [savingProtocol, setSavingProtocol] = useState(false);
+
+  const handleOpenEditProtocol = (lot: LotStat) => {
+    setEditingProtocolLot(lot);
+    const currentProto = protocols.find(
+      (p) => p.id === lot.protocol_id || p.name.trim().toLowerCase() === (lot.protocol_name || '').trim().toLowerCase()
+    );
+    setSelectedNewProtocolId(currentProto?.id || (protocols[0]?.id || ''));
+    setEditStartDate(lot.start_date || getTodayDateString());
+    setEditResponsibleName(lot.responsible_name || '');
+  };
+
+  const handleSaveProtocol = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProtocolLot || !selectedNewProtocolId) return;
+
+    setSavingProtocol(true);
+    const res = await updateLotProtocol({
+      lotId: editingProtocolLot.id,
+      protocolId: selectedNewProtocolId,
+      startDate: editStartDate,
+      responsibleName: editResponsibleName,
+    });
+    setSavingProtocol(false);
+
+    if (res.success) {
+      showToast(`Protocolo do lote "${editingProtocolLot.code}" atualizado com sucesso! Agenda recalculada.`);
+      setEditingProtocolLot(null);
+      await loadLots();
+      if (selectedLotId === editingProtocolLot.id) {
+        await handleSelectLot(editingProtocolLot.id);
+      }
+    } else {
+      showToast(res.error || 'Erro ao alterar o protocolo do lote.', 'error');
+    }
+  };
 
   // Animal Management Modal State
   const [managementAnimal, setManagementAnimal] = useState<{ id: string; tag_number: string; farm_id: string } | null>(null);
@@ -619,6 +662,26 @@ export default function LotsPage() {
 
   const selectedLot = lots.find((l) => l.id === selectedLotId);
 
+  // Prévia de etapas e validação de segurança para o modal de alteração de protocolo
+  const previewProtocol = protocols.find((p) => p.id === selectedNewProtocolId);
+  const previewSteps = useMemo(() => {
+    if (!previewProtocol || !editStartDate) return [];
+    const steps = [...(previewProtocol.protocol_steps || [])].sort((a, b) => a.day_offset - b.day_offset);
+    return steps.map((s) => ({
+      code: s.code,
+      name: s.name,
+      day_offset: s.day_offset,
+      date: addDaysToDateString(editStartDate, s.day_offset),
+    }));
+  }, [previewProtocol, editStartDate]);
+
+  const hasCompletedManagements = useMemo(() => {
+    if (!editingProtocolLot) return false;
+    return managementEvents.some(
+      (e) => e.lot_id === editingProtocolLot.id && (e.status === 'concluido' || e.status === 'realizado')
+    );
+  }, [editingProtocolLot, managementEvents]);
+
   return (
     <div className="space-y-6">
       {/* Toast Notification */}
@@ -766,11 +829,24 @@ export default function LotsPage() {
                 </div>
 
                 <div className="text-xs text-slate-400 space-y-1">
-                  <p><strong className="text-slate-300">Protocolo:</strong> {lot.protocol_name}</p>
+                  <div className="flex items-center justify-between">
+                    <p><strong className="text-slate-300">Protocolo:</strong> {lot.protocol_name}</p>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenEditProtocol(lot);
+                      }}
+                      title="Alterar Protocolo Hormonal e Datas"
+                      className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 hover:underline cursor-pointer transition-colors"
+                    >
+                      <Pencil className="w-3 h-3" /> Alterar
+                    </button>
+                  </div>
                   <p>
-                    <strong className="text-slate-300">D0:</strong> {lot.start_date}
-                    {lot.ia_planned_date && <> • <strong className="text-slate-300">IA:</strong> {lot.ia_planned_date}</>}
-                    {lot.dg_planned_date && <> • <strong className="text-slate-300">DG:</strong> {lot.dg_planned_date}</>}
+                    <strong className="text-slate-300">D0:</strong> {formatDateBR(lot.start_date)}
+                    {lot.ia_planned_date && <> • <strong className="text-slate-300">IA:</strong> {formatDateBR(lot.ia_planned_date)}</>}
+                    {lot.dg_planned_date && <> • <strong className="text-slate-300">DG:</strong> {formatDateBR(lot.dg_planned_date)}</>}
                   </p>
                   <p><strong className="text-slate-300">Responsável:</strong> {lot.responsible_name}</p>
                 </div>
@@ -1046,9 +1122,29 @@ export default function LotsPage() {
                     <span className="text-sm font-normal text-slate-400">({selectedLot.property_name})</span>
                   )}
                 </div>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  {selectedLot.protocol_name} • Responsável: {selectedLot.responsible_name}
-                </p>
+                <div className="flex items-center gap-2 mt-1 flex-wrap text-xs text-slate-400">
+                  <span>
+                    Protocolo: <strong className="text-slate-200">{selectedLot.protocol_name}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEditProtocol(selectedLot)}
+                    className="px-2 py-0.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer shadow-xs"
+                    title="Alterar o protocolo hormonal deste lote"
+                  >
+                    <Pencil className="w-2.5 h-2.5" /> Alterar Protocolo
+                  </button>
+                  <span>•</span>
+                  <span>
+                    <strong className="text-slate-300">D0:</strong> {formatDateBR(selectedLot.start_date)}
+                    {selectedLot.ia_planned_date && <> • <strong className="text-slate-300">IA:</strong> {formatDateBR(selectedLot.ia_planned_date)}</>}
+                    {selectedLot.dg_planned_date && <> • <strong className="text-slate-300">DG:</strong> {formatDateBR(selectedLot.dg_planned_date)}</>}
+                  </span>
+                  <span>•</span>
+                  <span>
+                    Responsável: <strong className="text-slate-200">{selectedLot.responsible_name}</strong>
+                  </span>
+                </div>
                 {selectedLot.notes && (
                   <p className="text-xs text-slate-300 mt-1 flex items-start gap-1.5 bg-slate-950/60 p-2 rounded-lg border border-slate-800">
                     <FileText className="w-3.5 h-3.5 text-amber-400/90 shrink-0 mt-0.5" />
@@ -1276,7 +1372,7 @@ export default function LotsPage() {
                                 : 'Pendente'}
                             </span>
                           </td>
-                          <td className="p-3 text-emerald-400">{la.expected_parturition_date ?? '-'}</td>
+                          <td className="p-3 text-emerald-400 font-mono">{formatDateBR(la.expected_parturition_date)}</td>
                           <td className="p-3 text-center">
                             <div className="flex items-center justify-center gap-1">
                               <button
@@ -1887,6 +1983,185 @@ export default function LotsPage() {
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== Modal: Alterar Protocolo Hormonal do Lote ===== */}
+      {editingProtocolLot && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="glass-card w-full max-w-xl max-h-[92vh] rounded-2xl border border-slate-700 bg-slate-900 p-6 space-y-5 shadow-2xl overflow-y-auto animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                  <Syringe className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    Alterar Protocolo Hormonal
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Lote: <strong className="text-white font-mono">{editingProtocolLot.code}</strong> • {editingProtocolLot.property_name || editingProtocolLot.farm_name}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !savingProtocol && setEditingProtocolLot(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {hasCompletedManagements ? (
+              <div className="space-y-4">
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 text-xs text-amber-300 flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="font-bold text-sm text-amber-200">Alteração Não Permitida</p>
+                    <p className="leading-relaxed">
+                      Este lote já possui manejos operacionais executados e concluídos no curral.
+                      Por normas de integridade do histórico reprodutivo, sanitário e rastreabilidade zootécnica das matrizes, não é permitido trocar o protocolo hormonal após o início da execução dos manejos.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2 text-xs">
+                  <div className="flex justify-between text-slate-400">
+                    <span>Protocolo em Execução:</span>
+                    <span className="font-bold text-emerald-400">{editingProtocolLot.protocol_name}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Data D0:</span>
+                    <span className="font-semibold text-slate-200">{formatDateBR(editingProtocolLot.start_date)}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Status do Lote:</span>
+                    <span className="font-semibold text-slate-200 capitalize">{editingProtocolLot.status}</span>
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingProtocolLot(null)}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold cursor-pointer transition-colors"
+                  >
+                    Fechar
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handleSaveProtocol} className="space-y-4">
+                <div className="bg-sky-500/10 border border-sky-500/20 rounded-xl p-3 text-xs text-sky-300 flex items-start gap-2.5">
+                  <Sparkles className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
+                  <p className="leading-relaxed">
+                    Lote em fase de planejamento. Ao alterar o protocolo ou a data D0, todas as datas de manejos de campo (D0, IA, DG) e a agenda operacional serão recalculadas automaticamente.
+                  </p>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      Novo Protocolo Hormonal <span className="text-emerald-400">*</span>
+                    </label>
+                    <select
+                      value={selectedNewProtocolId}
+                      onChange={(e) => setSelectedNewProtocolId(e.target.value)}
+                      required
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                    >
+                      {protocols.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} ({p.number_of_managements || p.protocol_steps?.length || 3} manejos)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        Data D0 (Início do Protocolo) <span className="text-emerald-400">*</span>
+                      </label>
+                      <input
+                        type="date"
+                        value={editStartDate}
+                        onChange={(e) => setEditStartDate(e.target.value)}
+                        required
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        Responsável Técnico
+                      </label>
+                      <input
+                        type="text"
+                        value={editResponsibleName}
+                        onChange={(e) => setEditResponsibleName(e.target.value)}
+                        placeholder="Ex: MV. DR. SAMOEL DUARTE"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Prévia do Novo Cronograma */}
+                  {previewSteps.length > 0 && (
+                    <div className="bg-slate-950/80 rounded-xl p-3.5 border border-slate-800 space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-400 font-semibold flex items-center gap-1.5">
+                          <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                          Prévia do Novo Cronograma
+                        </span>
+                        <span className="text-[11px] text-emerald-400 font-medium">
+                          {previewSteps.length} etapas calculadas
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                        {previewSteps.map((st) => (
+                          <div key={st.code} className="bg-slate-900/90 p-2 rounded-lg border border-slate-800 text-center space-y-0.5">
+                            <span className="text-[10px] font-bold text-slate-400 block">{st.code} (+{st.day_offset}d)</span>
+                            <span className="text-xs font-bold text-emerald-400 block font-mono">
+                              {formatDateBR(st.date)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+                  <button
+                    type="button"
+                    disabled={savingProtocol}
+                    onClick={() => setEditingProtocolLot(null)}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingProtocol || !selectedNewProtocolId}
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-lg transition-all disabled:opacity-50"
+                  >
+                    {savingProtocol ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        Recalculando Agenda...
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-3.5 h-3.5 stroke-3" />
+                        Salvar e Recalcular Agenda
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

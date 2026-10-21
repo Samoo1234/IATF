@@ -282,6 +282,7 @@ export interface LotStat {
   responsible_name: string | null;
   status: string;
   property_name: string | null;
+  protocol_id?: string | null;
   protocol_name: string | null;
   farm_name: string | null;
   worked_qty: number;
@@ -4075,6 +4076,303 @@ export async function updateLotNotes(
 
   invalidateCache('lots');
   return { success: true };
+}
+
+// ============================================================
+// UPDATE LOT PROTOCOL & RECALCULATE DATES / EVENTS
+// ============================================================
+
+export async function updateLotProtocol(params: {
+  lotId: string;
+  protocolId: string;
+  startDate?: string;
+  responsibleName?: string;
+}): Promise<{ success: boolean; error?: string }> {
+  const { lotId, protocolId } = params;
+  if (!lotId || !protocolId) {
+    return { success: false, error: 'Lote e protocolo são obrigatórios.' };
+  }
+
+  const isOffline = isSystemOffline();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const resolvedOrg = (await getCurrentOrgId().catch(() => null))
+    || storedOrgId
+    || (await offlineDb.farms.toCollection().first())?.organization_id
+    || (await offlineDb.lots.toCollection().first())?.organization_id
+    || 'local-org';
+  const orgId = String(resolvedOrg);
+
+  if (isOffline) {
+    try {
+      const lot = await offlineDb.lots.get(lotId);
+      if (!lot) return { success: false, error: 'Lote não encontrado no banco local.' };
+
+      // Verificar se há eventos concluídos
+      const completed = await offlineDb.management_events
+        .where('lot_id')
+        .equals(lotId)
+        .filter((e) => e.status === 'concluido')
+        .toArray();
+
+      if (completed.length > 0) {
+        return {
+          success: false,
+          error: 'Este lote já possui manejos concluídos no curral. Por integridade do histórico sanitário e zootécnico, o protocolo não pode ser alterado.',
+        };
+      }
+
+      // Buscar protocolo e passos
+      const proto = await offlineDb.protocols.get(protocolId);
+      if (!proto) return { success: false, error: 'Protocolo não encontrado.' };
+
+      let steps: { code: string; name?: string; day_offset: number }[] = [];
+      if (Array.isArray((proto as Record<string, unknown>).protocol_steps)) {
+        steps = (proto as Record<string, unknown>).protocol_steps as { code: string; name?: string; day_offset: number }[];
+      } else if (Array.isArray(proto.steps)) {
+        steps = proto.steps as { code: string; name?: string; day_offset: number }[];
+      }
+
+      const startDate = params.startDate?.trim() || (lot.start_date as string) || getTodayDateString();
+      const addDays = (n: number) => addDaysToDateString(startDate, n);
+
+      const iaStep = steps.find((s) => s.code === 'IA');
+      const dgStep = steps.find((s) => s.code === 'DG');
+      const iaDate = iaStep ? addDays(iaStep.day_offset) : addDays(11);
+      const dgDate = dgStep ? addDays(dgStep.day_offset) : addDays(41);
+      const responsible = params.responsibleName?.trim() || (lot.responsible_name as string) || null;
+
+      // 1. Atualizar registro do lote no IndexedDB
+      await offlineDb.lots.update(lotId, {
+        protocol_id: protocolId,
+        protocol_name: proto.name,
+        start_date: startDate,
+        ia_planned_date: iaDate,
+        dg_planned_date: dgDate,
+        responsible_name: responsible,
+        updated_at: new Date().toISOString(),
+      });
+
+      // 2. Remover eventos pendentes antigos do IndexedDB e enfileirar deleção
+      const oldPending = await offlineDb.management_events
+        .where('lot_id')
+        .equals(lotId)
+        .filter((e) => e.status === 'pendente')
+        .toArray();
+
+      for (const ev of oldPending) {
+        await offlineDb.management_events.delete(ev.id);
+        await syncEngine.enqueueMutation('delete', 'management_events', ev.id, lot.farm_id, { id: ev.id }, orgId);
+      }
+
+      // 3. Inserir novos eventos de manejo
+      const stepsToGenerate = steps.length > 0 ? steps : [
+        { code: 'D0', name: 'D0 - Implante & Benzoato', day_offset: 0 },
+        { code: 'D9', name: 'D9 - Retirada & Indutores', day_offset: 9 },
+        { code: 'IA', name: 'IA - Inseminação Artificial', day_offset: 11 },
+        { code: 'DG', name: 'DG - Diagnóstico de Gestação', day_offset: 41 },
+      ];
+
+      for (const step of stepsToGenerate) {
+        const eventId = crypto.randomUUID();
+        const plannedDate = addDays(step.day_offset);
+
+        await offlineDb.management_events.put({
+          id: eventId,
+          organization_id: orgId,
+          farm_id: lot.farm_id,
+          lot_id: lotId,
+          step_code: step.code,
+          step_name: step.name ?? step.code,
+          planned_date: plannedDate,
+          responsible_name: responsible,
+          status: 'pendente',
+          event_type: 'lote',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+
+        await syncEngine.enqueueMutation('insert', 'management_events', eventId, lot.farm_id, {
+          id: eventId,
+          organization_id: orgId,
+          farm_id: lot.farm_id,
+          lot_id: lotId,
+          step_code: step.code,
+          step_name: step.name ?? step.code,
+          planned_date: plannedDate,
+          responsible_name: responsible,
+          status: 'pendente',
+          event_type: 'lote',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }, orgId);
+      }
+
+      // Enfileirar mutação de atualização do lote
+      await syncEngine.enqueueMutation('update', 'iatf_lots', lotId, lot.farm_id, {
+        protocol_id: protocolId,
+        start_date: startDate,
+        ia_planned_date: iaDate,
+        dg_planned_date: dgDate,
+        responsible_name: responsible,
+        updated_at: new Date().toISOString(),
+      }, orgId);
+
+      invalidateCache('lots');
+      invalidateCache('events');
+      invalidateCache('metrics');
+      return { success: true };
+    } catch (e: unknown) {
+      console.error('updateLotProtocol offline error:', e);
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  // ONLINE SUPABASE
+  try {
+    const supabase = createClient();
+
+    // 1. Verificar se há eventos concluídos para este lote
+    const { data: completedEvents, error: compErr } = await supabase
+      .from('management_events')
+      .select('id, step_code')
+      .eq('lot_id', lotId)
+      .eq('status', 'concluido');
+
+    if (!compErr && completedEvents && completedEvents.length > 0) {
+      return {
+        success: false,
+        error: 'Este lote já possui manejos concluídos no curral. Não é permitido alterar o protocolo para não corromper o histórico sanitário.',
+      };
+    }
+
+    // 2. Buscar lote atual para obter dados como start_date, farm_id
+    const { data: currentLot, error: lotFetchErr } = await supabase
+      .from('iatf_lots')
+      .select('id, farm_id, start_date, responsible_name')
+      .eq('id', lotId)
+      .single();
+
+    if (lotFetchErr || !currentLot) {
+      return { success: false, error: 'Lote não encontrado no banco de dados.' };
+    }
+
+    // 3. Buscar novo protocolo e seus passos
+    const { data: proto, error: protoErr } = await supabase
+      .from('protocols')
+      .select('name, protocol_steps(*)')
+      .eq('id', protocolId)
+      .single() as { data: { name: string; protocol_steps: { code: string; name?: string; day_offset: number }[] } | null; error: unknown };
+
+    if (protoErr || !proto) {
+      return { success: false, error: 'Protocolo hormonal não encontrado.' };
+    }
+
+    const steps = proto.protocol_steps ?? [];
+    const startDate = params.startDate?.trim() || currentLot.start_date || getTodayDateString();
+    const addDays = (n: number) => addDaysToDateString(startDate, n);
+
+    const iaStep = steps.find((s) => s.code === 'IA');
+    const dgStep = steps.find((s) => s.code === 'DG');
+    const iaDate = iaStep ? addDays(iaStep.day_offset) : addDays(11);
+    const dgDate = dgStep ? addDays(dgStep.day_offset) : addDays(41);
+    const responsible = params.responsibleName?.trim() || currentLot.responsible_name;
+
+    // 4. Atualizar iatf_lots
+    const { error: updateLotErr } = await supabase
+      .from('iatf_lots')
+      .update({
+        protocol_id: protocolId,
+        start_date: startDate,
+        ia_planned_date: iaDate,
+        dg_planned_date: dgDate,
+        responsible_name: responsible,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', lotId);
+
+    if (updateLotErr) {
+      console.error('updateLotProtocol error updating iatf_lots:', updateLotErr);
+      return { success: false, error: updateLotErr.message };
+    }
+
+    // 5. Deletar eventos pendentes antigos da agenda
+    await supabase
+      .from('management_events')
+      .delete()
+      .eq('lot_id', lotId)
+      .eq('status', 'pendente');
+
+    // 6. Inserir novos eventos de manejo para cada etapa do protocolo
+    const stepsToGenerate = steps.length > 0 ? steps : [
+      { code: 'D0', name: 'D0 - Implante & Benzoato', day_offset: 0 },
+      { code: 'D9', name: 'D9 - Retirada & Indutores', day_offset: 9 },
+      { code: 'IA', name: 'IA - Inseminação Artificial', day_offset: 11 },
+      { code: 'DG', name: 'DG - Diagnóstico de Gestação', day_offset: 41 },
+    ];
+
+    for (const step of stepsToGenerate) {
+      await supabase.from('management_events').insert({
+        organization_id: orgId,
+        farm_id: currentLot.farm_id,
+        lot_id: lotId,
+        step_code: step.code,
+        step_name: step.name || step.code,
+        planned_date: addDays(step.day_offset),
+        responsible_name: responsible,
+        status: 'pendente',
+        event_type: 'lote',
+      });
+    }
+
+    // 7. Sincronizar com base local Dexie/IndexedDB imediatamente
+    try {
+      await offlineDb.lots.update(lotId, {
+        protocol_id: protocolId,
+        protocol_name: proto.name,
+        start_date: startDate,
+        ia_planned_date: iaDate,
+        dg_planned_date: dgDate,
+        responsible_name: responsible,
+        updated_at: new Date().toISOString(),
+      });
+
+      const oldPending = await offlineDb.management_events
+        .where('lot_id')
+        .equals(lotId)
+        .filter((e) => e.status === 'pendente')
+        .toArray();
+      for (const ev of oldPending) {
+        await offlineDb.management_events.delete(ev.id);
+      }
+
+      for (const step of stepsToGenerate) {
+        await offlineDb.management_events.put({
+          id: crypto.randomUUID(),
+          organization_id: orgId,
+          farm_id: currentLot.farm_id,
+          lot_id: lotId,
+          step_code: step.code,
+          step_name: step.name || step.code,
+          planned_date: addDays(step.day_offset),
+          responsible_name: responsible,
+          status: 'pendente',
+          event_type: 'lote',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      }
+    } catch (e) {
+      console.warn('Erro ao atualizar base offline após updateLotProtocol:', e);
+    }
+
+    invalidateCache('lots');
+    invalidateCache('events');
+    invalidateCache('metrics');
+    return { success: true };
+  } catch (err: unknown) {
+    console.error('updateLotProtocol exception:', err);
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 // ============================================================
