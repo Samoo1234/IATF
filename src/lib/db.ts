@@ -7811,6 +7811,11 @@ export async function executeBatchLotManagementDG(params: {
 
         const offlineStatus = item.pregnancy_status === 'inconclusivo' ? 'repeticao' : item.pregnancy_status;
         await syncEngine.recordOfflineLotAnimalDG(item.lot_animal_id, offlineStatus, item.ecc_dg || undefined);
+        if (expectedParturition) {
+          await offlineDb.lot_animals.update(item.lot_animal_id, {
+            expected_parturition_date: expectedParturition,
+          });
+        }
 
         await offlineDb.animals.update(item.animal_id, {
           reproductive_status: isPregnant ? 'prenha' : 'vazia',

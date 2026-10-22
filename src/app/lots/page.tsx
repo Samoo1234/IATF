@@ -54,8 +54,6 @@ import {
   Calendar,
   Pencil,
   FileText,
-  Award,
-  HeartPulse,
 } from 'lucide-react';
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
@@ -306,8 +304,11 @@ export default function LotsPage() {
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchModalStep, setBatchModalStep] = useState<'D0' | 'D7' | 'D8' | 'D9' | 'IA' | 'DG'>('D9');
 
-  const handleOpenBatchManagement = (stepCode: 'D0' | 'D7' | 'D8' | 'D9' | 'IA' | 'DG' = 'D9') => {
-    setBatchModalStep(stepCode);
+  const handleOpenBatchManagement = (stepCode: string = 'D9') => {
+    const validSteps = ['D0', 'D7', 'D8', 'D9', 'IA', 'DG'] as const;
+    const upper = stepCode.toUpperCase();
+    const matched = validSteps.find((s) => s === upper) || 'D9';
+    setBatchModalStep(matched);
     setBatchModalOpen(true);
   };
 
@@ -1232,7 +1233,7 @@ export default function LotsPage() {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  handleOpenBatchManagement(step.code as any);
+                                  handleOpenBatchManagement(step.code);
                                 }}
                                 className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-extrabold transition-all duration-300 cursor-pointer touch-manipulation hover:scale-110 active:scale-95 ${
                                   isCurrentToday
@@ -1253,7 +1254,7 @@ export default function LotsPage() {
                               <div className="text-center mt-1.5 space-y-1">
                                 <button
                                   type="button"
-                                  onClick={() => handleOpenBatchManagement(step.code as any)}
+                                  onClick={() => handleOpenBatchManagement(step.code)}
                                   className="block text-[11px] font-bold text-slate-200 hover:text-emerald-400 transition-colors cursor-pointer"
                                   title={`⚡ Lançar ${step.code} para o lote`}
                                 >
@@ -1265,7 +1266,7 @@ export default function LotsPage() {
                                 {/* Botão Rápido de Ação Coletiva na Etapa */}
                                 <button
                                   type="button"
-                                  onClick={() => handleOpenBatchManagement(step.code as any)}
+                                  onClick={() => handleOpenBatchManagement(step.code)}
                                   className={`text-[9px] font-black px-1.5 py-0.5 rounded-md border transition-all cursor-pointer inline-flex items-center gap-0.5 ${
                                     isCurrentToday
                                       ? 'bg-amber-400/20 text-amber-300 border-amber-400/40 hover:bg-amber-400/30'
@@ -1306,7 +1307,7 @@ export default function LotsPage() {
                     <button
                       type="button"
                       onClick={() => {
-                        const currentStep = (modalProgress.steps.find((s) => s.isToday || s.status === 'upcoming')?.code || 'D9') as any;
+                        const currentStep = modalProgress.steps.find((s) => s.isToday || s.status === 'upcoming')?.code || 'D9';
                         handleOpenBatchManagement(currentStep);
                       }}
                       className="py-2.5 px-4 rounded-xl bg-linear-to-r from-emerald-500 to-teal-400 hover:brightness-110 active:scale-[0.99] text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-all cursor-pointer touch-manipulation"

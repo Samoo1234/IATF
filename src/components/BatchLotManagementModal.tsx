@@ -16,25 +16,17 @@ import {
 import { getTodayDateString, addDaysToDateString } from '@/lib/dateUtils';
 import {
   Syringe,
-  Calendar,
   Check,
   X,
   AlertCircle,
   Sparkles,
   Layers,
-  User,
-  Clock,
   RefreshCw,
   AlertTriangle,
   HeartPulse,
-  ArrowRight,
   CheckCircle2,
-  ListFilter,
-  CheckSquare,
-  Square,
-  ChevronRight,
   Activity,
-  Award
+  Award,
 } from 'lucide-react';
 
 interface BatchLotManagementModalProps {
@@ -720,6 +712,7 @@ export default function BatchLotManagementModal({
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5" /> Padrão para Todas as Matrizes do Lote
+                    {loadingAux && <RefreshCw className="w-3 h-3 animate-spin text-emerald-400 ml-1" />}
                   </span>
                   <button
                     type="button"
@@ -730,7 +723,7 @@ export default function BatchLotManagementModal({
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
                   <div>
                     <label className="block text-[11px] font-bold text-slate-300 mb-1">Data da IA</label>
                     <input
@@ -792,6 +785,19 @@ export default function BatchLotManagementModal({
                         </option>
                       ))}
                     </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 mb-1">ECC Padrão</label>
+                    <input
+                      type="number"
+                      step="0.25"
+                      min="1"
+                      max="5"
+                      value={iaDefaultEcc}
+                      onChange={(e) => setIaDefaultEcc(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-center"
+                    />
                   </div>
                 </div>
               </div>
