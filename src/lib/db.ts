@@ -6670,7 +6670,7 @@ export async function executeStepDG(
 
   // 3. Sincronizar status do animal no lote (se participante de lote)
   await supabase
-    .from('lot_animals')
+    .from('iatf_lot_animals')
     .update({
       pregnancy_status: data.pregnancy_status,
       ecc_dg: data.ecc_dg !== undefined && data.ecc_dg !== null ? Number(data.ecc_dg) : null,
@@ -6805,9 +6805,9 @@ export async function recordDirectDG(params: {
     })
     .eq('id', params.animal_id);
 
-  // 5. Atualizar lot_animals se participante de lote
+  // 5. Atualizar iatf_lot_animals se participante de lote
   await supabase
-    .from('lot_animals')
+    .from('iatf_lot_animals')
     .update({
       pregnancy_status: params.pregnancy_status,
       ecc_dg: params.ecc_dg !== undefined && params.ecc_dg !== null ? Number(params.ecc_dg) : null,
@@ -7219,4 +7219,747 @@ export async function toggleTeamMemberStatus(memberId: string, status: 'active' 
     .update({ status })
     .eq('id', memberId);
   return !error;
+}
+
+// ==========================================
+// MANEJOS COLETIVOS EM LOTE (BATCH LOT MANAGEMENT)
+// ==========================================
+
+export async function executeBatchLotManagementD0(params: {
+  lotId: string;
+  executionDate: string;
+  responsibleName?: string | null;
+  notes?: string | null;
+  animalIds: string[];
+}): Promise<{ success: boolean; count: number; error?: string }> {
+  if (!params.animalIds.length) return { success: true, count: 0 };
+
+  const isOffline = isSystemOffline();
+  const todayIso = new Date().toISOString();
+
+  if (isOffline) {
+    try {
+      const lot = await offlineDb.lots.get(params.lotId);
+      const farmId = lot?.farm_id || '';
+      const orgId = (lot?.organization_id as string) || (typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : '') || '';
+
+      for (const animalId of params.animalIds) {
+        const mgmtId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'mgmt_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+        await syncEngine.recordOfflineManagementStart({
+          id: mgmtId,
+          organization_id: orgId,
+          farm_id: farmId,
+          animal_id: animalId,
+          protocol_id: lot?.protocol_id || '',
+          season_id: lot?.season_id || null,
+          lot_id: params.lotId,
+          start_date: params.executionDate,
+          d0_executed_at: params.executionDate,
+          d0_responsible: params.responsibleName || null,
+          d0_notes: params.notes || null,
+        });
+
+        await offlineDb.animals.update(animalId, {
+          reproductive_status: 'em_protocolo',
+          updated_at: todayIso,
+        });
+      }
+
+      const events = await offlineDb.management_events.where('lot_id').equals(params.lotId).toArray();
+      const d0Event = events.find((e) => e.step_code === 'D0');
+      if (d0Event) {
+        await offlineDb.management_events.update(d0Event.id, {
+          status: 'concluido',
+          execution_date: params.executionDate,
+          animals_worked_count: params.animalIds.length,
+          updated_at: todayIso,
+        });
+        await syncEngine.enqueueMutation('update', 'management_events', d0Event.id, d0Event.farm_id, {
+          status: 'concluido',
+          execution_date: params.executionDate,
+          animals_worked_count: params.animalIds.length,
+          updated_at: todayIso,
+        });
+      }
+
+      if (lot && lot.status === 'planejado') {
+        await offlineDb.lots.update(params.lotId, {
+          status: 'em_andamento',
+          updated_at: todayIso,
+        });
+        await syncEngine.enqueueMutation('update', 'iatf_lots', params.lotId, farmId, {
+          status: 'em_andamento',
+          updated_at: todayIso,
+        });
+      }
+
+      invalidateCache('lot_animals');
+      invalidateCache('lots');
+      invalidateCache('animal_managements');
+      invalidateCache('events');
+      invalidateCache('animals');
+      invalidateCache('metrics');
+      return { success: true, count: params.animalIds.length };
+    } catch (e: unknown) {
+      console.error('executeBatchLotManagementD0 offline error:', e);
+      return { success: false, count: 0, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return { success: false, count: 0, error: 'Sessão inválida.' };
+
+  const supabase = createClient();
+
+  const { data: lot, error: lotErr } = await supabase
+    .from('iatf_lots')
+    .select('id, farm_id, protocol_id, season_id, status')
+    .eq('id', params.lotId)
+    .single();
+
+  if (lotErr || !lot) {
+    return { success: false, count: 0, error: lotErr?.message || 'Lote não encontrado.' };
+  }
+
+  const { data: protocolSteps } = await supabase
+    .from('protocol_steps')
+    .select('code, day_offset')
+    .eq('protocol_id', lot.protocol_id)
+    .order('step_order', { ascending: true });
+
+  let d9Date: string | null = null;
+  let iaDate: string | null = null;
+  let dgDate: string | null = null;
+
+  if (protocolSteps && protocolSteps.length > 0) {
+    for (const step of protocolSteps) {
+      const str = addDaysToDateString(params.executionDate, step.day_offset);
+      const codeUpper = step.code.toUpperCase();
+      if (codeUpper === 'D8' || codeUpper === 'D9') d9Date = str;
+      else if (codeUpper === 'IA') iaDate = str;
+      else if (codeUpper === 'DG' || codeUpper === 'DG1') dgDate = str;
+    }
+  }
+
+  if (!d9Date) d9Date = addDaysToDateString(params.executionDate, 9);
+  if (!iaDate) iaDate = addDaysToDateString(params.executionDate, 11);
+  if (!dgDate) dgDate = addDaysToDateString(params.executionDate, 44);
+
+  for (const animalId of params.animalIds) {
+    const { data: existingMgmt } = await supabase
+      .from('animal_managements')
+      .select('id')
+      .eq('animal_id', animalId)
+      .eq('lot_id', params.lotId)
+      .maybeSingle();
+
+    if (existingMgmt) {
+      await supabase
+        .from('animal_managements')
+        .update({
+          start_date: params.executionDate,
+          d0_executed_at: params.executionDate,
+          d0_responsible: params.responsibleName || null,
+          d0_notes: params.notes || null,
+          d9_date: d9Date,
+          ia_date: iaDate,
+          dg_date: dgDate,
+          status: 'em_andamento',
+          updated_at: todayIso,
+        })
+        .eq('id', existingMgmt.id);
+    } else {
+      const { count: cycleCount } = await supabase
+        .from('animal_managements')
+        .select('id', { count: 'exact', head: true })
+        .eq('animal_id', animalId);
+
+      await supabase
+        .from('animal_managements')
+        .insert({
+          organization_id: orgId,
+          farm_id: lot.farm_id,
+          animal_id: animalId,
+          season_id: lot.season_id,
+          protocol_id: lot.protocol_id,
+          lot_id: params.lotId,
+          cycle_number: (cycleCount ?? 0) + 1,
+          start_date: params.executionDate,
+          d0_executed_at: params.executionDate,
+          d0_responsible: params.responsibleName || null,
+          d0_notes: params.notes || null,
+          d9_date: d9Date,
+          ia_date: iaDate,
+          dg_date: dgDate,
+          status: 'em_andamento',
+          pregnancy_status: 'pendente',
+        });
+    }
+
+    await supabase
+      .from('animals')
+      .update({
+        reproductive_status: 'em_protocolo',
+        updated_at: todayIso,
+      })
+      .eq('id', animalId);
+  }
+
+  await supabase
+    .from('management_events')
+    .update({
+      status: 'concluido',
+      execution_date: params.executionDate,
+      animals_worked_count: params.animalIds.length,
+      responsible_name: params.responsibleName || null,
+      updated_at: todayIso,
+    })
+    .eq('lot_id', params.lotId)
+    .eq('step_code', 'D0');
+
+  if (lot.status === 'planejado') {
+    await supabase
+      .from('iatf_lots')
+      .update({ status: 'em_andamento', updated_at: todayIso })
+      .eq('id', params.lotId);
+  }
+
+  invalidateCache('lot_animals');
+  invalidateCache('lots');
+  invalidateCache('animal_managements');
+  invalidateCache('events');
+  invalidateCache('animals');
+  invalidateCache('metrics');
+  return { success: true, count: params.animalIds.length };
+}
+
+export async function executeBatchLotManagementD9(params: {
+  lotId: string;
+  stepCode?: string;
+  executionDate: string;
+  responsibleName?: string | null;
+  notes?: string | null;
+  deviceLossAnimalIds?: string[];
+}): Promise<{ success: boolean; count: number; error?: string }> {
+  const isOffline = isSystemOffline();
+  const stepCode = params.stepCode || 'D9';
+  const lossIds = new Set(params.deviceLossAnimalIds || []);
+  const todayIso = new Date().toISOString();
+
+  if (isOffline) {
+    try {
+      const lotAnimals = await offlineDb.lot_animals.where('lot_id').equals(params.lotId).toArray();
+      for (const la of lotAnimals) {
+        const hasLoss = lossIds.has(la.animal_id);
+        const mgmts = await offlineDb.animal_managements
+          .where('animal_id')
+          .equals(la.animal_id)
+          .toArray();
+        const activeMgmt = mgmts.find((m) => m.lot_id === params.lotId && m.status === 'em_andamento') || mgmts[0];
+
+        if (activeMgmt) {
+          await syncEngine.recordOfflineStepD9(activeMgmt.id, {
+            executed_at: params.executionDate,
+            responsible: params.responsibleName || null,
+            device_loss: hasLoss,
+            notes: hasLoss ? 'Perda de implante no D9 coletivo' : params.notes || null,
+          });
+        }
+      }
+
+      const events = await offlineDb.management_events.where('lot_id').equals(params.lotId).toArray();
+      const targetEvent = events.find((e) => e.step_code === stepCode);
+      if (targetEvent) {
+        await offlineDb.management_events.update(targetEvent.id, {
+          status: 'concluido',
+          execution_date: params.executionDate,
+          animals_worked_count: lotAnimals.length - lossIds.size,
+          losses_count: lossIds.size,
+          updated_at: todayIso,
+        });
+        await syncEngine.enqueueMutation('update', 'management_events', targetEvent.id, targetEvent.farm_id, {
+          status: 'concluido',
+          execution_date: params.executionDate,
+          animals_worked_count: lotAnimals.length - lossIds.size,
+          losses_count: lossIds.size,
+          updated_at: todayIso,
+        });
+      }
+
+      invalidateCache('lot_animals');
+      invalidateCache('lots');
+      invalidateCache('animal_managements');
+      invalidateCache('events');
+      invalidateCache('animals');
+      invalidateCache('metrics');
+      return { success: true, count: lotAnimals.length };
+    } catch (e: unknown) {
+      console.error('executeBatchLotManagementD9 offline error:', e);
+      return { success: false, count: 0, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return { success: false, count: 0, error: 'Sessão inválida.' };
+
+  const supabase = createClient();
+
+  const { data: lotAnimals, error: laErr } = await supabase
+    .from('iatf_lot_animals')
+    .select('animal_id')
+    .eq('lot_id', params.lotId);
+
+  if (laErr) return { success: false, count: 0, error: laErr.message };
+
+  const total = lotAnimals?.length || 0;
+
+  for (const la of lotAnimals || []) {
+    const hasLoss = lossIds.has(la.animal_id);
+
+    const { data: mgmts } = await supabase
+      .from('animal_managements')
+      .select('id')
+      .eq('animal_id', la.animal_id)
+      .eq('lot_id', params.lotId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    const mgmtId = mgmts?.[0]?.id;
+    if (mgmtId) {
+      await supabase
+        .from('animal_managements')
+        .update({
+          d9_executed_at: params.executionDate,
+          d9_responsible: params.responsibleName || null,
+          d9_device_loss: hasLoss,
+          d9_notes: hasLoss ? 'Perda de implante no D9 coletivo' : params.notes || null,
+          status: hasLoss ? 'interrompido' : 'em_andamento',
+          updated_at: todayIso,
+        })
+        .eq('id', mgmtId);
+    }
+
+    if (hasLoss) {
+      await supabase
+        .from('animals')
+        .update({ reproductive_status: 'vazia', updated_at: todayIso })
+        .eq('id', la.animal_id);
+    }
+  }
+
+  await supabase
+    .from('management_events')
+    .update({
+      status: 'concluido',
+      execution_date: params.executionDate,
+      animals_worked_count: total - lossIds.size,
+      losses_count: lossIds.size,
+      responsible_name: params.responsibleName || null,
+      updated_at: todayIso,
+    })
+    .eq('lot_id', params.lotId)
+    .eq('step_code', stepCode);
+
+  invalidateCache('lot_animals');
+  invalidateCache('lots');
+  invalidateCache('animal_managements');
+  invalidateCache('events');
+  invalidateCache('animals');
+  invalidateCache('metrics');
+  return { success: true, count: total };
+}
+
+export async function executeBatchLotManagementIA(params: {
+  lotId: string;
+  executionDate: string;
+  defaultBullId?: string | null;
+  defaultSemenBatchId?: string | null;
+  defaultInseminatorName?: string | null;
+  defaultEccIa?: number | null;
+  notes?: string | null;
+  items: {
+    animal_id: string;
+    lot_animal_id: string;
+    bull_id?: string | null;
+    semen_batch_id?: string | null;
+    inseminator_name?: string | null;
+    ecc_ia?: number | null;
+    skipped?: boolean;
+  }[];
+}): Promise<{ success: boolean; count: number; error?: string }> {
+  const isOffline = isSystemOffline();
+  const todayIso = new Date().toISOString();
+  const activeItems = params.items.filter((it) => !it.skipped);
+
+  if (!activeItems.length) {
+    return { success: true, count: 0 };
+  }
+
+  if (isOffline) {
+    try {
+      for (const item of activeItems) {
+        const bullId = item.bull_id || params.defaultBullId || '';
+        const batchId = item.semen_batch_id || params.defaultSemenBatchId || '';
+        const inseminator = item.inseminator_name || params.defaultInseminatorName || null;
+        const ecc = item.ecc_ia !== undefined && item.ecc_ia !== null ? item.ecc_ia : (params.defaultEccIa || null);
+
+        await offlineDb.lot_animals.update(item.lot_animal_id, {
+          bull_id: bullId || undefined,
+          semen_batch_id: batchId || undefined,
+          inseminator_name: inseminator || undefined,
+          ecc_ia: ecc || undefined,
+          updated_at: todayIso,
+        });
+
+        await syncEngine.enqueueMutation('update', 'iatf_lot_animals', item.lot_animal_id, undefined, {
+          id: item.lot_animal_id,
+          bull_id: bullId || null,
+          semen_batch_id: batchId || null,
+          inseminator_name: inseminator || null,
+          ecc_ia: ecc || null,
+          updated_at: todayIso,
+        });
+
+        await offlineDb.animals.update(item.animal_id, {
+          reproductive_status: 'inseminada',
+          updated_at: todayIso,
+        });
+
+        const mgmts = await offlineDb.animal_managements.where('animal_id').equals(item.animal_id).toArray();
+        const activeMgmt = mgmts.find((m) => m.lot_id === params.lotId && m.status === 'em_andamento') || mgmts[0];
+
+        if (activeMgmt) {
+          await syncEngine.recordOfflineStepIA(activeMgmt.id, {
+            animal_id: item.animal_id,
+            executed_at: params.executionDate,
+            bull_id: bullId,
+            semen_batch_id: batchId,
+            inseminator_name: inseminator,
+            ecc_ia: ecc != null ? String(ecc) : null,
+            notes: params.notes || null,
+          });
+        }
+      }
+
+      const events = await offlineDb.management_events.where('lot_id').equals(params.lotId).toArray();
+      const iaEvent = events.find((e) => e.step_code === 'IA');
+      if (iaEvent) {
+        await offlineDb.management_events.update(iaEvent.id, {
+          status: 'concluido',
+          execution_date: params.executionDate,
+          animals_worked_count: activeItems.length,
+          updated_at: todayIso,
+        });
+        await syncEngine.enqueueMutation('update', 'management_events', iaEvent.id, iaEvent.farm_id, {
+          status: 'concluido',
+          execution_date: params.executionDate,
+          animals_worked_count: activeItems.length,
+          updated_at: todayIso,
+        });
+      }
+
+      invalidateCache('lot_animals');
+      invalidateCache('lots');
+      invalidateCache('animal_managements');
+      invalidateCache('events');
+      invalidateCache('animals');
+      invalidateCache('semen');
+      invalidateCache('metrics');
+      return { success: true, count: activeItems.length };
+    } catch (e: unknown) {
+      console.error('executeBatchLotManagementIA offline error:', e);
+      return { success: false, count: 0, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return { success: false, count: 0, error: 'Sessão inválida.' };
+
+  const supabase = createClient();
+  const batchUsageCount: Record<string, number> = {};
+
+  for (const item of activeItems) {
+    const bullId = item.bull_id || params.defaultBullId || null;
+    const batchId = item.semen_batch_id || params.defaultSemenBatchId || null;
+    const inseminator = item.inseminator_name || params.defaultInseminatorName || null;
+    const ecc = item.ecc_ia !== undefined && item.ecc_ia !== null ? item.ecc_ia : (params.defaultEccIa || null);
+
+    if (batchId) {
+      batchUsageCount[batchId] = (batchUsageCount[batchId] || 0) + 1;
+    }
+
+    // 1. Atualiza iatf_lot_animals
+    await supabase
+      .from('iatf_lot_animals')
+      .update({
+        bull_id: bullId,
+        semen_batch_id: batchId,
+        inseminator_name: inseminator,
+        ecc_ia: ecc != null ? Number(ecc) : null,
+        updated_at: todayIso,
+      })
+      .eq('id', item.lot_animal_id);
+
+    // 2. Atualiza status do animal
+    await supabase
+      .from('animals')
+      .update({
+        reproductive_status: 'inseminada',
+        updated_at: todayIso,
+      })
+      .eq('id', item.animal_id);
+
+    // 3. Atualiza registro em animal_managements
+    const { data: mgmts } = await supabase
+      .from('animal_managements')
+      .select('id')
+      .eq('animal_id', item.animal_id)
+      .eq('lot_id', params.lotId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    const mgmtId = mgmts?.[0]?.id;
+    if (mgmtId) {
+      await supabase
+        .from('animal_managements')
+        .update({
+          ia_executed_at: params.executionDate,
+          bull_id: bullId,
+          semen_batch_id: batchId,
+          inseminator_name: inseminator,
+          ecc_ia: ecc != null ? Number(ecc) : null,
+          ia_notes: params.notes || null,
+          updated_at: todayIso,
+        })
+        .eq('id', mgmtId);
+    }
+  }
+
+  // 4. Baixa de estoque de sêmen para as partidas utilizadas
+  for (const [bId, count] of Object.entries(batchUsageCount)) {
+    const { data: batch } = await supabase
+      .from('semen_batches')
+      .select('id, batch_number, used_quantity')
+      .eq('id', bId)
+      .maybeSingle();
+
+    if (batch) {
+      await supabase
+        .from('semen_batches')
+        .update({
+          used_quantity: (batch.used_quantity || 0) + count,
+          updated_at: todayIso,
+        })
+        .eq('id', bId);
+    }
+  }
+
+  // 5. Concluir evento de IA em management_events
+  await supabase
+    .from('management_events')
+    .update({
+      status: 'concluido',
+      execution_date: params.executionDate,
+      animals_worked_count: activeItems.length,
+      responsible_name: params.defaultInseminatorName || null,
+      updated_at: todayIso,
+    })
+    .eq('lot_id', params.lotId)
+    .eq('step_code', 'IA');
+
+  invalidateCache('lot_animals');
+  invalidateCache('lots');
+  invalidateCache('animal_managements');
+  invalidateCache('events');
+  invalidateCache('animals');
+  invalidateCache('semen');
+  invalidateCache('metrics');
+  return { success: true, count: activeItems.length };
+}
+
+export async function executeBatchLotManagementDG(params: {
+  lotId: string;
+  executionDate: string;
+  responsibleName?: string | null;
+  notes?: string | null;
+  items: {
+    animal_id: string;
+    lot_animal_id: string;
+    pregnancy_status: 'prenha' | 'vazia' | 'inconclusivo';
+    ecc_dg?: number | null;
+  }[];
+}): Promise<{ success: boolean; count: number; error?: string }> {
+  const isOffline = isSystemOffline();
+  const todayIso = new Date().toISOString();
+
+  if (!params.items.length) {
+    return { success: true, count: 0 };
+  }
+
+  if (isOffline) {
+    try {
+      const lot = await offlineDb.lots.get(params.lotId);
+      const baseIaDate = lot?.ia_planned_date;
+
+      for (const item of params.items) {
+        const isPregnant = item.pregnancy_status === 'prenha';
+        let expectedParturition: string | null = null;
+        const validIaDate = typeof baseIaDate === 'string' && baseIaDate ? baseIaDate : null;
+        if (isPregnant) {
+          expectedParturition = addDaysToDateString(validIaDate || params.executionDate, validIaDate ? 295 : 250);
+        }
+
+        const offlineStatus = item.pregnancy_status === 'inconclusivo' ? 'repeticao' : item.pregnancy_status;
+        await syncEngine.recordOfflineLotAnimalDG(item.lot_animal_id, offlineStatus, item.ecc_dg || undefined);
+
+        await offlineDb.animals.update(item.animal_id, {
+          reproductive_status: isPregnant ? 'prenha' : 'vazia',
+          updated_at: todayIso,
+        });
+
+        const mgmts = await offlineDb.animal_managements.where('animal_id').equals(item.animal_id).toArray();
+        const activeMgmt = mgmts.find((m) => m.lot_id === params.lotId) || mgmts[0];
+
+        if (activeMgmt) {
+          await syncEngine.recordOfflineStepDG(activeMgmt.id, {
+            animal_id: item.animal_id,
+            executed_at: params.executionDate,
+            pregnancy_status: item.pregnancy_status,
+            ecc_dg: item.ecc_dg || undefined,
+            notes: params.notes || null,
+          });
+        }
+      }
+
+      const events = await offlineDb.management_events.where('lot_id').equals(params.lotId).toArray();
+      const dgEvent = events.find((e) => e.step_code === 'DG' || e.step_code === 'DG1');
+      if (dgEvent) {
+        await offlineDb.management_events.update(dgEvent.id, {
+          status: 'concluido',
+          execution_date: params.executionDate,
+          animals_worked_count: params.items.length,
+          updated_at: todayIso,
+        });
+        await syncEngine.enqueueMutation('update', 'management_events', dgEvent.id, dgEvent.farm_id, {
+          status: 'concluido',
+          execution_date: params.executionDate,
+          animals_worked_count: params.items.length,
+          updated_at: todayIso,
+        });
+      }
+
+      invalidateCache('lot_animals');
+      invalidateCache('lots');
+      invalidateCache('animal_managements');
+      invalidateCache('events');
+      invalidateCache('animals');
+      invalidateCache('metrics');
+      return { success: true, count: params.items.length };
+    } catch (e: unknown) {
+      console.error('executeBatchLotManagementDG offline error:', e);
+      return { success: false, count: 0, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return { success: false, count: 0, error: 'Sessão inválida.' };
+
+  const supabase = createClient();
+
+  const { data: lot } = await supabase
+    .from('iatf_lots')
+    .select('ia_planned_date')
+    .eq('id', params.lotId)
+    .single();
+
+  const baseIaDate = lot?.ia_planned_date;
+
+  for (const item of params.items) {
+    const isPregnant = item.pregnancy_status === 'prenha';
+    let expectedParturition: string | null = null;
+    if (isPregnant) {
+      expectedParturition = addDaysToDateString(baseIaDate || params.executionDate, baseIaDate ? 295 : 250);
+    }
+
+    // 1. Atualiza iatf_lot_animals
+    await supabase
+      .from('iatf_lot_animals')
+      .update({
+        pregnancy_status: item.pregnancy_status,
+        ecc_dg: item.ecc_dg !== undefined && item.ecc_dg !== null ? Number(item.ecc_dg) : null,
+        expected_parturition_date: expectedParturition,
+        updated_at: todayIso,
+      })
+      .eq('id', item.lot_animal_id);
+
+    // 2. Atualiza animals
+    await supabase
+      .from('animals')
+      .update({
+        reproductive_status: isPregnant ? 'prenha' : 'vazia',
+        updated_at: todayIso,
+      })
+      .eq('id', item.animal_id);
+
+    // 3. Atualiza animal_managements
+    const { data: mgmts } = await supabase
+      .from('animal_managements')
+      .select('id')
+      .eq('animal_id', item.animal_id)
+      .eq('lot_id', params.lotId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    const mgmtId = mgmts?.[0]?.id;
+    if (mgmtId) {
+      await supabase
+        .from('animal_managements')
+        .update({
+          dg_executed_at: params.executionDate,
+          pregnancy_status: item.pregnancy_status,
+          ecc_dg: item.ecc_dg !== undefined && item.ecc_dg !== null ? Number(item.ecc_dg) : null,
+          expected_parturition_date: expectedParturition,
+          dg_notes: params.notes || null,
+          status: 'concluido',
+          updated_at: todayIso,
+        })
+        .eq('id', mgmtId);
+    }
+  }
+
+  // 4. Concluir evento de DG em management_events
+  await supabase
+    .from('management_events')
+    .update({
+      status: 'concluido',
+      execution_date: params.executionDate,
+      animals_worked_count: params.items.length,
+      responsible_name: params.responsibleName || null,
+      updated_at: todayIso,
+    })
+    .eq('lot_id', params.lotId)
+    .in('step_code', ['DG', 'DG1']);
+
+  // 5. Se nenhum animal do lote ficou pendente, marca o lote como concluído
+  const { data: pendingAnimals } = await supabase
+    .from('iatf_lot_animals')
+    .select('id')
+    .eq('lot_id', params.lotId)
+    .eq('pregnancy_status', 'pendente')
+    .limit(1);
+
+  if (!pendingAnimals || pendingAnimals.length === 0) {
+    await supabase
+      .from('iatf_lots')
+      .update({ status: 'concluido', updated_at: todayIso })
+      .eq('id', params.lotId);
+  }
+
+  invalidateCache('lot_animals');
+  invalidateCache('lots');
+  invalidateCache('animal_managements');
+  invalidateCache('events');
+  invalidateCache('animals');
+  invalidateCache('metrics');
+  return { success: true, count: params.items.length };
 }

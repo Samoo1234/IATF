@@ -1,0 +1,1143 @@
+'use client';
+
+import { useState, useEffect, useMemo } from 'react';
+import {
+  type LotStat,
+  type LotAnimal,
+  type Bull,
+  type SemenBatch,
+  getBulls,
+  getSemenBatches,
+  executeBatchLotManagementD0,
+  executeBatchLotManagementD9,
+  executeBatchLotManagementIA,
+  executeBatchLotManagementDG,
+} from '@/lib/db';
+import { getTodayDateString, addDaysToDateString } from '@/lib/dateUtils';
+import {
+  Syringe,
+  Calendar,
+  Check,
+  X,
+  AlertCircle,
+  Sparkles,
+  Layers,
+  User,
+  Clock,
+  RefreshCw,
+  AlertTriangle,
+  HeartPulse,
+  ArrowRight,
+  CheckCircle2,
+  ListFilter,
+  CheckSquare,
+  Square,
+  ChevronRight,
+  Activity,
+  Award
+} from 'lucide-react';
+
+interface BatchLotManagementModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+  lot: LotStat;
+  lotAnimals: LotAnimal[];
+  initialStepCode?: 'D0' | 'D7' | 'D8' | 'D9' | 'IA' | 'DG';
+}
+
+type ManagementTab = 'D0' | 'D9' | 'IA' | 'DG';
+
+export default function BatchLotManagementModal({
+  isOpen,
+  onClose,
+  onSuccess,
+  lot,
+  lotAnimals,
+  initialStepCode = 'D9',
+}: BatchLotManagementModalProps) {
+  // Normalize initial tab
+  const getNormalizedTab = (code?: string): ManagementTab => {
+    if (!code) return 'D9';
+    const upper = code.toUpperCase();
+    if (upper === 'D0') return 'D0';
+    if (upper === 'IA') return 'IA';
+    if (upper === 'DG' || upper === 'DG1' || upper === 'DG2') return 'DG';
+    return 'D9'; // D7, D8, D9
+  };
+
+  const [activeTab, setActiveTab] = useState<ManagementTab>(getNormalizedTab(initialStepCode));
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Aux data for IA
+  const [bulls, setBulls] = useState<Bull[]>([]);
+  const [semenBatches, setSemenBatches] = useState<SemenBatch[]>([]);
+  const [loadingAux, setLoadingAux] = useState(false);
+
+  // ----------------------------------------------------
+  // D0 State
+  // ----------------------------------------------------
+  const [d0Date, setD0Date] = useState(lot.start_date || getTodayDateString());
+  const [d0Responsible, setD0Responsible] = useState(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
+  const [d0Notes, setD0Notes] = useState('');
+  const [d0SelectedIds, setD0SelectedIds] = useState<string[]>([]);
+
+  // ----------------------------------------------------
+  // D9 State
+  // ----------------------------------------------------
+  const [d9Date, setD9Date] = useState(getTodayDateString());
+  const [d9Responsible, setD9Responsible] = useState(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
+  const [d9Notes, setD9Notes] = useState('');
+  const [d9DeviceLossIds, setD9DeviceLossIds] = useState<string[]>([]);
+
+  // ----------------------------------------------------
+  // IA State
+  // ----------------------------------------------------
+  const [iaDate, setIaDate] = useState(lot.ia_planned_date || getTodayDateString());
+  const [iaInseminator, setIaInseminator] = useState(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
+  const [iaDefaultBullId, setIaDefaultBullId] = useState('');
+  const [iaDefaultBatchId, setIaDefaultBatchId] = useState('');
+  const [iaDefaultEcc, setIaDefaultEcc] = useState('3.00');
+  const [iaNotes, setIaNotes] = useState('');
+
+  // Row by row overrides for IA
+  const [iaRows, setIaRows] = useState<
+    {
+      animal_id: string;
+      lot_animal_id: string;
+      tag_number: string;
+      category_name: string;
+      bull_id: string;
+      semen_batch_id: string;
+      inseminator_name: string;
+      ecc_ia: string;
+      skipped: boolean;
+    }[]
+  >([]);
+
+  // ----------------------------------------------------
+  // DG State
+  // ----------------------------------------------------
+  const [dgDate, setDgDate] = useState(lot.dg_planned_date || getTodayDateString());
+  const [dgResponsible, setDgResponsible] = useState(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
+  const [dgNotes, setDgNotes] = useState('');
+
+  // Row by row DG
+  const [dgRows, setDgRows] = useState<
+    {
+      animal_id: string;
+      lot_animal_id: string;
+      tag_number: string;
+      category_name: string;
+      pregnancy_status: 'prenha' | 'vazia' | 'inconclusivo';
+      ecc_dg: string;
+    }[]
+  >([]);
+
+  // Load aux data and initialize forms
+  useEffect(() => {
+    if (!isOpen) return;
+
+    setActiveTab(getNormalizedTab(initialStepCode));
+    setErrorMsg(null);
+
+    // Initial dates
+    setD0Date(lot.start_date || getTodayDateString());
+    setD0Responsible(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
+    setD0SelectedIds(lotAnimals.map((la) => la.animal_id));
+
+    setD9Date(getTodayDateString());
+    setD9Responsible(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
+    setD9DeviceLossIds([]);
+
+    setIaDate(lot.ia_planned_date || getTodayDateString());
+    setIaInseminator(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
+
+    setDgDate(lot.dg_planned_date || getTodayDateString());
+    setDgResponsible(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
+
+    // Initialize IA rows
+    setIaRows(
+      lotAnimals.map((la) => ({
+        animal_id: la.animal_id,
+        lot_animal_id: la.id,
+        tag_number: la.animals?.tag_number || 'S/N',
+        category_name: la.animals?.animal_categories?.name || 'Matriz',
+        bull_id: (la as unknown as { bull_id?: string }).bull_id || '',
+        semen_batch_id: (la as unknown as { semen_batch_id?: string }).semen_batch_id || '',
+        inseminator_name: la.inseminator_name || lot.responsible_name || '',
+        ecc_ia: la.ecc_ia ? la.ecc_ia.toFixed(2) : '3.00',
+        skipped: false,
+      }))
+    );
+
+    // Initialize DG rows
+    setDgRows(
+      lotAnimals.map((la) => ({
+        animal_id: la.animal_id,
+        lot_animal_id: la.id,
+        tag_number: la.animals?.tag_number || 'S/N',
+        category_name: la.animals?.animal_categories?.name || 'Matriz',
+        pregnancy_status:
+          la.pregnancy_status === 'prenha' || la.pregnancy_status === 'vazia'
+            ? la.pregnancy_status
+            : 'prenha', // Default suggestion
+        ecc_dg: la.ecc_dg ? la.ecc_dg.toFixed(2) : '3.00',
+      }))
+    );
+
+    // Load Bulls & Semen Batches
+    async function loadAux() {
+      setLoadingAux(true);
+      try {
+        const [bullsRes, batchesRes] = await Promise.all([
+          getBulls(),
+          getSemenBatches(),
+        ]);
+        setBulls(bullsRes || []);
+        setSemenBatches(batchesRes || []);
+
+        // Pick first bull as default if none selected
+        if (bullsRes && bullsRes.length > 0) {
+          const firstBullId = bullsRes[0].id;
+          setIaDefaultBullId(firstBullId);
+          const firstBatch = (batchesRes || []).find(
+            (b) =>
+              (b as unknown as { bull_id?: string }).bull_id === firstBullId ||
+              (b.bulls as Record<string, unknown> | null)?.id === firstBullId
+          );
+          if (firstBatch) {
+            setIaDefaultBatchId(firstBatch.id);
+          }
+        }
+      } catch (err) {
+        console.warn('Erro ao carregar auxiliares de IA:', err);
+      } finally {
+        setLoadingAux(false);
+      }
+    }
+
+    loadAux();
+  }, [isOpen, lot, lotAnimals, initialStepCode]);
+
+  // Available batches for selected default bull
+  const availableDefaultBatches = useMemo(() => {
+    if (!iaDefaultBullId) return semenBatches;
+    return semenBatches.filter(
+      (b) =>
+        (b as unknown as { bull_id?: string }).bull_id === iaDefaultBullId ||
+        (b.bulls as Record<string, unknown> | null)?.id === iaDefaultBullId ||
+        b.id === iaDefaultBatchId
+    );
+  }, [semenBatches, iaDefaultBullId, iaDefaultBatchId]);
+
+  // Apply default bull and batch to all IA rows
+  const handleApplyDefaultsToAllIaRows = () => {
+    setIaRows((prev) =>
+      prev.map((row) => ({
+        ...row,
+        bull_id: iaDefaultBullId || row.bull_id,
+        semen_batch_id: iaDefaultBatchId || row.semen_batch_id,
+        inseminator_name: iaInseminator || row.inseminator_name,
+        ecc_ia: iaDefaultEcc || row.ecc_ia,
+      }))
+    );
+  };
+
+  // Toggle Loss of device for an animal in D9
+  const handleToggleDeviceLoss = (animalId: string) => {
+    setD9DeviceLossIds((prev) =>
+      prev.includes(animalId) ? prev.filter((id) => id !== animalId) : [...prev, animalId]
+    );
+  };
+
+  // DG Bulk Actions
+  const handleSetAllDgStatus = (status: 'prenha' | 'vazia') => {
+    setDgRows((prev) =>
+      prev.map((r) => ({
+        ...r,
+        pregnancy_status: status,
+      }))
+    );
+  };
+
+  // Expected parturition preview for DG
+  const getExpectedParturitionDate = (pregnancyStatus: string) => {
+    if (pregnancyStatus !== 'prenha') return '-';
+    const baseDate = lot.ia_planned_date || dgDate;
+    if (!baseDate) return '-';
+    const parturitionStr = addDaysToDateString(baseDate, 295);
+    const parts = parturitionStr.split('-');
+    return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : parturitionStr;
+  };
+
+  // Submit Handler
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setErrorMsg(null);
+
+    try {
+      if (activeTab === 'D0') {
+        if (!d0Date) {
+          setErrorMsg('Informe a data de execução do D0.');
+          setSubmitting(false);
+          return;
+        }
+
+        const res = await executeBatchLotManagementD0({
+          lotId: lot.id,
+          executionDate: d0Date,
+          responsibleName: d0Responsible,
+          notes: d0Notes,
+          animalIds: d0SelectedIds,
+        });
+
+        if (!res.success) {
+          setErrorMsg(res.error || 'Erro ao registrar D0 em lote.');
+          setSubmitting(false);
+          return;
+        }
+      } else if (activeTab === 'D9') {
+        if (!d9Date) {
+          setErrorMsg('Informe a data de execução da retirada/aplicação D9.');
+          setSubmitting(false);
+          return;
+        }
+
+        const res = await executeBatchLotManagementD9({
+          lotId: lot.id,
+          stepCode: 'D9',
+          executionDate: d9Date,
+          responsibleName: d9Responsible,
+          notes: d9Notes,
+          deviceLossAnimalIds: d9DeviceLossIds,
+        });
+
+        if (!res.success) {
+          setErrorMsg(res.error || 'Erro ao registrar D9 em lote.');
+          setSubmitting(false);
+          return;
+        }
+      } else if (activeTab === 'IA') {
+        if (!iaDate) {
+          setErrorMsg('Informe a data da Inseminação Artificial.');
+          setSubmitting(false);
+          return;
+        }
+
+        const items = iaRows.map((r) => ({
+          animal_id: r.animal_id,
+          lot_animal_id: r.lot_animal_id,
+          bull_id: r.bull_id || iaDefaultBullId || null,
+          semen_batch_id: r.semen_batch_id || iaDefaultBatchId || null,
+          inseminator_name: r.inseminator_name || iaInseminator || null,
+          ecc_ia: r.ecc_ia ? parseFloat(r.ecc_ia) : null,
+          skipped: r.skipped,
+        }));
+
+        const res = await executeBatchLotManagementIA({
+          lotId: lot.id,
+          executionDate: iaDate,
+          defaultBullId: iaDefaultBullId || null,
+          defaultSemenBatchId: iaDefaultBatchId || null,
+          defaultInseminatorName: iaInseminator || null,
+          defaultEccIa: iaDefaultEcc ? parseFloat(iaDefaultEcc) : null,
+          notes: iaNotes,
+          items,
+        });
+
+        if (!res.success) {
+          setErrorMsg(res.error || 'Erro ao registrar Inseminação em lote.');
+          setSubmitting(false);
+          return;
+        }
+      } else if (activeTab === 'DG') {
+        if (!dgDate) {
+          setErrorMsg('Informe a data do Diagnóstico de Gestação.');
+          setSubmitting(false);
+          return;
+        }
+
+        const items = dgRows.map((r) => ({
+          animal_id: r.animal_id,
+          lot_animal_id: r.lot_animal_id,
+          pregnancy_status: r.pregnancy_status,
+          ecc_dg: r.ecc_dg ? parseFloat(r.ecc_dg) : null,
+        }));
+
+        const res = await executeBatchLotManagementDG({
+          lotId: lot.id,
+          executionDate: dgDate,
+          responsibleName: dgResponsible,
+          notes: dgNotes,
+          items,
+        });
+
+        if (!res.success) {
+          setErrorMsg(res.error || 'Erro ao registrar DG em lote.');
+          setSubmitting(false);
+          return;
+        }
+      }
+
+      onSuccess();
+      onClose();
+    } catch (err: unknown) {
+      console.error('Batch management error:', err);
+      setErrorMsg(err instanceof Error ? err.message : 'Erro inesperado ao salvar.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // DG Live Counters
+  const dgStats = useMemo(() => {
+    const total = dgRows.length;
+    const pregnant = dgRows.filter((r) => r.pregnancy_status === 'prenha').length;
+    const empty = dgRows.filter((r) => r.pregnancy_status === 'vazia').length;
+    const pending = total - pregnant - empty;
+    const rate = total > 0 ? ((pregnant / total) * 100).toFixed(1) : '0.0';
+    return { total, pregnant, empty, pending, rate };
+  }, [dgRows]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in">
+      <div className="glass-card w-full max-w-4xl max-h-[92vh] overflow-y-auto rounded-3xl border border-slate-700 bg-slate-900 p-5 sm:p-7 space-y-6 shadow-2xl">
+        {/* Header */}
+        <div className="flex items-start justify-between border-b border-slate-800 pb-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="p-2 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400">
+                <Sparkles className="w-5 h-5" />
+              </span>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-black text-white">Manejo Coletivo do Lote</h2>
+                  <span className="px-2.5 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 font-mono font-bold text-xs border border-emerald-500/30">
+                    {lot.code}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Execute a ação reprodutiva para todas as <strong>{lotAnimals.length} matrizes</strong> deste lote simultaneamente.
+                </p>
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Tab Navigation (D0, D9, IA, DG) */}
+        <div className="grid grid-cols-4 gap-2 bg-slate-950/80 p-1.5 rounded-2xl border border-slate-800">
+          {[
+            {
+              id: 'D0',
+              label: 'D0 - Implante',
+              sub: 'Início do Protocolo',
+              badge: 'Implante P4',
+              color: 'text-sky-400',
+              activeBg: 'bg-sky-500 text-slate-950 shadow-sky-500/30',
+            },
+            {
+              id: 'D9',
+              label: 'D9 - Retirada',
+              sub: 'PGF2a + eCG + Cip',
+              badge: 'Aplicações',
+              color: 'text-amber-400',
+              activeBg: 'bg-amber-400 text-slate-950 shadow-amber-400/30',
+            },
+            {
+              id: 'IA',
+              label: 'IA - Inseminação',
+              sub: 'Touro & Sêmen',
+              badge: 'Inseminação',
+              color: 'text-emerald-400',
+              activeBg: 'bg-emerald-500 text-slate-950 shadow-emerald-500/30',
+            },
+            {
+              id: 'DG',
+              label: 'DG - Gestação',
+              sub: 'Toque / Diagnóstico',
+              badge: 'Prenhez',
+              color: 'text-purple-400',
+              activeBg: 'bg-purple-500 text-white shadow-purple-500/30',
+            },
+          ].map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id as ManagementTab)}
+                className={`py-2.5 px-2 rounded-xl text-center transition-all cursor-pointer font-sans ${
+                  isActive
+                    ? `${tab.activeBg} font-black shadow-lg scale-[1.02]`
+                    : 'hover:bg-slate-800/80 text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <span className="block text-xs sm:text-sm font-black truncate">{tab.label}</span>
+                <span className={`block text-[10px] truncate ${isActive ? 'opacity-90 font-medium' : 'text-slate-500'}`}>
+                  {tab.sub}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Form Body */}
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {/* ============================================================== */}
+          {/* TAB: D0 (Implante / Início) */}
+          {/* ============================================================== */}
+          {activeTab === 'D0' && (
+            <div className="space-y-5 animate-in fade-in">
+              <div className="p-4 rounded-2xl bg-sky-500/10 border border-sky-500/30 text-sky-200 text-xs flex items-start gap-3">
+                <Syringe className="w-5 h-5 text-sky-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <span className="font-bold text-sm text-sky-300 block">Etapa D0 - Início do Protocolo do Lote</span>
+                  <p className="text-slate-300">
+                    Ao confirmar, o sistema registrará a inserção do dispositivo intravaginal de progesterona e a administração de Benzoato de Estradiol para todas as{' '}
+                    <strong className="text-white">{lotAnimals.length} matrizes</strong> vinculadas a este lote.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                    Data da Execução D0
+                  </label>
+                  <input
+                    type="date"
+                    value={d0Date}
+                    onChange={(e) => setD0Date(e.target.value)}
+                    required
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                    Responsável / Veterinário
+                  </label>
+                  <input
+                    type="text"
+                    value={d0Responsible}
+                    onChange={(e) => setD0Responsible(e.target.value)}
+                    placeholder="Ex: MV. Dr. Samoel Duarte"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-sky-500 font-sans"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                  Observações Gerais do Manejo D0
+                </label>
+                <textarea
+                  rows={2}
+                  value={d0Notes}
+                  onChange={(e) => setD0Notes(e.target.value)}
+                  placeholder="Ex: Todas as matrizes foram avaliadas, implantes novos inseridos sem intercorrências..."
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+              </div>
+
+              {/* Matrizes Preview */}
+              <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-slate-300 flex items-center gap-1.5">
+                    <Layers className="w-4 h-4 text-sky-400" /> Matrizes do Lote que Receberão D0 ({lotAnimals.length})
+                  </span>
+                  <span className="text-slate-400 font-mono text-[11px]">Protocolo: {lot.protocol_name || 'IATF'}</span>
+                </div>
+                <div className="flex flex-wrap gap-2 pt-2">
+                  {lotAnimals.map((la) => (
+                    <span
+                      key={la.id}
+                      className="px-2.5 py-1 rounded-lg bg-sky-500/10 border border-sky-500/30 text-sky-300 font-mono font-bold text-xs"
+                    >
+                      {la.animals?.tag_number || 'S/N'}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ============================================================== */}
+          {/* TAB: D9 (Retirada / Indutores) */}
+          {/* ============================================================== */}
+          {activeTab === 'D9' && (
+            <div className="space-y-5 animate-in fade-in">
+              <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-3">
+                <Activity className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <span className="font-bold text-sm text-amber-300 block">Etapa D9 - Retirada de Implante & Indução</span>
+                  <p className="text-slate-300">
+                    Registro coletivo de retirada do dispositivo e aplicação hormonal (PGF2a + eCG + Cipionato). Se alguma matriz perdeu o implante, marque a caixa correspondente abaixo.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                    Data da Retirada D9
+                  </label>
+                  <input
+                    type="date"
+                    value={d9Date}
+                    onChange={(e) => setD9Date(e.target.value)}
+                    required
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                    Responsável / Aplicador
+                  </label>
+                  <input
+                    type="text"
+                    value={d9Responsible}
+                    onChange={(e) => setD9Responsible(e.target.value)}
+                    placeholder="Ex: MV. Dr. Samoel Duarte"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-sans"
+                  />
+                </div>
+              </div>
+
+              {/* Tabela de Matrizes com Marcação de Perda de Dispositivo */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-slate-300">
+                    Conferência de Dispositivo das Matrizes ({lotAnimals.length})
+                  </span>
+                  <span className="text-[11px] text-amber-400">
+                    {d9DeviceLossIds.length > 0 ? `${d9DeviceLossIds.length} perda(s) registrada(s)` : 'Nenhuma perda (100% retido)'}
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-52 overflow-y-auto">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0">
+                      <tr>
+                        <th className="p-3">Brinco</th>
+                        <th className="p-3">Categoria</th>
+                        <th className="p-3 text-center">Status Retirada</th>
+                        <th className="p-3 text-center">Perda de Implante?</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80 font-mono">
+                      {lotAnimals.map((la) => {
+                        const hasLoss = d9DeviceLossIds.includes(la.animal_id);
+                        return (
+                          <tr key={la.id} className="hover:bg-slate-900 transition-colors">
+                            <td className="p-3 font-bold text-white font-mono">{la.animals?.tag_number || 'S/N'}</td>
+                            <td className="p-3 font-sans text-slate-400">{la.animals?.animal_categories?.name || 'Matriz'}</td>
+                            <td className="p-3 text-center font-sans">
+                              {hasLoss ? (
+                                <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-bold">
+                                  Interrompido (Perda)
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                                  Retirado & Hormonizado
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 text-center">
+                              <button
+                                type="button"
+                                onClick={() => handleToggleDeviceLoss(la.animal_id)}
+                                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                                  hasLoss
+                                    ? 'bg-rose-500 text-white font-extrabold shadow-sm shadow-rose-500/40'
+                                    : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'
+                                }`}
+                              >
+                                {hasLoss ? (
+                                  <>
+                                    <AlertTriangle className="w-3.5 h-3.5" /> Sim (Perdeu)
+                                  </>
+                                ) : (
+                                  <>
+                                    <Check className="w-3.5 h-3.5" /> Não (Normal)
+                                  </>
+                                )}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                  Observações D9
+                </label>
+                <textarea
+                  rows={2}
+                  value={d9Notes}
+                  onChange={(e) => setD9Notes(e.target.value)}
+                  placeholder="Ex: Aplicação de 2ml de PGF2a, 300UI de eCG e 1ml de Cipionato de Estradiol..."
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* ============================================================== */}
+          {/* TAB: IA (Inseminação Coletiva / em Massa) */}
+          {/* ============================================================== */}
+          {activeTab === 'IA' && (
+            <div className="space-y-5 animate-in fade-in">
+              <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 text-xs flex items-start gap-3">
+                <Award className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <span className="font-bold text-sm text-emerald-300 block">Etapa IA - Inseminação Artificial em Massa</span>
+                  <p className="text-slate-300">
+                    Defina o Touro, a Partida de Sêmen e o Inseminador no cabeçalho para aplicar a todas as matrizes, ou personalize animal por animal na tabela abaixo.
+                  </p>
+                </div>
+              </div>
+
+              {/* Controles Padrão (Batch Defaults) */}
+              <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" /> Padrão para Todas as Matrizes do Lote
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleApplyDefaultsToAllIaRows}
+                    className="text-xs font-bold px-3 py-1 bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 rounded-lg hover:bg-emerald-600/30 transition-all cursor-pointer flex items-center gap-1"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Replicar em Todas as Linhas
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 mb-1">Data da IA</label>
+                    <input
+                      type="date"
+                      value={iaDate}
+                      onChange={(e) => setIaDate(e.target.value)}
+                      required
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 mb-1">Inseminador</label>
+                    <input
+                      type="text"
+                      value={iaInseminator}
+                      onChange={(e) => setIaInseminator(e.target.value)}
+                      placeholder="Ex: MV. Samoel Duarte"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 font-sans"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 mb-1">Touro Padrão</label>
+                    <select
+                      value={iaDefaultBullId}
+                      onChange={(e) => {
+                        const newBullId = e.target.value;
+                        setIaDefaultBullId(newBullId);
+                        const matchBatch = semenBatches.find(
+                          (b) =>
+                            (b.bulls as Record<string, unknown> | null)?.id === newBullId ||
+                            (b as unknown as { bull_id?: string }).bull_id === newBullId
+                        );
+                        if (matchBatch) setIaDefaultBatchId(matchBatch.id);
+                      }}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 font-sans"
+                    >
+                      <option value="">Selecione o Touro...</option>
+                      {bulls.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name} ({b.breeds?.name || (b as unknown as { breed?: string }).breed || 'Bovino'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 mb-1">Partida de Sêmen</label>
+                    <select
+                      value={iaDefaultBatchId}
+                      onChange={(e) => setIaDefaultBatchId(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+                    >
+                      <option value="">Selecione a Partida...</option>
+                      {availableDefaultBatches.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          Lote {b.batch_number} (Saldo: {b.initial_quantity - b.used_quantity - (b.lost_quantity || 0)})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tabela de Matrizes IA */}
+              <div className="space-y-2">
+                <span className="block text-xs font-bold text-slate-300">
+                  Matrizes a Inseminar ({iaRows.filter((r) => !r.skipped).length} de {iaRows.length})
+                </span>
+
+                <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-56 overflow-y-auto">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0">
+                      <tr>
+                        <th className="p-2.5">Brinco</th>
+                        <th className="p-2.5">Categoria</th>
+                        <th className="p-2.5">Touro Utilizado</th>
+                        <th className="p-2.5">Partida Sêmen</th>
+                        <th className="p-2.5">ECC IA</th>
+                        <th className="p-2.5 text-center">Inseminar?</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80 font-sans">
+                      {iaRows.map((row, idx) => (
+                        <tr
+                          key={row.animal_id}
+                          className={`hover:bg-slate-900 transition-colors ${row.skipped ? 'opacity-40 bg-slate-950/80' : ''}`}
+                        >
+                          <td className="p-2.5 font-bold text-white font-mono">{row.tag_number}</td>
+                          <td className="p-2.5 text-slate-400 text-xs">{row.category_name}</td>
+                          <td className="p-2.5">
+                            <select
+                              value={row.bull_id || iaDefaultBullId}
+                              disabled={row.skipped}
+                              onChange={(e) => {
+                                const bId = e.target.value;
+                                setIaRows((prev) => {
+                                  const copy = [...prev];
+                                  copy[idx].bull_id = bId;
+                                  return copy;
+                                });
+                              }}
+                              className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-emerald-300 font-medium focus:outline-none"
+                            >
+                              <option value="">Selecione...</option>
+                              {bulls.map((b) => (
+                                <option key={b.id} value={b.id}>
+                                  {b.name}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="p-2.5">
+                            <select
+                              value={row.semen_batch_id || iaDefaultBatchId}
+                              disabled={row.skipped}
+                              onChange={(e) => {
+                                const batId = e.target.value;
+                                setIaRows((prev) => {
+                                  const copy = [...prev];
+                                  copy[idx].semen_batch_id = batId;
+                                  return copy;
+                                });
+                              }}
+                              className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200 font-mono focus:outline-none"
+                            >
+                              <option value="">Selecione...</option>
+                              {semenBatches.map((b) => (
+                                <option key={b.id} value={b.id}>
+                                  {b.batch_number}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="p-2.5">
+                            <input
+                              type="number"
+                              step="0.25"
+                              min="1"
+                              max="5"
+                              value={row.ecc_ia}
+                              disabled={row.skipped}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setIaRows((prev) => {
+                                  const copy = [...prev];
+                                  copy[idx].ecc_ia = val;
+                                  return copy;
+                                });
+                              }}
+                              className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono text-center focus:outline-none"
+                            />
+                          </td>
+                          <td className="p-2.5 text-center">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIaRows((prev) => {
+                                  const copy = [...prev];
+                                  copy[idx].skipped = !copy[idx].skipped;
+                                  return copy;
+                                });
+                              }}
+                              className={`p-1.5 rounded-lg text-xs transition-colors cursor-pointer ${
+                                row.skipped
+                                  ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30'
+                                  : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
+                              }`}
+                              title={row.skipped ? 'Marcar para inseminar' : 'Pular esta matriz'}
+                            >
+                              {row.skipped ? <X className="w-4 h-4" /> : <Check className="w-4 h-4" />}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                  Observações da Inseminação
+                </label>
+                <textarea
+                  rows={2}
+                  value={iaNotes}
+                  onChange={(e) => setIaNotes(e.target.value)}
+                  placeholder="Ex: Todas as matrizes foram inseminadas pela manhã, sêmen com excelente motilidade..."
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* ============================================================== */}
+          {/* TAB: DG (Diagnóstico de Gestação Rápido) */}
+          {/* ============================================================== */}
+          {activeTab === 'DG' && (
+            <div className="space-y-5 animate-in fade-in">
+              <div className="p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-purple-200 text-xs flex items-start gap-3">
+                <HeartPulse className="w-5 h-5 text-purple-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <span className="font-bold text-sm text-purple-300 block">Etapa DG - Diagnóstico de Gestação Coletivo</span>
+                  <p className="text-slate-300">
+                    Defina rapidamente o resultado (Prenha ou Vazia) para cada matriz. O sistema calcula a previsão de parto (+295 dias) automaticamente para as prenhas!
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                    Data do Exame DG
+                  </label>
+                  <input
+                    type="date"
+                    value={dgDate}
+                    onChange={(e) => setDgDate(e.target.value)}
+                    required
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                    Veterinário / Examinador
+                  </label>
+                  <input
+                    type="text"
+                    value={dgResponsible}
+                    onChange={(e) => setDgResponsible(e.target.value)}
+                    placeholder="Ex: MV. Dr. Samoel Duarte"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-purple-500 font-sans"
+                  />
+                </div>
+              </div>
+
+              {/* Placar de Diagnóstico & Ações Rápidas em Massa */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 p-3 rounded-2xl border border-slate-800">
+                <div className="flex items-center gap-3 text-xs font-bold">
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                    PRENHAS: {dgStats.pregnant}
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 border border-slate-700">
+                    VAZIAS: {dgStats.empty}
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                    TAXA PRENHEZ: {dgStats.rate}%
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleSetAllDgStatus('prenha')}
+                    className="px-2.5 py-1 text-xs font-bold bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg transition-all cursor-pointer"
+                  >
+                    Marcar Todas Prenhas
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSetAllDgStatus('vazia')}
+                    className="px-2.5 py-1 text-xs font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 rounded-lg transition-all cursor-pointer"
+                  >
+                    Marcar Todas Vazias
+                  </button>
+                </div>
+              </div>
+
+              {/* Tabela de Matrizes DG */}
+              <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-56 overflow-y-auto">
+                <table className="w-full text-left text-xs text-slate-300">
+                  <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0">
+                    <tr>
+                      <th className="p-3">Brinco</th>
+                      <th className="p-3">Categoria</th>
+                      <th className="p-3 text-center">Diagnóstico</th>
+                      <th className="p-3 text-center">ECC DG</th>
+                      <th className="p-3 text-center">Previsão Parto</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80 font-mono">
+                    {dgRows.map((row, idx) => (
+                      <tr key={row.animal_id} className="hover:bg-slate-900 transition-colors">
+                        <td className="p-3 font-bold text-white">{row.tag_number}</td>
+                        <td className="p-3 text-slate-400 font-sans">{row.category_name}</td>
+                        <td className="p-3 text-center">
+                          <div className="inline-flex items-center p-0.5 rounded-lg bg-slate-900 border border-slate-800 gap-1 font-sans">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDgRows((prev) => {
+                                  const copy = [...prev];
+                                  copy[idx].pregnancy_status = 'prenha';
+                                  return copy;
+                                });
+                              }}
+                              className={`px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
+                                row.pregnancy_status === 'prenha'
+                                  ? 'bg-emerald-500 text-slate-950 font-black shadow-sm'
+                                  : 'text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              Prenha
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDgRows((prev) => {
+                                  const copy = [...prev];
+                                  copy[idx].pregnancy_status = 'vazia';
+                                  return copy;
+                                });
+                              }}
+                              className={`px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
+                                row.pregnancy_status === 'vazia'
+                                  ? 'bg-rose-500 text-white font-black shadow-sm'
+                                  : 'text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              Vazia
+                            </button>
+                          </div>
+                        </td>
+                        <td className="p-3 text-center">
+                          <input
+                            type="number"
+                            step="0.25"
+                            min="1"
+                            max="5"
+                            value={row.ecc_dg}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setDgRows((prev) => {
+                                const copy = [...prev];
+                                copy[idx].ecc_dg = val;
+                                return copy;
+                              });
+                            }}
+                            className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono text-center focus:outline-none"
+                          />
+                        </td>
+                        <td className="p-3 text-center text-emerald-400 font-mono font-bold text-xs">
+                          {getExpectedParturitionDate(row.pregnancy_status)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                  Observações do Diagnóstico DG
+                </label>
+                <textarea
+                  rows={2}
+                  value={dgNotes}
+                  onChange={(e) => setDgNotes(e.target.value)}
+                  placeholder="Ex: Ultrassonografia aos 32 dias de gestação, boa viabilidade embrionária..."
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Feedback de Erro */}
+          {errorMsg && (
+            <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {/* Botões de Ação do Rodapé */}
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-800">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={submitting}
+              className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-300 hover:bg-slate-800 text-xs font-bold transition-all cursor-pointer"
+            >
+              Cancelar
+            </button>
+
+            <button
+              type="submit"
+              disabled={submitting}
+              className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-slate-950 text-xs font-black flex items-center gap-2 shadow-lg glow-emerald transition-all cursor-pointer disabled:opacity-50"
+            >
+              {submitting ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Gravando Ação Coletiva...
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4 stroke-3" />
+                  Salvar {activeTab} para Todas as {lotAnimals.length} Matrizes
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import AnimalManagementModal from '@/components/AnimalManagementModal';
+import BatchLotManagementModal from '@/components/BatchLotManagementModal';
 import {
   getLots,
   getLotAnimals,
@@ -53,6 +54,8 @@ import {
   Calendar,
   Pencil,
   FileText,
+  Award,
+  HeartPulse,
 } from 'lucide-react';
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
@@ -297,6 +300,15 @@ export default function LotsPage() {
       farm_id: lotFarmId,
     });
     setIsManagementModalOpen(true);
+  };
+
+  // Batch Lot Management Modal State
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [batchModalStep, setBatchModalStep] = useState<'D0' | 'D7' | 'D8' | 'D9' | 'IA' | 'DG'>('D9');
+
+  const handleOpenBatchManagement = (stepCode: 'D0' | 'D7' | 'D8' | 'D9' | 'IA' | 'DG' = 'D9') => {
+    setBatchModalStep(stepCode);
+    setBatchModalOpen(true);
   };
 
   // Quick Animal Form
@@ -1220,16 +1232,16 @@ export default function LotsPage() {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  router.push(`/agenda?date=${step.date}&lot=${encodeURIComponent(selectedLot.code)}`);
+                                  handleOpenBatchManagement(step.code as any);
                                 }}
-                                className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-extrabold transition-all duration-300 cursor-pointer touch-manipulation ${
+                                className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-extrabold transition-all duration-300 cursor-pointer touch-manipulation hover:scale-110 active:scale-95 ${
                                   isCurrentToday
-                                    ? 'bg-amber-400 text-slate-950 ring-4 ring-amber-400/30 shadow-lg shadow-amber-400/40 scale-110'
+                                    ? 'bg-amber-400 text-slate-950 ring-4 ring-amber-400/30 shadow-lg shadow-amber-400/40 scale-110 animate-pulse'
                                     : isCompleted
                                     ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 hover:bg-emerald-500/30'
-                                    : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                                    : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-500 hover:text-white'
                                 }`}
-                                title={`Abrir etapa ${step.code} (${step.formattedDate}) na Agenda`}
+                                title={`⚡ Executar manejo coletivo de ${step.code} (${step.formattedDate}) para todas as matrizes`}
                               >
                                 {isCompleted ? (
                                   <Check className="w-4 h-4 stroke-3" />
@@ -1238,18 +1250,39 @@ export default function LotsPage() {
                                 )}
                               </button>
 
-                              <div className="text-center mt-1.5">
-                                <span className="block text-[11px] font-bold text-slate-200">
+                              <div className="text-center mt-1.5 space-y-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenBatchManagement(step.code as any)}
+                                  className="block text-[11px] font-bold text-slate-200 hover:text-emerald-400 transition-colors cursor-pointer"
+                                  title={`⚡ Lançar ${step.code} para o lote`}
+                                >
                                   {step.code}
-                                </span>
+                                </button>
                                 <span className="block text-[10px] text-slate-400 font-mono">
                                   {step.formattedDate}
                                 </span>
+                                {/* Botão Rápido de Ação Coletiva na Etapa */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenBatchManagement(step.code as any)}
+                                  className={`text-[9px] font-black px-1.5 py-0.5 rounded-md border transition-all cursor-pointer inline-flex items-center gap-0.5 ${
+                                    isCurrentToday
+                                      ? 'bg-amber-400/20 text-amber-300 border-amber-400/40 hover:bg-amber-400/30'
+                                      : isCompleted
+                                      ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20 hover:bg-emerald-500/25'
+                                      : 'bg-slate-800/80 text-slate-400 border-slate-700 hover:text-slate-200 hover:bg-slate-800'
+                                  }`}
+                                  title={`Executar ${step.code} em lote`}
+                                >
+                                  <Sparkles className="w-2.5 h-2.5 text-amber-400" />
+                                  Manejar
+                                </button>
                               </div>
                             </div>
 
                             {idx < modalProgress.steps.length - 1 && (
-                              <div className="flex-1 mx-2 h-0.5 relative -mt-6">
+                              <div className="flex-1 mx-2 h-0.5 relative -mt-10">
                                 <div className="w-full h-full bg-slate-800 rounded-full" />
                                 <div
                                   className={`absolute top-0 left-0 h-full rounded-full transition-all duration-300 ${
@@ -1268,19 +1301,34 @@ export default function LotsPage() {
                     </div>
                   </div>
 
-                  {/* Botão de Ação Rápida para o Veterinário em Campo */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const targetDate = modalProgress.currentStepDate || selectedLot.start_date;
-                      router.push(`/agenda?date=${targetDate}&lot=${encodeURIComponent(selectedLot.code)}`);
-                    }}
-                    className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-slate-950 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md glow-emerald transition-all cursor-pointer touch-manipulation"
-                  >
-                    <Calendar className="w-4 h-4" />
-                    Abrir Manejo do Lote na Agenda de Campo
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
+                  {/* Botões de Ação Rápida para o Veterinário em Campo */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const currentStep = (modalProgress.steps.find((s) => s.isToday || s.status === 'upcoming')?.code || 'D9') as any;
+                        handleOpenBatchManagement(currentStep);
+                      }}
+                      className="py-2.5 px-4 rounded-xl bg-linear-to-r from-emerald-500 to-teal-400 hover:brightness-110 active:scale-[0.99] text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-all cursor-pointer touch-manipulation"
+                      title="Abrir formulário coletivo para aplicar ação a todas as matrizes do lote"
+                    >
+                      <Sparkles className="w-4 h-4 stroke-2" />
+                      Manejo Coletivo do Lote (Todas as Matrizes)
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targetDate = modalProgress.currentStepDate || selectedLot.start_date;
+                        router.push(`/agenda?date=${targetDate}&lot=${encodeURIComponent(selectedLot.code)}`);
+                      }}
+                      className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 active:bg-slate-800 text-slate-200 border border-slate-700 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer touch-manipulation"
+                    >
+                      <Calendar className="w-4 h-4 text-emerald-400" />
+                      Abrir na Agenda de Campo
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               );
             })()}
@@ -1293,12 +1341,28 @@ export default function LotsPage() {
                   Matrizes do Lote {loadingAnimals ? '(carregando...)' : `(${lotAnimals.length})`}
                 </h3>
 
-                <button
-                  onClick={openAddModal}
-                  className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-3.5 py-1.5 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 shadow-md glow-emerald cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" /> Inserir Mais Animais neste Lote
-                </button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {lotAnimals.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleOpenBatchManagement('D9');
+                      }}
+                      className="bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 font-bold px-3 py-1.5 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                      title="Gerar ação em lote para todas as matrizes"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                      Ação em Lote ({lotAnimals.length})
+                    </button>
+                  )}
+
+                  <button
+                    onClick={openAddModal}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-3.5 py-1.5 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 shadow-md glow-emerald cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" /> Inserir Mais Animais
+                  </button>
+                </div>
               </div>
 
               {loadingAnimals ? (
@@ -2182,6 +2246,25 @@ export default function LotsPage() {
           animalId={managementAnimal.id}
           animalTag={managementAnimal.tag_number}
           farmId={managementAnimal.farm_id}
+        />
+      )}
+
+      {/* Batch Lot Management Modal */}
+      {batchModalOpen && selectedLot && (
+        <BatchLotManagementModal
+          isOpen={batchModalOpen}
+          onClose={() => setBatchModalOpen(false)}
+          onSuccess={async () => {
+            showToast(`Manejo coletivo (${batchModalStep}) gravado com sucesso para todas as matrizes do lote "${selectedLot.code}"!`);
+            await loadLots();
+            if (selectedLotId) {
+              const updated = await getLotAnimals(selectedLotId, true);
+              setLotAnimals(updated);
+            }
+          }}
+          lot={selectedLot}
+          lotAnimals={lotAnimals}
+          initialStepCode={batchModalStep}
         />
       )}
     </div>
