@@ -696,13 +696,15 @@ class SyncEngine {
   public async recordOfflineLotAnimalDG(
     lotAnimalId: string,
     pregnancyStatus: 'prenha' | 'vazia' | 'repeticao',
-    eccDg?: number
+    eccDg?: number,
+    notes?: string | null
   ): Promise<void> {
     try {
       await offlineDb.lot_animals.update(lotAnimalId, {
         pregnancy_status: pregnancyStatus,
         ecc_dg: eccDg !== undefined ? eccDg : null,
         is_pregnant: pregnancyStatus === 'prenha',
+        ...(notes !== undefined ? { notes } : {}),
         updated_at: new Date().toISOString(),
       });
     } catch (e) {
@@ -715,6 +717,7 @@ class SyncEngine {
       updated_at: new Date().toISOString(),
     };
     if (eccDg !== undefined) updatePayload.ecc_dg = eccDg;
+    if (notes !== undefined && notes !== null) updatePayload.notes = notes;
     if (pregnancyStatus !== 'prenha') updatePayload.expected_parturition_date = null;
 
     await this.enqueueMutation('update', 'iatf_lot_animals', lotAnimalId, undefined, updatePayload);

@@ -27,10 +27,11 @@ import {
   processOutbound, 
   processTransfer, 
   processAdjustment, 
-  getCanisters 
+  getCanisters,
+  getOrCreateFarmClientRecord 
 } from '@/lib/services/geneticInventoryService';
 import { getTodayDateString } from '@/lib/dateUtils';
-import type { Bull } from '@/lib/db';
+import type { Bull, Farm } from '@/lib/db';
 
 export type MovementWizardMode = 'inbound' | 'outbound' | 'transfer' | 'adjustment';
 
@@ -53,6 +54,8 @@ interface MovementWizardProps {
   onClose: () => void;
   isMainFarm?: boolean;
   mainFarmName?: string;
+  farms?: Farm[];
+  activeFarmName?: string;
 }
 
 export default function MovementWizard({
@@ -68,6 +71,8 @@ export default function MovementWizard({
   onClose,
   isMainFarm = true,
   mainFarmName = 'Fazenda Principal',
+  farms = [],
+  activeFarmName,
 }: MovementWizardProps) {
   const [activeTab, setActiveTab] = useState<MovementWizardMode>(initialMode);
   const [submitting, setSubmitting] = useState(false);
@@ -99,7 +104,7 @@ export default function MovementWizard({
   // Destino
   const [inboundTankId, setInboundTankId] = useState(prefill?.tankId || tanks[0]?.id || '');
   const [inboundCanisterId, setInboundCanisterId] = useState(prefill?.canisterId || '');
-  const [inboundOwnerClientId, setInboundOwnerClientId] = useState('');
+  const [inboundOwnerSelection, setInboundOwnerSelection] = useState('');
   const [inboundQuantity, setInboundQuantity] = useState('');
   const [inboundReason, setInboundReason] = useState('Compra de material genético');
   const [inboundNotes, setInboundNotes] = useState('');
@@ -174,6 +179,12 @@ export default function MovementWizard({
   const selectedTransferBalance = balances.find((b) => b.id === transferBalanceId);
   const selectedAdjBalance = balances.find((b) => b.id === adjBalanceId);
 
+  // Separar clientes de terceiros de fazendas do grupo para o dropdown de posse
+  const farmNames = new Set(farms.map((f) => f.name.trim().toLowerCase()));
+  const thirdPartyClients = clients.filter(
+    (c) => !farmNames.has(c.name.trim().toLowerCase()) && !c.notes?.includes('Fazenda do Grupo')
+  );
+
   // Submeter Entrada
   const handleInboundSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -193,6 +204,27 @@ export default function MovementWizard({
     }
 
     setSubmitting(true);
+
+    // Resolução do proprietário (Fazenda atual, Fazenda do grupo ou Cliente terceiro)
+    let resolvedOwnerClientId: string | null = null;
+    if (inboundOwnerSelection.startsWith('farm:')) {
+      const targetFarmId = inboundOwnerSelection.replace('farm:', '');
+      const targetFarm = farms.find((f) => f.id === targetFarmId);
+      if (targetFarm) {
+        const linkRes = await getOrCreateFarmClientRecord(farmId, targetFarm);
+        if (!linkRes.success) {
+          setErrorMsg(linkRes.error || 'Erro ao vincular fazenda proprietária.');
+          setSubmitting(false);
+          return;
+        }
+        resolvedOwnerClientId = linkRes.clientId || null;
+      }
+    } else if (inboundOwnerSelection.startsWith('client:')) {
+      resolvedOwnerClientId = inboundOwnerSelection.replace('client:', '');
+    } else if (inboundOwnerSelection) {
+      resolvedOwnerClientId = inboundOwnerSelection;
+    }
+
     let payload: Parameters<typeof processInbound>[1];
 
     if (inboundIsNew) {
@@ -218,7 +250,7 @@ export default function MovementWizard({
         costPerUnit: inboundCost ? parseFloat(inboundCost) : 0,
         tankId: inboundTankId,
         canisterId: inboundCanisterId,
-        ownerClientId: inboundOwnerClientId || null,
+        ownerClientId: resolvedOwnerClientId,
         quantity: qty,
         reason: inboundReason,
         notes: inboundNotes || undefined,
@@ -237,7 +269,7 @@ export default function MovementWizard({
         materialType: b.genetic_material_batches?.genetic_materials?.type || 'SEMEN',
         tankId: inboundTankId,
         canisterId: inboundCanisterId,
-        ownerClientId: inboundOwnerClientId || null,
+        ownerClientId: resolvedOwnerClientId,
         quantity: qty,
         reason: inboundReason,
         notes: inboundNotes || undefined,
@@ -766,14 +798,32 @@ export default function MovementWizard({
                   <div>
                     <label className="block text-xs font-semibold text-slate-400 mb-1">Proprietário (Posse)</label>
                     <select
-                      value={inboundOwnerClientId}
-                      onChange={(e) => setInboundOwnerClientId(e.target.value)}
+                      value={inboundOwnerSelection}
+                      onChange={(e) => setInboundOwnerSelection(e.target.value)}
                       className="w-full bg-slate-900 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
                     >
-                      <option value="">Fazenda (Estoque Próprio)</option>
-                      {clients.map((cl) => (
-                        <option key={cl.id} value={cl.id}>Cliente: {cl.name}</option>
-                      ))}
+                      <optgroup label="🏢 Suas Fazendas">
+                        <option value="">
+                          {activeFarmName || mainFarmName || 'Fazenda Atual'} (Estoque Próprio)
+                        </option>
+                        {farms
+                          .filter((f) => f.id !== farmId)
+                          .map((f) => (
+                            <option key={f.id} value={`farm:${f.id}`}>
+                              {f.name} (Fazenda do Grupo)
+                            </option>
+                          ))}
+                      </optgroup>
+
+                      {thirdPartyClients.length > 0 && (
+                        <optgroup label="👤 Clientes de Custódia (Terceiros)">
+                          {thirdPartyClients.map((cl) => (
+                            <option key={cl.id} value={`client:${cl.id}`}>
+                              Cliente: {cl.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
                     </select>
                   </div>
                 </div>

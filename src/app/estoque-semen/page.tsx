@@ -562,6 +562,8 @@ export default function EstoqueSemenPage() {
           onClose={() => setWizardOpen(false)}
           isMainFarm={isMainFarm}
           mainFarmName={mainFarm?.name}
+          farms={farms}
+          activeFarmName={activeFarm?.name}
         />
       )}
 

@@ -7787,6 +7787,7 @@ export async function executeBatchLotManagementDG(params: {
     lot_animal_id: string;
     pregnancy_status: 'prenha' | 'vazia' | 'inconclusivo';
     ecc_dg?: number | null;
+    notes?: string | null;
   }[];
 }): Promise<{ success: boolean; count: number; error?: string }> {
   const isOffline = isSystemOffline();
@@ -7810,10 +7811,11 @@ export async function executeBatchLotManagementDG(params: {
         }
 
         const offlineStatus = item.pregnancy_status === 'inconclusivo' ? 'repeticao' : item.pregnancy_status;
-        await syncEngine.recordOfflineLotAnimalDG(item.lot_animal_id, offlineStatus, item.ecc_dg || undefined);
-        if (expectedParturition) {
+        await syncEngine.recordOfflineLotAnimalDG(item.lot_animal_id, offlineStatus, item.ecc_dg || undefined, item.notes || null);
+        if (expectedParturition || item.notes) {
           await offlineDb.lot_animals.update(item.lot_animal_id, {
-            expected_parturition_date: expectedParturition,
+            ...(expectedParturition ? { expected_parturition_date: expectedParturition } : {}),
+            ...(item.notes ? { notes: item.notes } : {}),
           });
         }
 
@@ -7831,7 +7833,7 @@ export async function executeBatchLotManagementDG(params: {
             executed_at: params.executionDate,
             pregnancy_status: item.pregnancy_status,
             ecc_dg: item.ecc_dg || undefined,
-            notes: params.notes || null,
+            notes: item.notes || params.notes || null,
           });
         }
       }
@@ -7893,6 +7895,7 @@ export async function executeBatchLotManagementDG(params: {
         pregnancy_status: item.pregnancy_status,
         ecc_dg: item.ecc_dg !== undefined && item.ecc_dg !== null ? Number(item.ecc_dg) : null,
         expected_parturition_date: expectedParturition,
+        notes: item.notes || null,
         updated_at: todayIso,
       })
       .eq('id', item.lot_animal_id);
@@ -7924,7 +7927,7 @@ export async function executeBatchLotManagementDG(params: {
           pregnancy_status: item.pregnancy_status,
           ecc_dg: item.ecc_dg !== undefined && item.ecc_dg !== null ? Number(item.ecc_dg) : null,
           expected_parturition_date: expectedParturition,
-          dg_notes: params.notes || null,
+          dg_notes: item.notes || params.notes || null,
           status: 'concluido',
           updated_at: todayIso,
         })

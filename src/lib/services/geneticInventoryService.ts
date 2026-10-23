@@ -1096,6 +1096,56 @@ export async function createClientRecord(
   return { success: true, client: data };
 }
 
+/**
+ * Garante que uma fazenda do grupo/organização possua um registro em genetic_clients
+ * da fazenda ativa (para servir de proprietário sob custódia).
+ */
+export async function getOrCreateFarmClientRecord(
+  activeFarmId: string,
+  targetFarm: { id: string; name: string }
+): Promise<{ success: boolean; clientId?: string; error?: string }> {
+  const orgId = await getCurrentOrgId();
+  if (!orgId || !activeFarmId) return { success: false, error: 'Fazenda ativa não identificada.' };
+
+  const supabase = createClient();
+
+  // 1. Procurar se já existe registro de cliente com o mesmo nome nesta fazenda
+  const { data: existingList, error: searchErr } = await supabase
+    .from('genetic_clients')
+    .select('id, name')
+    .eq('farm_id', activeFarmId);
+
+  if (searchErr) {
+    console.error('getOrCreateFarmClientRecord search error:', searchErr);
+  }
+
+  const targetNameNorm = targetFarm.name.trim().toLowerCase();
+  const match = existingList?.find((c) => c.name.trim().toLowerCase() === targetNameNorm);
+
+  if (match) {
+    return { success: true, clientId: match.id };
+  }
+
+  // 2. Não existe ainda: inserir cliente representando a fazenda do grupo
+  const { data, error } = await supabase
+    .from('genetic_clients')
+    .insert({
+      organization_id: orgId,
+      farm_id: activeFarmId,
+      name: targetFarm.name.trim(),
+      notes: `Fazenda do Grupo / Organização (ID: ${targetFarm.id})`,
+    })
+    .select('id')
+    .single();
+
+  if (error || !data) {
+    console.error('getOrCreateFarmClientRecord insert error:', error);
+    return { success: false, error: error?.message || 'Erro ao vincular fazenda como proprietária.' };
+  }
+
+  return { success: true, clientId: data.id };
+}
+
 export async function getGeneticCenters(): Promise<GeneticCenter[]> {
   const supabase = createClient();
   const { data, error } = await supabase

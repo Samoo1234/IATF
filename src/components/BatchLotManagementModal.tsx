@@ -27,6 +27,7 @@ import {
   CheckCircle2,
   Activity,
   Award,
+  Search,
 } from 'lucide-react';
 
 interface BatchLotManagementModalProps {
@@ -114,6 +115,7 @@ export default function BatchLotManagementModal({
   const [dgDate, setDgDate] = useState(lot.dg_planned_date || getTodayDateString());
   const [dgResponsible, setDgResponsible] = useState(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
   const [dgNotes, setDgNotes] = useState('');
+  const [dgSearchQuery, setDgSearchQuery] = useState('');
 
   // Row by row DG
   const [dgRows, setDgRows] = useState<
@@ -124,6 +126,7 @@ export default function BatchLotManagementModal({
       category_name: string;
       pregnancy_status: 'prenha' | 'vazia' | 'inconclusivo';
       ecc_dg: string;
+      notes: string;
     }[]
   >([]);
 
@@ -176,8 +179,10 @@ export default function BatchLotManagementModal({
             ? la.pregnancy_status
             : 'prenha', // Default suggestion
         ecc_dg: la.ecc_dg ? la.ecc_dg.toFixed(2) : '3.00',
+        notes: (la as unknown as { notes?: string }).notes || '',
       }))
     );
+    setDgSearchQuery('');
 
     // Load Bulls & Semen Batches
     async function loadAux() {
@@ -244,14 +249,41 @@ export default function BatchLotManagementModal({
     );
   };
 
+  // Atualizar linha de DG pelo ID único do animal (blindado contra filtros e buscas)
+  const updateDgRow = (animalId: string, updates: Partial<(typeof dgRows)[number]>) => {
+    setDgRows((prev) =>
+      prev.map((row) => (row.animal_id === animalId ? { ...row, ...updates } : row))
+    );
+  };
+
+  // Linhas filtradas pela busca rápida de matrizes
+  const filteredDgRows = useMemo(() => {
+    if (!dgSearchQuery.trim()) return dgRows;
+    const q = dgSearchQuery.trim().toLowerCase();
+    return dgRows.filter(
+      (r) =>
+        r.tag_number.toLowerCase().includes(q) ||
+        r.category_name.toLowerCase().includes(q) ||
+        (r.notes && r.notes.toLowerCase().includes(q))
+    );
+  }, [dgRows, dgSearchQuery]);
+
   // DG Bulk Actions
   const handleSetAllDgStatus = (status: 'prenha' | 'vazia') => {
-    setDgRows((prev) =>
-      prev.map((r) => ({
-        ...r,
-        pregnancy_status: status,
-      }))
-    );
+    if (dgSearchQuery.trim()) {
+      // Se houver busca ativa, altera apenas as matrizes visíveis filtradas
+      const targetIds = new Set(filteredDgRows.map((r) => r.animal_id));
+      setDgRows((prev) =>
+        prev.map((r) => (targetIds.has(r.animal_id) ? { ...r, pregnancy_status: status } : r))
+      );
+    } else {
+      setDgRows((prev) =>
+        prev.map((r) => ({
+          ...r,
+          pregnancy_status: status,
+        }))
+      );
+    }
   };
 
   // Expected parturition preview for DG
@@ -357,6 +389,7 @@ export default function BatchLotManagementModal({
           lot_animal_id: r.lot_animal_id,
           pregnancy_status: r.pregnancy_status,
           ecc_dg: r.ecc_dg ? parseFloat(r.ecc_dg) : null,
+          notes: r.notes?.trim() || null,
         }));
 
         const res = await executeBatchLotManagementDG({
@@ -1008,84 +1041,129 @@ export default function BatchLotManagementModal({
                 </div>
               </div>
 
+              {/* Barra de Busca da Matriz */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-950 p-3 rounded-2xl border border-slate-800">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-purple-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={dgSearchQuery}
+                    onChange={(e) => setDgSearchQuery(e.target.value)}
+                    placeholder="Buscar matriz por brinco (ex: 2003) ou categoria..."
+                    className="w-full bg-slate-900 border border-slate-700/80 rounded-xl pl-10 pr-9 py-2 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500 font-sans"
+                  />
+                  {dgSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setDgSearchQuery('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                      title="Limpar busca"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between sm:justify-end gap-2 text-xs text-slate-400 px-1">
+                  <span className="font-mono text-[11px] sm:text-xs">
+                    {filteredDgRows.length === dgRows.length ? (
+                      <span>Total: <strong className="text-white">{dgRows.length}</strong> matrizes</span>
+                    ) : (
+                      <span>
+                        Mostrando <strong className="text-purple-300">{filteredDgRows.length}</strong> de{' '}
+                        <strong className="text-white">{dgRows.length}</strong> matrizes
+                      </span>
+                    )}
+                  </span>
+                  {dgSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setDgSearchQuery('')}
+                      className="text-[11px] text-purple-400 hover:text-purple-300 font-bold underline cursor-pointer ml-1"
+                    >
+                      Ver todas
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* Tabela de Matrizes DG */}
-              <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-56 overflow-y-auto">
+              <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-72 overflow-y-auto">
                 <table className="w-full text-left text-xs text-slate-300">
-                  <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0">
+                  <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0 z-10">
                     <tr>
                       <th className="p-3">Brinco</th>
                       <th className="p-3">Categoria</th>
                       <th className="p-3 text-center">Diagnóstico</th>
+                      <th className="p-3">Observação</th>
                       <th className="p-3 text-center">ECC DG</th>
                       <th className="p-3 text-center">Previsão Parto</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/80 font-mono">
-                    {dgRows.map((row, idx) => (
-                      <tr key={row.animal_id} className="hover:bg-slate-900 transition-colors">
-                        <td className="p-3 font-bold text-white">{row.tag_number}</td>
-                        <td className="p-3 text-slate-400 font-sans">{row.category_name}</td>
-                        <td className="p-3 text-center">
-                          <div className="inline-flex items-center p-0.5 rounded-lg bg-slate-900 border border-slate-800 gap-1 font-sans">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDgRows((prev) => {
-                                  const copy = [...prev];
-                                  copy[idx].pregnancy_status = 'prenha';
-                                  return copy;
-                                });
-                              }}
-                              className={`px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
-                                row.pregnancy_status === 'prenha'
-                                  ? 'bg-emerald-500 text-slate-950 font-black shadow-sm'
-                                  : 'text-slate-400 hover:text-white'
-                              }`}
-                            >
-                              Prenha
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDgRows((prev) => {
-                                  const copy = [...prev];
-                                  copy[idx].pregnancy_status = 'vazia';
-                                  return copy;
-                                });
-                              }}
-                              className={`px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
-                                row.pregnancy_status === 'vazia'
-                                  ? 'bg-rose-500 text-white font-black shadow-sm'
-                                  : 'text-slate-400 hover:text-white'
-                              }`}
-                            >
-                              Vazia
-                            </button>
-                          </div>
-                        </td>
-                        <td className="p-3 text-center">
-                          <input
-                            type="number"
-                            step="0.25"
-                            min="1"
-                            max="5"
-                            value={row.ecc_dg}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setDgRows((prev) => {
-                                const copy = [...prev];
-                                copy[idx].ecc_dg = val;
-                                return copy;
-                              });
-                            }}
-                            className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono text-center focus:outline-none"
-                          />
-                        </td>
-                        <td className="p-3 text-center text-emerald-400 font-mono font-bold text-xs">
-                          {getExpectedParturitionDate(row.pregnancy_status)}
+                    {filteredDgRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="p-6 text-center text-slate-400 font-sans">
+                          Nenhuma matriz encontrada com o termo &quot;{dgSearchQuery}&quot;.
                         </td>
                       </tr>
-                    ))}
+                    ) : (
+                      filteredDgRows.map((row) => (
+                        <tr key={row.animal_id} className="hover:bg-slate-900 transition-colors">
+                          <td className="p-3 font-bold text-white whitespace-nowrap">{row.tag_number}</td>
+                          <td className="p-3 text-slate-400 font-sans whitespace-nowrap">{row.category_name}</td>
+                          <td className="p-3 text-center whitespace-nowrap">
+                            <div className="inline-flex items-center p-0.5 rounded-lg bg-slate-900 border border-slate-800 gap-1 font-sans">
+                              <button
+                                type="button"
+                                onClick={() => updateDgRow(row.animal_id, { pregnancy_status: 'prenha' })}
+                                className={`px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
+                                  row.pregnancy_status === 'prenha'
+                                    ? 'bg-emerald-500 text-slate-950 font-black shadow-sm'
+                                    : 'text-slate-400 hover:text-white'
+                                }`}
+                              >
+                                Prenha
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => updateDgRow(row.animal_id, { pregnancy_status: 'vazia' })}
+                                className={`px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
+                                  row.pregnancy_status === 'vazia'
+                                    ? 'bg-rose-500 text-white font-black shadow-sm'
+                                    : 'text-slate-400 hover:text-white'
+                                }`}
+                              >
+                                Vazia
+                              </button>
+                            </div>
+                          </td>
+                          <td className="p-3 min-w-[200px]">
+                            <input
+                              type="text"
+                              placeholder="Ex: 35 dias, CL D, reavaliar..."
+                              value={row.notes || ''}
+                              onChange={(e) => updateDgRow(row.animal_id, { notes: e.target.value })}
+                              className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-purple-500 font-sans"
+                            />
+                          </td>
+                          <td className="p-3 text-center whitespace-nowrap">
+                            <input
+                              type="number"
+                              step="0.25"
+                              min="1"
+                              max="5"
+                              value={row.ecc_dg}
+                              onChange={(e) => updateDgRow(row.animal_id, { ecc_dg: e.target.value })}
+                              className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono text-center focus:outline-none focus:border-purple-500"
+                            />
+                          </td>
+                          <td className="p-3 text-center text-emerald-400 font-mono font-bold text-xs whitespace-nowrap">
+                            {getExpectedParturitionDate(row.pregnancy_status)}
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
