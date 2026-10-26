@@ -1263,22 +1263,24 @@ export default function LotsPage() {
                                 <span className="block text-[10px] text-slate-400 font-mono">
                                   {step.formattedDate}
                                 </span>
-                                {/* Botão Rápido de Ação Coletiva na Etapa */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenBatchManagement(step.code)}
-                                  className={`text-[9px] font-black px-1.5 py-0.5 rounded-md border transition-all cursor-pointer inline-flex items-center gap-0.5 ${
-                                    isCurrentToday
-                                      ? 'bg-amber-400/20 text-amber-300 border-amber-400/40 hover:bg-amber-400/30'
-                                      : isCompleted
-                                      ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20 hover:bg-emerald-500/25'
-                                      : 'bg-slate-800/80 text-slate-400 border-slate-700 hover:text-slate-200 hover:bg-slate-800'
-                                  }`}
-                                  title={`Executar ${step.code} em lote`}
-                                >
-                                  <Sparkles className="w-2.5 h-2.5 text-amber-400" />
-                                  Manejar
-                                </button>
+                                {/* Botão Rápido de Ação Coletiva na Etapa (não exibido para IA e DG) */}
+                                {step.code !== 'IA' && step.code !== 'DG' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenBatchManagement(step.code)}
+                                    className={`text-[9px] font-black px-1.5 py-0.5 rounded-md border transition-all cursor-pointer inline-flex items-center gap-0.5 ${
+                                      isCurrentToday
+                                        ? 'bg-amber-400/20 text-amber-300 border-amber-400/40 hover:bg-amber-400/30'
+                                        : isCompleted
+                                        ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20 hover:bg-emerald-500/25'
+                                        : 'bg-slate-800/80 text-slate-400 border-slate-700 hover:text-slate-200 hover:bg-slate-800'
+                                    }`}
+                                    title={`Executar ${step.code} em lote`}
+                                  >
+                                    <Sparkles className="w-2.5 h-2.5 text-amber-400" />
+                                    Manejar
+                                  </button>
+                                )}
                               </div>
                             </div>
 

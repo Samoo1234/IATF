@@ -7585,6 +7585,7 @@ export async function executeBatchLotManagementIA(params: {
     inseminator_name?: string | null;
     ecc_ia?: number | null;
     skipped?: boolean;
+    notes?: string | null;
   }[];
 }): Promise<{ success: boolean; count: number; error?: string }> {
   const isOffline = isSystemOffline();
@@ -7608,6 +7609,7 @@ export async function executeBatchLotManagementIA(params: {
           semen_batch_id: batchId || undefined,
           inseminator_name: inseminator || undefined,
           ecc_ia: ecc || undefined,
+          ...(item.notes ? { notes: item.notes } : {}),
           updated_at: todayIso,
         });
 
@@ -7617,6 +7619,7 @@ export async function executeBatchLotManagementIA(params: {
           semen_batch_id: batchId || null,
           inseminator_name: inseminator || null,
           ecc_ia: ecc || null,
+          ...(item.notes ? { notes: item.notes } : {}),
           updated_at: todayIso,
         });
 
@@ -7636,7 +7639,7 @@ export async function executeBatchLotManagementIA(params: {
             semen_batch_id: batchId,
             inseminator_name: inseminator,
             ecc_ia: ecc != null ? String(ecc) : null,
-            notes: params.notes || null,
+            notes: item.notes || params.notes || null,
           });
         }
       }
@@ -7696,6 +7699,7 @@ export async function executeBatchLotManagementIA(params: {
         semen_batch_id: batchId,
         inseminator_name: inseminator,
         ecc_ia: ecc != null ? Number(ecc) : null,
+        notes: item.notes || null,
         updated_at: todayIso,
       })
       .eq('id', item.lot_animal_id);
@@ -7728,7 +7732,7 @@ export async function executeBatchLotManagementIA(params: {
           semen_batch_id: batchId,
           inseminator_name: inseminator,
           ecc_ia: ecc != null ? Number(ecc) : null,
-          ia_notes: params.notes || null,
+          ia_notes: item.notes || params.notes || null,
           updated_at: todayIso,
         })
         .eq('id', mgmtId);

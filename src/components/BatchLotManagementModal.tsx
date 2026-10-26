@@ -93,6 +93,7 @@ export default function BatchLotManagementModal({
   const [iaDefaultBatchId, setIaDefaultBatchId] = useState('');
   const [iaDefaultEcc, setIaDefaultEcc] = useState('3.00');
   const [iaNotes, setIaNotes] = useState('');
+  const [iaSearchQuery, setIaSearchQuery] = useState('');
 
   // Row by row overrides for IA
   const [iaRows, setIaRows] = useState<
@@ -106,6 +107,7 @@ export default function BatchLotManagementModal({
       inseminator_name: string;
       ecc_ia: string;
       skipped: boolean;
+      notes: string;
     }[]
   >([]);
 
@@ -164,8 +166,10 @@ export default function BatchLotManagementModal({
         inseminator_name: la.inseminator_name || lot.responsible_name || '',
         ecc_ia: la.ecc_ia ? la.ecc_ia.toFixed(2) : '3.00',
         skipped: false,
+        notes: (la as unknown as { notes?: string }).notes || '',
       }))
     );
+    setIaSearchQuery('');
 
     // Initialize DG rows
     setDgRows(
@@ -229,17 +233,75 @@ export default function BatchLotManagementModal({
     );
   }, [semenBatches, iaDefaultBullId, iaDefaultBatchId]);
 
-  // Apply default bull and batch to all IA rows
-  const handleApplyDefaultsToAllIaRows = () => {
+  // Atualizar linha de IA pelo ID único do animal (blindado contra filtros e buscas)
+  const updateIaRow = (animalId: string, updates: Partial<(typeof iaRows)[number]>) => {
     setIaRows((prev) =>
-      prev.map((row) => ({
-        ...row,
-        bull_id: iaDefaultBullId || row.bull_id,
-        semen_batch_id: iaDefaultBatchId || row.semen_batch_id,
-        inseminator_name: iaInseminator || row.inseminator_name,
-        ecc_ia: iaDefaultEcc || row.ecc_ia,
-      }))
+      prev.map((row) => (row.animal_id === animalId ? { ...row, ...updates } : row))
     );
+  };
+
+  // Linhas filtradas pela busca rápida de matrizes na IA
+  const filteredIaRows = useMemo(() => {
+    if (!iaSearchQuery.trim()) return iaRows;
+    const q = iaSearchQuery.trim().toLowerCase();
+    return iaRows.filter((r) => {
+      const bull = bulls.find((b) => b.id === r.bull_id);
+      const batch = semenBatches.find((b) => b.id === r.semen_batch_id);
+      return (
+        r.tag_number.toLowerCase().includes(q) ||
+        r.category_name.toLowerCase().includes(q) ||
+        (bull && bull.name.toLowerCase().includes(q)) ||
+        (batch && batch.batch_number.toLowerCase().includes(q)) ||
+        (r.notes && r.notes.toLowerCase().includes(q))
+      );
+    });
+  }, [iaRows, iaSearchQuery, bulls, semenBatches]);
+
+  // Apply default bull and batch to IA rows (respeita busca ativa se houver)
+  const handleApplyDefaultsToAllIaRows = () => {
+    if (iaSearchQuery.trim()) {
+      const targetIds = new Set(filteredIaRows.map((r) => r.animal_id));
+      setIaRows((prev) =>
+        prev.map((row) =>
+          targetIds.has(row.animal_id)
+            ? {
+                ...row,
+                bull_id: iaDefaultBullId || row.bull_id,
+                semen_batch_id: iaDefaultBatchId || row.semen_batch_id,
+                inseminator_name: iaInseminator || row.inseminator_name,
+                ecc_ia: iaDefaultEcc || row.ecc_ia,
+              }
+            : row
+        )
+      );
+    } else {
+      setIaRows((prev) =>
+        prev.map((row) => ({
+          ...row,
+          bull_id: iaDefaultBullId || row.bull_id,
+          semen_batch_id: iaDefaultBatchId || row.semen_batch_id,
+          inseminator_name: iaInseminator || row.inseminator_name,
+          ecc_ia: iaDefaultEcc || row.ecc_ia,
+        }))
+      );
+    }
+  };
+
+  // Ações em massa para IA (Inseminar Todas / Pular Todas)
+  const handleSetAllIaSkipped = (skipped: boolean) => {
+    if (iaSearchQuery.trim()) {
+      const targetIds = new Set(filteredIaRows.map((r) => r.animal_id));
+      setIaRows((prev) =>
+        prev.map((r) => (targetIds.has(r.animal_id) ? { ...r, skipped } : r))
+      );
+    } else {
+      setIaRows((prev) =>
+        prev.map((r) => ({
+          ...r,
+          skipped,
+        }))
+      );
+    }
   };
 
   // Toggle Loss of device for an animal in D9
@@ -359,6 +421,7 @@ export default function BatchLotManagementModal({
           inseminator_name: r.inseminator_name || iaInseminator || null,
           ecc_ia: r.ecc_ia ? parseFloat(r.ecc_ia) : null,
           skipped: r.skipped,
+          notes: r.notes?.trim() || null,
         }));
 
         const res = await executeBatchLotManagementIA({
@@ -416,6 +479,15 @@ export default function BatchLotManagementModal({
       setSubmitting(false);
     }
   };
+
+  // IA Live Counters
+  const iaStats = useMemo(() => {
+    const total = iaRows.length;
+    const toInseminate = iaRows.filter((r) => !r.skipped).length;
+    const skipped = total - toInseminate;
+    const rate = total > 0 ? ((toInseminate / total) * 100).toFixed(1) : '0.0';
+    return { total, toInseminate, skipped, rate };
+  }, [iaRows]);
 
   // DG Live Counters
   const dgStats = useMemo(() => {
@@ -835,117 +907,183 @@ export default function BatchLotManagementModal({
                 </div>
               </div>
 
+              {/* Placar de IA & Ações Rápidas em Massa */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 p-3 rounded-2xl border border-slate-800">
+                <div className="flex items-center gap-3 text-xs font-bold flex-wrap">
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                    A INSEMINAR: {iaStats.toInseminate}
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 border border-slate-700">
+                    PULADAS: {iaStats.skipped}
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                    APROVEITAMENTO: {iaStats.rate}%
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleSetAllIaSkipped(false)}
+                    className="px-2.5 py-1 text-xs font-bold bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg transition-all cursor-pointer"
+                  >
+                    Inseminar Todas
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSetAllIaSkipped(true)}
+                    className="px-2.5 py-1 text-xs font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 rounded-lg transition-all cursor-pointer"
+                  >
+                    Pular Todas
+                  </button>
+                </div>
+              </div>
+
+              {/* Barra de Busca da Matriz na IA */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-950 p-3 rounded-2xl border border-slate-800">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-emerald-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={iaSearchQuery}
+                    onChange={(e) => setIaSearchQuery(e.target.value)}
+                    placeholder="Buscar matriz por brinco (ex: 2003), categoria ou touro..."
+                    className="w-full bg-slate-900 border border-slate-700/80 rounded-xl pl-10 pr-9 py-2 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-sans"
+                  />
+                  {iaSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setIaSearchQuery('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                      title="Limpar busca"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between sm:justify-end gap-2 text-xs text-slate-400 px-1">
+                  <span className="font-mono text-[11px] sm:text-xs">
+                    {filteredIaRows.length === iaRows.length ? (
+                      <span>Total: <strong className="text-white">{iaRows.length}</strong> matrizes</span>
+                    ) : (
+                      <span>
+                        Mostrando <strong className="text-emerald-300">{filteredIaRows.length}</strong> de{' '}
+                        <strong className="text-white">{iaRows.length}</strong> matrizes
+                      </span>
+                    )}
+                  </span>
+                  {iaSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setIaSearchQuery('')}
+                      className="text-[11px] text-emerald-400 hover:text-emerald-300 font-bold underline cursor-pointer ml-1"
+                    >
+                      Ver todas
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* Tabela de Matrizes IA */}
               <div className="space-y-2">
-                <span className="block text-xs font-bold text-slate-300">
-                  Matrizes a Inseminar ({iaRows.filter((r) => !r.skipped).length} de {iaRows.length})
-                </span>
-
-                <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-56 overflow-y-auto">
+                <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-72 overflow-y-auto">
                   <table className="w-full text-left text-xs text-slate-300">
-                    <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0">
+                    <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0 z-10">
                       <tr>
                         <th className="p-2.5">Brinco</th>
                         <th className="p-2.5">Categoria</th>
                         <th className="p-2.5">Touro Utilizado</th>
                         <th className="p-2.5">Partida Sêmen</th>
-                        <th className="p-2.5">ECC IA</th>
+                        <th className="p-2.5">Observação</th>
+                        <th className="p-2.5 text-center">ECC IA</th>
                         <th className="p-2.5 text-center">Inseminar?</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/80 font-sans">
-                      {iaRows.map((row, idx) => (
-                        <tr
-                          key={row.animal_id}
-                          className={`hover:bg-slate-900 transition-colors ${row.skipped ? 'opacity-40 bg-slate-950/80' : ''}`}
-                        >
-                          <td className="p-2.5 font-bold text-white font-mono">{row.tag_number}</td>
-                          <td className="p-2.5 text-slate-400 text-xs">{row.category_name}</td>
-                          <td className="p-2.5">
-                            <select
-                              value={row.bull_id || iaDefaultBullId}
-                              disabled={row.skipped}
-                              onChange={(e) => {
-                                const bId = e.target.value;
-                                setIaRows((prev) => {
-                                  const copy = [...prev];
-                                  copy[idx].bull_id = bId;
-                                  return copy;
-                                });
-                              }}
-                              className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-emerald-300 font-medium focus:outline-none"
-                            >
-                              <option value="">Selecione...</option>
-                              {bulls.map((b) => (
-                                <option key={b.id} value={b.id}>
-                                  {b.name}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="p-2.5">
-                            <select
-                              value={row.semen_batch_id || iaDefaultBatchId}
-                              disabled={row.skipped}
-                              onChange={(e) => {
-                                const batId = e.target.value;
-                                setIaRows((prev) => {
-                                  const copy = [...prev];
-                                  copy[idx].semen_batch_id = batId;
-                                  return copy;
-                                });
-                              }}
-                              className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200 font-mono focus:outline-none"
-                            >
-                              <option value="">Selecione...</option>
-                              {semenBatches.map((b) => (
-                                <option key={b.id} value={b.id}>
-                                  {b.batch_number}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="p-2.5">
-                            <input
-                              type="number"
-                              step="0.25"
-                              min="1"
-                              max="5"
-                              value={row.ecc_ia}
-                              disabled={row.skipped}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setIaRows((prev) => {
-                                  const copy = [...prev];
-                                  copy[idx].ecc_ia = val;
-                                  return copy;
-                                });
-                              }}
-                              className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono text-center focus:outline-none"
-                            />
-                          </td>
-                          <td className="p-2.5 text-center">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setIaRows((prev) => {
-                                  const copy = [...prev];
-                                  copy[idx].skipped = !copy[idx].skipped;
-                                  return copy;
-                                });
-                              }}
-                              className={`p-1.5 rounded-lg text-xs transition-colors cursor-pointer ${
-                                row.skipped
-                                  ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30'
-                                  : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
-                              }`}
-                              title={row.skipped ? 'Marcar para inseminar' : 'Pular esta matriz'}
-                            >
-                              {row.skipped ? <X className="w-4 h-4" /> : <Check className="w-4 h-4" />}
-                            </button>
+                      {filteredIaRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="p-6 text-center text-slate-400 font-sans">
+                            Nenhuma matriz encontrada com o termo &quot;{iaSearchQuery}&quot;.
                           </td>
                         </tr>
-                      ))}
+                      ) : (
+                        filteredIaRows.map((row) => (
+                          <tr
+                            key={row.animal_id}
+                            className={`hover:bg-slate-900 transition-colors ${row.skipped ? 'opacity-40 bg-slate-950/80' : ''}`}
+                          >
+                            <td className="p-2.5 font-bold text-white font-mono whitespace-nowrap">{row.tag_number}</td>
+                            <td className="p-2.5 text-slate-400 text-xs whitespace-nowrap">{row.category_name}</td>
+                            <td className="p-2.5 whitespace-nowrap">
+                              <select
+                                value={row.bull_id || iaDefaultBullId}
+                                disabled={row.skipped}
+                                onChange={(e) => updateIaRow(row.animal_id, { bull_id: e.target.value })}
+                                className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-emerald-300 font-medium focus:outline-none"
+                              >
+                                <option value="">Selecione...</option>
+                                {bulls.map((b) => (
+                                  <option key={b.id} value={b.id}>
+                                    {b.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="p-2.5 whitespace-nowrap">
+                              <select
+                                value={row.semen_batch_id || iaDefaultBatchId}
+                                disabled={row.skipped}
+                                onChange={(e) => updateIaRow(row.animal_id, { semen_batch_id: e.target.value })}
+                                className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200 font-mono focus:outline-none"
+                              >
+                                <option value="">Selecione...</option>
+                                {semenBatches.map((b) => (
+                                  <option key={b.id} value={b.id}>
+                                    {b.batch_number}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="p-2.5 min-w-[180px]">
+                              <input
+                                type="text"
+                                placeholder="Ex: Muco límpido, cérvix fácil..."
+                                value={row.notes || ''}
+                                disabled={row.skipped}
+                                onChange={(e) => updateIaRow(row.animal_id, { notes: e.target.value })}
+                                className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-sans"
+                              />
+                            </td>
+                            <td className="p-2.5 text-center whitespace-nowrap">
+                              <input
+                                type="number"
+                                step="0.25"
+                                min="1"
+                                max="5"
+                                value={row.ecc_ia}
+                                disabled={row.skipped}
+                                onChange={(e) => updateIaRow(row.animal_id, { ecc_ia: e.target.value })}
+                                className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono text-center focus:outline-none focus:border-emerald-500"
+                              />
+                            </td>
+                            <td className="p-2.5 text-center whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => updateIaRow(row.animal_id, { skipped: !row.skipped })}
+                                className={`p-1.5 rounded-lg text-xs transition-colors cursor-pointer ${
+                                  row.skipped
+                                    ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30'
+                                    : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
+                                }`}
+                                title={row.skipped ? 'Marcar para inseminar' : 'Pular esta matriz'}
+                              >
+                                {row.skipped ? <X className="w-4 h-4" /> : <Check className="w-4 h-4" />}
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
