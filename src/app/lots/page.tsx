@@ -498,6 +498,22 @@ export default function LotsPage() {
     setLoadingAnimals(false);
   }
 
+  // Capturar parâmetro da URL quando o veterinário vem da Agenda de Campo
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const lotIdParam = params.get('lotId');
+    const lotCodeParam = params.get('lot');
+    if (lotIdParam) {
+      handleSelectLot(lotIdParam);
+    } else if (lotCodeParam && lots.length > 0) {
+      const match = lots.find((l) => l.code === lotCodeParam || l.code.toLowerCase().includes(lotCodeParam.toLowerCase()));
+      if (match) {
+        handleSelectLot(match.id);
+      }
+    }
+  }, [lots]);
+
   async function handleCreateLot(e: React.FormEvent) {
     e.preventDefault();
     if (!form.code || !form.property_id || !form.protocol_id || !form.start_date) return;

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useMemo, useCallback } from 'react';
+import Link from 'next/link';
 import { 
   getManagementEvents, 
   completeManagementEvent, 
@@ -29,7 +30,8 @@ import {
   Syringe,
   Microscope,
   Check,
-  Stethoscope
+  Stethoscope,
+  ArrowRight
 } from 'lucide-react';
 
 const STEP_COLORS: Record<string, { bg: string; text: string; border: string; label: string; badge: string }> = {
@@ -882,6 +884,24 @@ export default function AgendaPage() {
                   </div>
                 </div>
 
+                {/* Botão de Atalho Direto para a Ficha do Lote */}
+                {selectedEvent.lot_id && (
+                  <Link
+                    href={`/lots?lotId=${selectedEvent.lot_id}`}
+                    className="w-full bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 font-bold py-2.5 px-4 rounded-2xl text-xs flex items-center justify-between transition-all border border-emerald-500/30 hover:border-emerald-500/60 shadow-sm group cursor-pointer"
+                    title="Abrir a ficha completa deste lote com matrizes e curral"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform" />
+                      <span>Abrir Ficha do Lote (Ver Matrizes & Curral)</span>
+                    </div>
+                    <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-semibold group-hover:translate-x-1 transition-transform">
+                      <span>Ir para o Lote</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </span>
+                  </Link>
+                )}
+
                 {selectedEvent.notes && (
                   <div className="p-3 bg-slate-950/50 rounded-xl border border-slate-800/80 text-xs text-slate-300">
                     <span className="text-[10px] text-slate-400 font-bold block mb-0.5">Observações:</span>
@@ -1097,14 +1117,34 @@ export default function AgendaPage() {
                       </div>
                     </div>
 
-                    {isConcluded && (
-                      <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-emerald-400">
-                        <span>{ev.animals_worked_count} animais trabalhados</span>
-                        {ev.losses_count > 0 && (
-                          <span className="text-rose-400">{ev.losses_count} perdas</span>
+                    <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px]">
+                      {ev.lot_id ? (
+                        <Link
+                          href={`/lots?lotId=${ev.lot_id}`}
+                          onClick={(e) => e.stopPropagation()}
+                          title="Abrir a ficha completa deste lote com matrizes e curral"
+                          className="inline-flex items-center gap-1 font-semibold text-emerald-400 hover:text-emerald-300 hover:underline cursor-pointer py-0.5"
+                        >
+                          <Layers className="w-3.5 h-3.5" />
+                          <span>Ficha do Lote & Curral</span>
+                          <ArrowRight className="w-3 h-3" />
+                        </Link>
+                      ) : (
+                        <span className="text-slate-500 text-[10px]">Serviço Avulso</span>
+                      )}
+
+                      <div className="flex items-center gap-2">
+                        {isConcluded ? (
+                          <span className="text-emerald-400 font-mono text-[10px]">
+                            {ev.animals_worked_count} trabalhados
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 group-hover:text-emerald-300 transition-colors text-[10px] font-medium">
+                            Executar Manejo →
+                          </span>
                         )}
                       </div>
-                    )}
+                    </div>
                   </div>
                 );
               })}
