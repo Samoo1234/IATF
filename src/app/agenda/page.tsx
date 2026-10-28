@@ -97,6 +97,7 @@ export default function AgendaPage() {
 
   // Modal Ver/Concluir Manejo
   const [selectedEvent, setSelectedEvent] = useState<ManagementEvent | null>(null);
+  const [selectedDayView, setSelectedDayView] = useState<{ dateStr: string; events: ManagementEvent[] } | null>(null);
   const [completing, setCompleting] = useState(false);
   const [animalsWorked, setAnimalsWorked] = useState('');
   const [lossesCount, setLossesCount] = useState('0');
@@ -703,9 +704,17 @@ export default function AgendaPage() {
                   </span>
 
                   {dayEvents.length > 0 && (
-                    <span className="text-[10px] font-bold text-slate-400 font-mono px-1 rounded bg-slate-900 border border-slate-800">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedDayView({ dateStr: dayItem.dateStr, events: dayEvents });
+                      }}
+                      title="Ver todos os manejos deste dia"
+                      className="text-[10px] font-bold text-slate-400 hover:text-emerald-400 font-mono px-1.5 py-0.2 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/40 transition-colors cursor-pointer"
+                    >
                       {dayEvents.length} {dayEvents.length === 1 ? 'manejo' : 'manejos'}
-                    </span>
+                    </button>
                   )}
                 </div>
 
@@ -768,9 +777,17 @@ export default function AgendaPage() {
 
                   {/* Indicador se houver mais de 3 eventos */}
                   {dayEvents.length > 3 && (
-                    <div className="text-[10px] text-center font-bold text-emerald-400 bg-slate-900/90 py-0.5 rounded border border-slate-800">
-                      + {dayEvents.length - 3} mais
-                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedDayView({ dateStr: dayItem.dateStr, events: dayEvents });
+                      }}
+                      className="w-full text-[10px] text-center font-bold text-emerald-400 bg-slate-900/90 hover:bg-emerald-500/20 py-0.5 rounded border border-slate-800 hover:border-emerald-500/50 transition-all cursor-pointer shadow-sm hover:scale-[1.02] flex items-center justify-center gap-1"
+                      title={`Clique para ver todos os ${dayEvents.length} manejos deste dia`}
+                    >
+                      <span>+ {dayEvents.length - 3} mais</span>
+                    </button>
                   )}
                 </div>
 
@@ -954,6 +971,158 @@ export default function AgendaPage() {
         </div>
       );
     })()}
+
+      {/* ======================================================== */}
+      {/* MODAL: LISTA COMPLETA DE MANEJOS DO DIA (+X MAIS) */}
+      {/* ======================================================== */}
+      {selectedDayView && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+          <div className="glass-card w-full max-w-xl rounded-3xl border border-slate-700 bg-slate-900 shadow-2xl overflow-hidden animate-in fade-in my-auto">
+            {/* Header Modal */}
+            <div className="px-6 py-4 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center font-black">
+                  <Calendar className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    Manejos Agendados
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Dia <strong className="text-white font-mono">{selectedDayView.dateStr.split('-').reverse().join('/')}</strong> • <span className="text-emerald-400 font-semibold">{selectedDayView.events.length} {selectedDayView.events.length === 1 ? 'manejo' : 'manejos'}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedDayView(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+                title="Fechar"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Barra de ação rápida */}
+            <div className="px-6 py-2.5 bg-slate-950/40 border-b border-slate-800 flex items-center justify-between text-xs">
+              <span className="text-slate-400 text-[11px]">
+                Toque em qualquer manejo para abrir seus detalhes ou dar baixa:
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const targetDate = selectedDayView.dateStr;
+                  setSelectedDayView(null);
+                  openCreateForDate(targetDate);
+                }}
+                className="text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1 text-[11px] hover:underline"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Novo Agendamento
+              </button>
+            </div>
+
+            {/* Lista dos Manejos do Dia */}
+            <div className="p-6 max-h-[60vh] overflow-y-auto space-y-2.5">
+              {selectedDayView.events.map((ev) => {
+                const isAvulso = ev.event_type === 'avulso' || !ev.lot_id;
+                const stepConf = STEP_COLORS[ev.step_code] || (isAvulso ? STEP_COLORS.SRV : STEP_COLORS.OUTRO);
+                const isConcluded = ev.status === 'concluido';
+                const farmId = ev.farm_id || ev.iatf_lots?.farm_id || '';
+                const farmName = ev.farms?.name || ev.iatf_lots?.farms?.name || (farms.find(f => f.id === farmId)?.name) || 'Fazenda';
+                const farmColors = farmColorMap.get(farmId) || {
+                  text: 'text-emerald-300',
+                  bg: 'bg-emerald-500/15',
+                  border: 'border-emerald-500/30'
+                };
+
+                return (
+                  <div
+                    key={ev.id}
+                    onClick={() => {
+                      setSelectedDayView(null);
+                      setSelectedEvent(ev);
+                    }}
+                    className={`p-3.5 rounded-2xl border transition-all cursor-pointer shadow-sm hover:scale-[1.01] hover:border-emerald-500/50 bg-slate-950/70 ${stepConf.border} flex flex-col gap-2 group`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] font-extrabold font-mono px-2 py-0.5 rounded ${stepConf.badge}`}>
+                          {isAvulso ? (ev.step_code === 'SRV' ? 'SERVIÇO' : ev.step_code) : ev.step_code}
+                        </span>
+                        <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${farmColors.bg} ${farmColors.text} ${farmColors.border}`}>
+                          {farmName}
+                        </span>
+                      </div>
+
+                      <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        isConcluded 
+                          ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30' 
+                          : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                      }`}>
+                        {isConcluded ? <CheckCircle2 className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                        {isConcluded ? 'Concluído' : 'Pendente'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <h4 className="text-sm font-bold text-white group-hover:text-emerald-300 transition-colors flex items-center gap-1.5">
+                          {isAvulso ? (
+                            <>
+                              <Stethoscope className="w-4 h-4 text-violet-400 shrink-0" />
+                              <span>{ev.title || ev.step_name || 'Serviço Veterinário Avulso'}</span>
+                            </>
+                          ) : (
+                            <>
+                              <Layers className="w-4 h-4 text-sky-400 shrink-0" />
+                              <span>Lote: <strong className="text-emerald-400 font-mono">{ev.iatf_lots?.code || 'Lote sem código'}</strong></span>
+                            </>
+                          )}
+                        </h4>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          {isAvulso ? (ev.step_name || 'Serviço Veterinário') : (stepConf.label)}
+                        </p>
+                      </div>
+
+                      <div className="text-right text-xs">
+                        {ev.start_time && (
+                          <p className="font-mono text-slate-300 flex items-center justify-end gap-1">
+                            <Clock className="w-3 h-3 text-slate-500" />
+                            {ev.start_time.slice(0, 5)}
+                          </p>
+                        )}
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          {ev.responsible_name || 'Equipe de Campo'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {isConcluded && (
+                      <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-emerald-400">
+                        <span>{ev.animals_worked_count} animais trabalhados</span>
+                        {ev.losses_count > 0 && (
+                          <span className="text-rose-400">{ev.losses_count} perdas</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Rodapé Modal */}
+            <div className="px-6 py-3 bg-slate-950/80 border-t border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedDayView(null)}
+                className="px-4 py-2 rounded-xl border border-slate-700 text-slate-300 hover:text-white text-xs cursor-pointer hover:bg-slate-800 transition-colors"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ======================================================== */}
       {/* MODAL: NOVO AGENDAMENTO DE MANEJO */}
