@@ -6455,6 +6455,138 @@ export async function executeStepD9(
   return true;
 }
 
+/**
+ * Dedução integrada no módulo de Estoque Genético Criogênico (genetic_inventory_balances).
+ * Localiza os lotes genéticos da organização (inclusive os centralizados na Fazenda Principal)
+ * e debita o saldo via procedure fn_process_genetic_usage_iatf, gerando auditoria no livro-razão.
+ */
+export async function deductGeneticInventoryForSemenBatch(params: {
+  semenBatchId: string;
+  quantity: number;
+  referenceType: string;
+  referenceId: string;
+  inseminatorName?: string | null;
+  notes?: string | null;
+  preferredFarmId?: string | null;
+}): Promise<boolean> {
+  if (!params.semenBatchId || params.quantity <= 0) return false;
+  const supabase = createClient();
+  try {
+    // 1. Obter informações da partida legada
+    const { data: batch } = await supabase
+      .from('semen_batches')
+      .select('id, batch_number, bull_id, organization_id')
+      .eq('id', params.semenBatchId)
+      .maybeSingle();
+
+    if (!batch) return false;
+
+    const orgId = batch.organization_id;
+
+    // 2. Localizar os materiais genéticos vinculados ao touro
+    const { data: materials } = await supabase
+      .from('genetic_materials')
+      .select('id')
+      .eq('organization_id', orgId)
+      .eq('sire_id', batch.bull_id);
+
+    const materialIds = (materials || []).map((m: { id: string }) => m.id);
+
+    // 3. Localizar o lote em genetic_material_batches por batch_number
+    let genBatchesQuery = supabase
+      .from('genetic_material_batches')
+      .select('id, farm_id')
+      .eq('organization_id', orgId)
+      .ilike('batch_number', batch.batch_number);
+
+    if (materialIds.length > 0) {
+      genBatchesQuery = genBatchesQuery.in('material_id', materialIds);
+    }
+
+    const { data: genBatchesData } = await genBatchesQuery.limit(5);
+    const genBatches: Array<{ id: string; farm_id: string }> = genBatchesData ? [...genBatchesData] : [];
+
+    if (genBatches.length === 0) {
+      // Fallback: tentar sem filtrar material_id caso cadastrado com pequena divergência
+      const { data: fallbackBatches } = await supabase
+        .from('genetic_material_batches')
+        .select('id, farm_id')
+        .eq('organization_id', orgId)
+        .ilike('batch_number', batch.batch_number)
+        .limit(5);
+
+      if (fallbackBatches && fallbackBatches.length > 0) {
+        genBatches.push(...fallbackBatches);
+      }
+    }
+
+    if (genBatches.length === 0) {
+      console.warn('Lote de sêmen não encontrado no módulo criogênico:', batch.batch_number);
+      return false;
+    }
+
+    const genBatchIds = Array.from(new Set(genBatches.map((b) => b.id)));
+
+    // 4. Buscar saldos ativos em genetic_inventory_balances
+    const { data: balances } = await supabase
+      .from('genetic_inventory_balances')
+      .select('id, farm_id, batch_id, tank_id, canister_id, owner_client_id, quantity_available')
+      .in('batch_id', genBatchIds)
+      .gt('quantity_available', 0)
+      .order('quantity_available', { ascending: false });
+
+    if (!balances || balances.length === 0) {
+      console.warn('Nenhum saldo ativo no estoque criogênico para o lote:', batch.batch_number);
+      return false;
+    }
+
+    // Se houver uma fazenda preferencial (onde o lote foi executado), prioriza os saldos dela
+    const sortedBalances = [...balances].sort((a, b) => {
+      if (params.preferredFarmId) {
+        if (a.farm_id === params.preferredFarmId && b.farm_id !== params.preferredFarmId) return -1;
+        if (b.farm_id === params.preferredFarmId && a.farm_id !== params.preferredFarmId) return 1;
+      }
+      return (b.quantity_available || 0) - (a.quantity_available || 0);
+    });
+
+    let remainingToDeduct = params.quantity;
+    for (const bal of sortedBalances) {
+      if (remainingToDeduct <= 0) break;
+      const available = bal.quantity_available || 0;
+      if (available <= 0) continue;
+
+      const qtyToDeduct = Math.min(available, remainingToDeduct);
+      const idempotencyKey = `ia_usage_${params.referenceType}_${params.referenceId}_${bal.id}_${Date.now()}`;
+
+      await supabase.rpc('fn_process_genetic_usage_iatf', {
+        p_organization_id: orgId,
+        p_farm_id: bal.farm_id,
+        p_batch_id: bal.batch_id,
+        p_tank_id: bal.tank_id,
+        p_canister_id: bal.canister_id,
+        p_owner_client_id: bal.owner_client_id || null,
+        p_quantity: qtyToDeduct,
+        p_reference_type: params.referenceType,
+        p_reference_id: params.referenceId,
+        p_inseminator_name: params.inseminatorName || null,
+        p_notes: params.notes || `Baixa automática IA (${qtyToDeduct} doses)`,
+        p_created_by: params.inseminatorName || 'Sistema IATF',
+        p_idempotency_key: idempotencyKey,
+      });
+
+      remainingToDeduct -= qtyToDeduct;
+    }
+
+    invalidateCache('gen_metrics');
+    invalidateCache('tanks');
+    invalidateCache('semen');
+    return true;
+  } catch (err) {
+    console.warn('Erro ao deduzir sêmen do estoque criogênico:', err);
+    return false;
+  }
+}
+
 export async function executeStepIA(
   managementId: string,
   data: {
@@ -6530,57 +6662,15 @@ export async function executeStepIA(
         })
         .eq('id', data.semen_batch_id);
 
-      // 3.2 Integração com o novo módulo de Estoque Genético
-      try {
-        const { data: mgmtRec } = await supabase
-          .from('animal_managements')
-          .select('organization_id, farm_id')
-          .eq('id', managementId)
-          .maybeSingle();
-
-        if (mgmtRec?.farm_id) {
-          // Localizar o lote correspondente no novo módulo
-          const { data: genBatches } = await supabase
-            .from('genetic_material_batches')
-            .select('id')
-            .eq('farm_id', mgmtRec.farm_id)
-            .ilike('batch_number', batch.batch_number)
-            .limit(1);
-
-          const genBatchId = genBatches?.[0]?.id;
-          if (genBatchId) {
-            // Localizar uma caneca/botijão com saldo deste lote
-            const { data: activeBalances } = await supabase
-              .from('genetic_inventory_balances')
-              .select('id, tank_id, canister_id, owner_client_id, quantity_available')
-              .eq('farm_id', mgmtRec.farm_id)
-              .eq('batch_id', genBatchId)
-              .gt('quantity_available', 0)
-              .limit(1);
-
-            if (activeBalances && activeBalances.length > 0) {
-              const bal = activeBalances[0];
-              await supabase.rpc('fn_process_genetic_usage_iatf', {
-                p_organization_id: mgmtRec.organization_id,
-                p_farm_id: mgmtRec.farm_id,
-                p_batch_id: genBatchId,
-                p_tank_id: bal.tank_id,
-                p_canister_id: bal.canister_id,
-                p_owner_client_id: bal.owner_client_id || null,
-                p_quantity: 1,
-                p_reference_type: 'animal_managements',
-                p_reference_id: managementId,
-                p_inseminator_name: data.inseminator_name || null,
-                p_notes: `Baixa automática IA da matriz em animal_managements`,
-                p_created_by: data.inseminator_name || 'Sistema IATF',
-                p_idempotency_key: `ia_mgmt_${managementId}`,
-              });
-            }
-          }
-        }
-      } catch (genErr) {
-        console.warn('Integração com estoque genético na IA:', genErr);
-      }
+      // 3.2 Integração com o novo módulo de Estoque Genético Criogênico
+      await deductGeneticInventoryForSemenBatch({
+        semenBatchId: data.semen_batch_id,
+        quantity: 1,
+        referenceType: 'animal_managements',
+        referenceId: managementId,
+        inseminatorName: data.inseminator_name,
+        notes: `Baixa automática IA da matriz em animal_managements`,
+      });
     }
   }
 
@@ -7740,6 +7830,12 @@ export async function executeBatchLotManagementIA(params: {
   }
 
   // 4. Baixa de estoque de sêmen para as partidas utilizadas
+  const { data: lotData } = await supabase
+    .from('iatf_lots')
+    .select('farm_id')
+    .eq('id', params.lotId)
+    .maybeSingle();
+
   for (const [bId, count] of Object.entries(batchUsageCount)) {
     const { data: batch } = await supabase
       .from('semen_batches')
@@ -7748,6 +7844,7 @@ export async function executeBatchLotManagementIA(params: {
       .maybeSingle();
 
     if (batch) {
+      // 4.1 Atualização legada
       await supabase
         .from('semen_batches')
         .update({
@@ -7755,6 +7852,17 @@ export async function executeBatchLotManagementIA(params: {
           updated_at: todayIso,
         })
         .eq('id', bId);
+
+      // 4.2 Baixa integrada no novo módulo criogênico
+      await deductGeneticInventoryForSemenBatch({
+        semenBatchId: bId,
+        quantity: count,
+        referenceType: 'iatf_lots',
+        referenceId: params.lotId,
+        inseminatorName: params.defaultInseminatorName,
+        notes: `Baixa em lote de IA (${count} doses) no lote IATF`,
+        preferredFarmId: lotData?.farm_id || null,
+      });
     }
   }
 
