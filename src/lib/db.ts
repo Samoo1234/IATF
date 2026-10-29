@@ -559,6 +559,8 @@ export interface LotAnimal {
   pregnancy_status: string;
   expected_parturition_date: string | null;
   notes: string | null;
+  bull_id?: string | null;
+  semen_batch_id?: string | null;
   animals: {
     tag_number: string;
     reproductive_status: string;
@@ -8415,8 +8417,8 @@ export async function executeBatchLotManagementIA(params: {
           inseminator_name: inseminator || undefined,
           ecc_ia: ecc || undefined,
           bulls: bullObj ? { id: bullObj.id, name: bullObj.name } : undefined,
-          semen_batches: batchObj ? { id: batchObj.id, batch_code: batchObj.batch_code } : undefined,
-          ...(item.notes ? { notes: item.notes } : {}),
+          semen_batches: batchObj ? { id: batchObj.id, batch_number: batchObj.batch_number } : undefined,
+          notes: item.notes || null,
           updated_at: todayIso,
         });
 
@@ -8426,7 +8428,7 @@ export async function executeBatchLotManagementIA(params: {
           semen_batch_id: batchId || null,
           inseminator_name: inseminator || null,
           ecc_ia: ecc || null,
-          ...(item.notes ? { notes: item.notes } : {}),
+          notes: item.notes || null,
           updated_at: todayIso,
         });
 
@@ -8507,7 +8509,7 @@ export async function executeBatchLotManagementIA(params: {
     }
 
     // 1. Atualiza iatf_lot_animals
-    await supabase
+    const { error: laUpdateErr } = await supabase
       .from('iatf_lot_animals')
       .update({
         bull_id: bullId,
@@ -8518,6 +8520,24 @@ export async function executeBatchLotManagementIA(params: {
         updated_at: todayIso,
       })
       .eq('id', item.lot_animal_id);
+
+    if (laUpdateErr) {
+      console.warn('Erro ao atualizar iatf_lot_animals na IA:', laUpdateErr);
+    }
+
+    // 1.1 Atualiza imediatamente no IndexedDB local também
+    try {
+      await offlineDb.lot_animals.update(item.lot_animal_id, {
+        bull_id: bullId || undefined,
+        semen_batch_id: batchId || undefined,
+        inseminator_name: inseminator || undefined,
+        ecc_ia: ecc != null ? Number(ecc) : undefined,
+        notes: item.notes || null,
+        updated_at: todayIso,
+      });
+    } catch {
+      // ignore
+    }
 
     // 2. Atualiza status do animal
     await supabase
@@ -8551,6 +8571,22 @@ export async function executeBatchLotManagementIA(params: {
           updated_at: todayIso,
         })
         .eq('id', mgmtId);
+    } else {
+      await supabase.from('animal_managements').insert({
+        organization_id: orgId,
+        lot_id: params.lotId,
+        animal_id: item.animal_id,
+        ia_executed_at: params.executionDate,
+        bull_id: bullId,
+        semen_batch_id: batchId,
+        inseminator_name: inseminator,
+        ecc_ia: ecc != null ? Number(ecc) : null,
+        ia_notes: item.notes || params.notes || null,
+        status: 'em_andamento',
+        pregnancy_status: 'pendente',
+        created_at: todayIso,
+        updated_at: todayIso,
+      });
     }
   }
 

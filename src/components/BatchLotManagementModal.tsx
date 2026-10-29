@@ -62,6 +62,20 @@ export default function BatchLotManagementModal({
   const [activeTab, setActiveTab] = useState<ManagementTab>(getNormalizedTab(initialStepCode));
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+
+  const handleSafeClose = () => {
+    if (hasUnsavedChanges) {
+      if (
+        !window.confirm(
+          'Atenção: Você preencheu dados das matrizes que ainda não foram salvos. Ao fechar sem clicar no botão "Salvar", as alterações serão descartadas. Deseja realmente sair sem salvar?'
+        )
+      ) {
+        return;
+      }
+    }
+    onClose();
+  };
 
   // Aux data for IA
   const [bulls, setBulls] = useState<Bull[]>([]);
@@ -142,6 +156,7 @@ export default function BatchLotManagementModal({
 
     setActiveTab(getNormalizedTab(initialStepCode));
     setErrorMsg(null);
+    setHasUnsavedChanges(false);
 
     // Initial dates
     setD0Date(lot.start_date || getTodayDateString());
@@ -168,12 +183,12 @@ export default function BatchLotManagementModal({
         lot_animal_id: la.id,
         tag_number: la.animals?.tag_number || 'S/N',
         category_name: la.animals?.animal_categories?.name || 'Matriz',
-        bull_id: (la as unknown as { bull_id?: string }).bull_id || '',
-        semen_batch_id: (la as unknown as { semen_batch_id?: string }).semen_batch_id || '',
+        bull_id: la.bull_id || '',
+        semen_batch_id: la.semen_batch_id || '',
         inseminator_name: la.inseminator_name || lot.responsible_name || '',
         ecc_ia: la.ecc_ia ? la.ecc_ia.toFixed(2) : '3.00',
         skipped: false,
-        notes: (la as unknown as { notes?: string }).notes || '',
+        notes: la.notes || '',
       }))
     );
     setIaSearchQuery('');
@@ -190,7 +205,7 @@ export default function BatchLotManagementModal({
             ? la.pregnancy_status
             : 'prenha', // Default suggestion
         ecc_dg: la.ecc_dg ? la.ecc_dg.toFixed(2) : '3.00',
-        notes: (la as unknown as { notes?: string }).notes || '',
+        notes: la.notes || '',
         checked: true,
       }))
     );
@@ -243,6 +258,7 @@ export default function BatchLotManagementModal({
 
   // Atualizar linha de IA pelo ID único do animal (blindado contra filtros e buscas)
   const updateIaRow = (animalId: string, updates: Partial<(typeof iaRows)[number]>) => {
+    setHasUnsavedChanges(true);
     setIaRows((prev) =>
       prev.map((row) => (row.animal_id === animalId ? { ...row, ...updates } : row))
     );
@@ -345,6 +361,7 @@ export default function BatchLotManagementModal({
 
   // Atualizar linha de DG pelo ID único do animal (blindado contra filtros e buscas)
   const updateDgRow = (animalId: string, updates: Partial<(typeof dgRows)[number]>) => {
+    setHasUnsavedChanges(true);
     setDgRows((prev) =>
       prev.map((row) => (row.animal_id === animalId ? { ...row, ...updates } : row))
     );
@@ -561,7 +578,7 @@ export default function BatchLotManagementModal({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleSafeClose}
             className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
@@ -1642,7 +1659,7 @@ export default function BatchLotManagementModal({
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-800">
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleSafeClose}
               disabled={submitting}
               className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-300 hover:bg-slate-800 text-xs font-bold transition-all cursor-pointer"
             >

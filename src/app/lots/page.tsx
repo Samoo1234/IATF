@@ -1757,17 +1757,18 @@ export default function LotsPage() {
                             })}
                             <th className="p-3">ECC IA</th>
                             <th className="p-3">ECC DG</th>
-                            <th className="p-3">Touro</th>
+                            <th className="p-3">Touro / Partida</th>
                             <th className="p-3">Inseminador</th>
                             <th className="p-3">Diagnóstico</th>
                             <th className="p-3">Prev. Parto</th>
+                            <th className="p-3">Observações</th>
                             <th className="p-3 text-center">Ações</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800/80 bg-slate-900/60 font-mono">
                           {filteredLotAnimals.length === 0 ? (
                             <tr>
-                              <td colSpan={stepColumns.length + 9} className="p-8 text-center text-slate-400 font-sans">
+                              <td colSpan={stepColumns.length + 10} className="p-8 text-center text-slate-400 font-sans">
                                 Nenhuma matriz encontrada com o termo &quot;{lotAnimalSearch}&quot;.
                               </td>
                             </tr>
@@ -1820,7 +1821,17 @@ export default function LotsPage() {
                               })}
                               <td className="p-3">{la.ecc_ia != null ? la.ecc_ia.toFixed(2) : '-'}</td>
                               <td className="p-3">{la.ecc_dg != null ? la.ecc_dg.toFixed(2) : '-'}</td>
-                              <td className="p-3 text-emerald-400 font-sans font-medium">{la.bulls?.name ?? '-'}</td>
+                              <td className="p-3 font-sans">
+                                <div className="font-medium text-emerald-400">
+                                  {la.bulls?.name ?? '-'}
+                                </div>
+                                {la.semen_batches?.batch_number && (
+                                  <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1 mt-0.5">
+                                    <span className="text-slate-500">Partida:</span>
+                                    <span className="text-slate-300 font-semibold">{la.semen_batches.batch_number}</span>
+                                  </div>
+                                )}
+                              </td>
                               <td className="p-3 font-sans">{la.inseminator_name ?? '-'}</td>
                               <td className="p-3 font-sans">
                                 <span
@@ -1840,6 +1851,18 @@ export default function LotsPage() {
                                 </span>
                               </td>
                               <td className="p-3 text-emerald-400 font-mono">{formatDateBR(la.expected_parturition_date)}</td>
+                              <td className="p-3 font-sans max-w-[180px]">
+                                {la.notes ? (
+                                  <span
+                                    className="px-2 py-0.5 rounded bg-slate-800/80 text-slate-300 text-[11px] border border-slate-700/80 block truncate font-sans"
+                                    title={la.notes}
+                                  >
+                                    {la.notes}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-600 text-xs">-</span>
+                                )}
+                              </td>
                               <td className="p-3 text-center">
                                 <div className="flex items-center justify-center gap-1">
                                   <button
