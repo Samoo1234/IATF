@@ -214,6 +214,7 @@ export default function LotsPage() {
   const [loading, setLoading] = useState(true);
   const [selectedLotId, setSelectedLotId] = useState<string | null>(null);
   const [lotAnimals, setLotAnimals] = useState<LotAnimal[]>([]);
+  const [lotAnimalSearch, setLotAnimalSearch] = useState('');
   const [loadingAnimals, setLoadingAnimals] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [showNewLot, setShowNewLot] = useState(false);
@@ -500,6 +501,7 @@ export default function LotsPage() {
 
   async function handleSelectLot(id: string) {
     setSelectedLotId(id);
+    setLotAnimalSearch('');
     setLoadingAnimals(true);
     try {
       const animals = await getLotAnimals(id);
@@ -800,6 +802,28 @@ export default function LotsPage() {
   });
 
   const selectedLot = lots.find((l) => l.id === selectedLotId);
+
+  // Filtrar matrizes dentro da Ficha do Lote pelo campo de pesquisa
+  const filteredLotAnimals = useMemo(() => {
+    if (!lotAnimalSearch.trim()) return lotAnimals;
+    const q = lotAnimalSearch.trim().toLowerCase();
+    return lotAnimals.filter((la) => {
+      const tag = (la.animals?.tag_number || '').toLowerCase();
+      const cat = (la.animals?.animal_categories?.name || '').toLowerCase();
+      const breed = (la.animals?.breeds?.name || '').toLowerCase();
+      const bull = (la.bulls?.name || '').toLowerCase();
+      const inseminator = (la.inseminator_name || '').toLowerCase();
+      const status = (la.pregnancy_status || '').toLowerCase();
+      return (
+        tag.includes(q) ||
+        cat.includes(q) ||
+        breed.includes(q) ||
+        bull.includes(q) ||
+        inseminator.includes(q) ||
+        status.includes(q)
+      );
+    });
+  }, [lotAnimals, lotAnimalSearch]);
 
   // Prévia de etapas e validação de segurança para o modal de alteração de protocolo
   const previewProtocol = protocols.find((p) => p.id === selectedNewProtocolId);
@@ -1491,13 +1515,44 @@ export default function LotsPage() {
               );
             })()}
 
-            {/* Animal Table with Top Bar & Add Button */}
+            {/* Animal Table with Top Bar, Search & Add Button */}
             <div className="space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
-                  <Tag className="w-4 h-4 text-emerald-400" />
-                  Matrizes do Lote {loadingAnimals ? '(carregando...)' : `(${lotAnimals.length})`}
-                </h3>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
+                    <Tag className="w-4 h-4 text-emerald-400" />
+                    Matrizes do Lote{' '}
+                    {loadingAnimals
+                      ? '(carregando...)'
+                      : lotAnimalSearch.trim()
+                      ? `(${filteredLotAnimals.length} de ${lotAnimals.length})`
+                      : `(${lotAnimals.length})`}
+                  </h3>
+
+                  {/* Campo de Pesquisa de Matriz na Ficha do Lote */}
+                  {lotAnimals.length > 0 && (
+                    <div className="relative w-48 sm:w-60">
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        type="text"
+                        value={lotAnimalSearch}
+                        onChange={(e) => setLotAnimalSearch(e.target.value)}
+                        placeholder="Pesquisar brinco..."
+                        className="w-full bg-slate-950 border border-slate-700/80 rounded-xl pl-8 pr-7 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-sans"
+                      />
+                      {lotAnimalSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setLotAnimalSearch('')}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-white rounded transition-colors cursor-pointer"
+                          title="Limpar pesquisa"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 <div className="flex items-center gap-2 flex-wrap">
                   {lotAnimals.length > 0 && (
@@ -1595,8 +1650,15 @@ export default function LotsPage() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800/80 bg-slate-900/60 font-mono">
-                          {lotAnimals.map((la) => (
-                            <tr key={la.id} className="hover:bg-slate-800/50 transition-colors">
+                          {filteredLotAnimals.length === 0 ? (
+                            <tr>
+                              <td colSpan={stepColumns.length + 9} className="p-8 text-center text-slate-400 font-sans">
+                                Nenhuma matriz encontrada com o termo &quot;{lotAnimalSearch}&quot;.
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredLotAnimals.map((la) => (
+                              <tr key={la.id} className="hover:bg-slate-800/50 transition-colors">
                               <td className="p-3">
                                 <div className="flex items-center gap-1.5">
                                   <button
@@ -1695,7 +1757,7 @@ export default function LotsPage() {
                                 </div>
                               </td>
                             </tr>
-                          ))}
+                          )))}
                         </tbody>
                       </table>
                     </div>

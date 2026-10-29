@@ -75,6 +75,7 @@ export default function BatchLotManagementModal({
   const [d0Responsible, setD0Responsible] = useState(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
   const [d0Notes, setD0Notes] = useState('');
   const [d0SelectedIds, setD0SelectedIds] = useState<string[]>([]);
+  const [d0SearchQuery, setD0SearchQuery] = useState('');
 
   // ----------------------------------------------------
   // D9 State
@@ -84,6 +85,7 @@ export default function BatchLotManagementModal({
   const [d9Notes, setD9Notes] = useState('');
   const [d9SelectedIds, setD9SelectedIds] = useState<string[]>([]);
   const [d9DeviceLossIds, setD9DeviceLossIds] = useState<string[]>([]);
+  const [d9SearchQuery, setD9SearchQuery] = useState('');
 
   // ----------------------------------------------------
   // IA State
@@ -145,11 +147,13 @@ export default function BatchLotManagementModal({
     setD0Date(lot.start_date || getTodayDateString());
     setD0Responsible(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
     setD0SelectedIds(lotAnimals.map((la) => la.animal_id));
+    setD0SearchQuery('');
 
     setD9Date(getTodayDateString());
     setD9Responsible(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
     setD9SelectedIds(lotAnimals.map((la) => la.animal_id));
     setD9DeviceLossIds([]);
+    setD9SearchQuery('');
 
     setIaDate(lot.ia_planned_date || getTodayDateString());
     setIaInseminator(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
@@ -243,6 +247,30 @@ export default function BatchLotManagementModal({
       prev.map((row) => (row.animal_id === animalId ? { ...row, ...updates } : row))
     );
   };
+
+  // Linhas filtradas pela busca rápida de matrizes no D0
+  const filteredD0Animals = useMemo(() => {
+    if (!d0SearchQuery.trim()) return lotAnimals;
+    const q = d0SearchQuery.trim().toLowerCase();
+    return lotAnimals.filter((la) => {
+      const tag = (la.animals?.tag_number || '').toLowerCase();
+      const cat = (la.animals?.animal_categories?.name || '').toLowerCase();
+      const breed = (la.animals?.breeds?.name || '').toLowerCase();
+      return tag.includes(q) || cat.includes(q) || breed.includes(q);
+    });
+  }, [lotAnimals, d0SearchQuery]);
+
+  // Linhas filtradas pela busca rápida de matrizes no D9
+  const filteredD9Animals = useMemo(() => {
+    if (!d9SearchQuery.trim()) return lotAnimals;
+    const q = d9SearchQuery.trim().toLowerCase();
+    return lotAnimals.filter((la) => {
+      const tag = (la.animals?.tag_number || '').toLowerCase();
+      const cat = (la.animals?.animal_categories?.name || '').toLowerCase();
+      const breed = (la.animals?.breeds?.name || '').toLowerCase();
+      return tag.includes(q) || cat.includes(q) || breed.includes(q);
+    });
+  }, [lotAnimals, d9SearchQuery]);
 
   // Linhas filtradas pela busca rápida de matrizes na IA
   const filteredIaRows = useMemo(() => {
@@ -658,27 +686,54 @@ export default function BatchLotManagementModal({
 
               {/* Matrizes com Checkbox em D0 */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center justify-between text-xs flex-wrap gap-2">
                   <span className="font-bold text-slate-300 flex items-center gap-1.5">
                     <Layers className="w-4 h-4 text-sky-400" /> Matrizes do Lote que Receberão D0 ({d0SelectedIds.length}/{lotAnimals.length})
                   </span>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() =>
-                        setD0SelectedIds(
-                          d0SelectedIds.length === lotAnimals.length
-                            ? []
-                            : lotAnimals.map((la) => la.animal_id)
-                        )
-                      }
+                      onClick={() => {
+                        const targetIds = filteredD0Animals.map((la) => la.animal_id);
+                        const allFilteredSelected = targetIds.length > 0 && targetIds.every((id) => d0SelectedIds.includes(id));
+                        if (allFilteredSelected) {
+                          setD0SelectedIds((prev) => prev.filter((id) => !targetIds.includes(id)));
+                        } else {
+                          setD0SelectedIds((prev) => Array.from(new Set([...prev, ...targetIds])));
+                        }
+                      }}
                       className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-sky-300 font-bold text-[11px] transition-all cursor-pointer"
                     >
-                      {d0SelectedIds.length === lotAnimals.length ? 'Desmarcar Todas' : 'Marcar Todas'}
+                      {filteredD0Animals.length > 0 && filteredD0Animals.every((la) => d0SelectedIds.includes(la.animal_id))
+                        ? 'Desmarcar Todas'
+                        : 'Marcar Todas'}
                     </button>
                     <span className="text-slate-400 font-mono text-[11px]">Protocolo: {lot.protocol_name || 'IATF'}</span>
                   </div>
                 </div>
+
+                {/* Barra de Busca de Matrizes no D0 */}
+                <div className="relative">
+                  <Search className="w-4 h-4 text-sky-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={d0SearchQuery}
+                    onChange={(e) => setD0SearchQuery(e.target.value)}
+                    placeholder="Buscar matriz no D0 por brinco ou categoria..."
+                    className="w-full bg-slate-900 border border-slate-700/80 rounded-xl pl-9 pr-8 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  />
+                  {d0SearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setD0SearchQuery('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                      title="Limpar busca"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
                 <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-56 overflow-y-auto">
                   <table className="w-full text-left text-xs text-slate-300">
                     <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0 z-10">
@@ -686,12 +741,18 @@ export default function BatchLotManagementModal({
                         <th className="p-3 w-12 text-center">
                           <input
                             type="checkbox"
-                            checked={lotAnimals.length > 0 && d0SelectedIds.length === lotAnimals.length}
-                            onChange={(e) =>
-                              setD0SelectedIds(
-                                e.target.checked ? lotAnimals.map((la) => la.animal_id) : []
-                              )
+                            checked={
+                              filteredD0Animals.length > 0 &&
+                              filteredD0Animals.every((la) => d0SelectedIds.includes(la.animal_id))
                             }
+                            onChange={(e) => {
+                              const targetIds = filteredD0Animals.map((la) => la.animal_id);
+                              if (e.target.checked) {
+                                setD0SelectedIds((prev) => Array.from(new Set([...prev, ...targetIds])));
+                              } else {
+                                setD0SelectedIds((prev) => prev.filter((id) => !targetIds.includes(id)));
+                              }
+                            }}
                             className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-sky-500 focus:ring-sky-500 cursor-pointer accent-sky-500"
                             title="Marcar ou desmarcar todas as matrizes no D0"
                           />
@@ -702,53 +763,61 @@ export default function BatchLotManagementModal({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/80 font-mono">
-                      {lotAnimals.map((la) => {
-                        const isChecked = d0SelectedIds.includes(la.animal_id);
-                        return (
-                          <tr
-                            key={la.id}
-                            onClick={() =>
-                              setD0SelectedIds((prev) =>
-                                prev.includes(la.animal_id)
-                                  ? prev.filter((id) => id !== la.animal_id)
-                                  : [...prev, la.animal_id]
-                              )
-                            }
-                            className={`hover:bg-slate-900 transition-colors cursor-pointer ${!isChecked ? 'opacity-45 bg-slate-950/80' : ''}`}
-                          >
-                            <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
-                              <input
-                                type="checkbox"
-                                checked={isChecked}
-                                onChange={(e) => {
-                                  const checked = e.target.checked;
-                                  setD0SelectedIds((prev) =>
-                                    checked
-                                      ? prev.includes(la.animal_id)
-                                        ? prev
-                                        : [...prev, la.animal_id]
-                                      : prev.filter((id) => id !== la.animal_id)
-                                  );
-                                }}
-                                className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-sky-500 focus:ring-sky-500 cursor-pointer accent-sky-500"
-                              />
-                            </td>
-                            <td className="p-3 font-bold text-white font-mono">{la.animals?.tag_number || 'S/N'}</td>
-                            <td className="p-3 font-sans text-slate-400">{la.animals?.animal_categories?.name || 'Matriz'}</td>
-                            <td className="p-3 text-center font-sans">
-                              {isChecked ? (
-                                <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px] font-bold">
-                                  Selecionada p/ D0
-                                </span>
-                              ) : (
-                                <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-bold">
-                                  Não selecionada
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
+                      {filteredD0Animals.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="p-4 text-center text-slate-400 font-sans">
+                            Nenhuma matriz encontrada com o termo &quot;{d0SearchQuery}&quot;.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredD0Animals.map((la) => {
+                          const isChecked = d0SelectedIds.includes(la.animal_id);
+                          return (
+                            <tr
+                              key={la.id}
+                              onClick={() =>
+                                setD0SelectedIds((prev) =>
+                                  prev.includes(la.animal_id)
+                                    ? prev.filter((id) => id !== la.animal_id)
+                                    : [...prev, la.animal_id]
+                                )
+                              }
+                              className={`hover:bg-slate-900 transition-colors cursor-pointer ${!isChecked ? 'opacity-45 bg-slate-950/80' : ''}`}
+                            >
+                              <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={(e) => {
+                                    const checked = e.target.checked;
+                                    setD0SelectedIds((prev) =>
+                                      checked
+                                        ? prev.includes(la.animal_id)
+                                          ? prev
+                                          : [...prev, la.animal_id]
+                                        : prev.filter((id) => id !== la.animal_id)
+                                    );
+                                  }}
+                                  className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-sky-500 focus:ring-sky-500 cursor-pointer accent-sky-500"
+                                />
+                              </td>
+                              <td className="p-3 font-bold text-white font-mono">{la.animals?.tag_number || 'S/N'}</td>
+                              <td className="p-3 font-sans text-slate-400">{la.animals?.animal_categories?.name || 'Matriz'}</td>
+                              <td className="p-3 text-center font-sans">
+                                {isChecked ? (
+                                  <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px] font-bold">
+                                    Selecionada p/ D0
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-bold">
+                                    Não selecionada
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -808,21 +877,47 @@ export default function BatchLotManagementModal({
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() =>
-                        setD9SelectedIds(
-                          d9SelectedIds.length === lotAnimals.length
-                            ? []
-                            : lotAnimals.map((la) => la.animal_id)
-                        )
-                      }
+                      onClick={() => {
+                        const targetIds = filteredD9Animals.map((la) => la.animal_id);
+                        const allFilteredSelected = targetIds.length > 0 && targetIds.every((id) => d9SelectedIds.includes(id));
+                        if (allFilteredSelected) {
+                          setD9SelectedIds((prev) => prev.filter((id) => !targetIds.includes(id)));
+                        } else {
+                          setD9SelectedIds((prev) => Array.from(new Set([...prev, ...targetIds])));
+                        }
+                      }}
                       className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-bold text-[11px] transition-all cursor-pointer"
                     >
-                      {d9SelectedIds.length === lotAnimals.length ? 'Desmarcar Todas' : 'Marcar Todas'}
+                      {filteredD9Animals.length > 0 && filteredD9Animals.every((la) => d9SelectedIds.includes(la.animal_id))
+                        ? 'Desmarcar Todas'
+                        : 'Marcar Todas'}
                     </button>
                     <span className="text-[11px] text-amber-400">
                       {d9DeviceLossIds.length > 0 ? `${d9DeviceLossIds.length} perda(s) registrada(s)` : 'Nenhuma perda (100% retido)'}
                     </span>
                   </div>
+                </div>
+
+                {/* Barra de Busca de Matrizes no D9 */}
+                <div className="relative">
+                  <Search className="w-4 h-4 text-amber-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={d9SearchQuery}
+                    onChange={(e) => setD9SearchQuery(e.target.value)}
+                    placeholder="Buscar matriz no D9 por brinco ou categoria..."
+                    className="w-full bg-slate-900 border border-slate-700/80 rounded-xl pl-9 pr-8 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  {d9SearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setD9SearchQuery('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                      title="Limpar busca"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
 
                 <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-56 overflow-y-auto">
@@ -832,12 +927,18 @@ export default function BatchLotManagementModal({
                         <th className="p-3 w-12 text-center">
                           <input
                             type="checkbox"
-                            checked={lotAnimals.length > 0 && d9SelectedIds.length === lotAnimals.length}
-                            onChange={(e) =>
-                              setD9SelectedIds(
-                                e.target.checked ? lotAnimals.map((la) => la.animal_id) : []
-                              )
+                            checked={
+                              filteredD9Animals.length > 0 &&
+                              filteredD9Animals.every((la) => d9SelectedIds.includes(la.animal_id))
                             }
+                            onChange={(e) => {
+                              const targetIds = filteredD9Animals.map((la) => la.animal_id);
+                              if (e.target.checked) {
+                                setD9SelectedIds((prev) => Array.from(new Set([...prev, ...targetIds])));
+                              } else {
+                                setD9SelectedIds((prev) => prev.filter((id) => !targetIds.includes(id)));
+                              }
+                            }}
                             className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-amber-500 focus:ring-amber-500 cursor-pointer accent-amber-500"
                             title="Marcar ou desmarcar todas as matrizes no D9"
                           />
@@ -849,73 +950,81 @@ export default function BatchLotManagementModal({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/80 font-mono">
-                      {lotAnimals.map((la) => {
-                        const isChecked = d9SelectedIds.includes(la.animal_id);
-                        const hasLoss = d9DeviceLossIds.includes(la.animal_id);
-                        return (
-                          <tr
-                            key={la.id}
-                            className={`hover:bg-slate-900 transition-colors ${!isChecked ? 'opacity-45 bg-slate-950/80' : ''}`}
-                          >
-                            <td className="p-3 text-center">
-                              <input
-                                type="checkbox"
-                                checked={isChecked}
-                                onChange={(e) => {
-                                  const checked = e.target.checked;
-                                  setD9SelectedIds((prev) =>
-                                    checked
-                                      ? prev.includes(la.animal_id)
-                                        ? prev
-                                        : [...prev, la.animal_id]
-                                      : prev.filter((id) => id !== la.animal_id)
-                                  );
-                                }}
-                                className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-amber-500 focus:ring-amber-500 cursor-pointer accent-amber-500"
-                              />
-                            </td>
-                            <td className="p-3 font-bold text-white font-mono">{la.animals?.tag_number || 'S/N'}</td>
-                            <td className="p-3 font-sans text-slate-400">{la.animals?.animal_categories?.name || 'Matriz'}</td>
-                            <td className="p-3 text-center font-sans">
-                              {!isChecked ? (
-                                <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-bold">
-                                  Não selecionada
-                                </span>
-                              ) : hasLoss ? (
-                                <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-bold">
-                                  Interrompido (Perda)
-                                </span>
-                              ) : (
-                                <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
-                                  Retirado & Hormonizado
-                                </span>
-                              )}
-                            </td>
-                            <td className="p-3 text-center">
-                              <button
-                                type="button"
-                                disabled={!isChecked}
-                                onClick={() => handleToggleDeviceLoss(la.animal_id)}
-                                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 disabled:opacity-40 ${
-                                  hasLoss
-                                    ? 'bg-rose-500 text-white font-extrabold shadow-sm shadow-rose-500/40'
-                                    : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'
-                                }`}
-                              >
-                                {hasLoss ? (
-                                  <>
-                                    <AlertTriangle className="w-3.5 h-3.5" /> Sim (Perdeu)
-                                  </>
+                      {filteredD9Animals.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="p-4 text-center text-slate-400 font-sans">
+                            Nenhuma matriz encontrada com o termo &quot;{d9SearchQuery}&quot;.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredD9Animals.map((la) => {
+                          const isChecked = d9SelectedIds.includes(la.animal_id);
+                          const hasLoss = d9DeviceLossIds.includes(la.animal_id);
+                          return (
+                            <tr
+                              key={la.id}
+                              className={`hover:bg-slate-900 transition-colors ${!isChecked ? 'opacity-45 bg-slate-950/80' : ''}`}
+                            >
+                              <td className="p-3 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={(e) => {
+                                    const checked = e.target.checked;
+                                    setD9SelectedIds((prev) =>
+                                      checked
+                                        ? prev.includes(la.animal_id)
+                                          ? prev
+                                          : [...prev, la.animal_id]
+                                        : prev.filter((id) => id !== la.animal_id)
+                                    );
+                                  }}
+                                  className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-amber-500 focus:ring-amber-500 cursor-pointer accent-amber-500"
+                                />
+                              </td>
+                              <td className="p-3 font-bold text-white font-mono">{la.animals?.tag_number || 'S/N'}</td>
+                              <td className="p-3 font-sans text-slate-400">{la.animals?.animal_categories?.name || 'Matriz'}</td>
+                              <td className="p-3 text-center font-sans">
+                                {!isChecked ? (
+                                  <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-bold">
+                                    Não selecionada
+                                  </span>
+                                ) : hasLoss ? (
+                                  <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-bold">
+                                    Interrompido (Perda)
+                                  </span>
                                 ) : (
-                                  <>
-                                    <Check className="w-3.5 h-3.5" /> Não (Normal)
-                                  </>
+                                  <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                                    Retirado & Hormonizado
+                                  </span>
                                 )}
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
+                              </td>
+                              <td className="p-3 text-center">
+                                <button
+                                  type="button"
+                                  disabled={!isChecked}
+                                  onClick={() => handleToggleDeviceLoss(la.animal_id)}
+                                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 disabled:opacity-40 ${
+                                    hasLoss
+                                      ? 'bg-rose-500 text-white font-extrabold shadow-sm shadow-rose-500/40'
+                                      : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'
+                                  }`}
+                                >
+                                  {hasLoss ? (
+                                    <>
+                                      <AlertTriangle className="w-3.5 h-3.5" /> Sim (Perdeu)
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Check className="w-3.5 h-3.5" /> Não (Normal)
+                                    </>
+                                  )}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
                     </tbody>
                   </table>
                 </div>
