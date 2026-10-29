@@ -8022,6 +8022,7 @@ export async function executeBatchLotManagementD0(params: {
       invalidateCache('events');
       invalidateCache('animals');
       invalidateCache('metrics');
+      saveLocalLotStepChecks(params.lotId, 'D0', params.animalIds, true);
       return { success: true, count: params.animalIds.length };
     } catch (e: unknown) {
       console.error('executeBatchLotManagementD0 offline error:', e);
@@ -8153,6 +8154,7 @@ export async function executeBatchLotManagementD0(params: {
   invalidateCache('events');
   invalidateCache('animals');
   invalidateCache('metrics');
+  saveLocalLotStepChecks(params.lotId, 'D0', params.animalIds, true);
   return { success: true, count: params.animalIds.length };
 }
 
@@ -8163,15 +8165,20 @@ export async function executeBatchLotManagementD9(params: {
   responsibleName?: string | null;
   notes?: string | null;
   deviceLossAnimalIds?: string[];
+  animalIds?: string[];
 }): Promise<{ success: boolean; count: number; error?: string }> {
   const isOffline = isSystemOffline();
   const stepCode = params.stepCode || 'D9';
   const lossIds = new Set(params.deviceLossAnimalIds || []);
+  const selectedIds = params.animalIds ? new Set(params.animalIds) : null;
   const todayIso = new Date().toISOString();
 
   if (isOffline) {
     try {
-      const lotAnimals = await offlineDb.lot_animals.where('lot_id').equals(params.lotId).toArray();
+      const allLotAnimals = await offlineDb.lot_animals.where('lot_id').equals(params.lotId).toArray();
+      const lotAnimals = selectedIds
+        ? allLotAnimals.filter((la) => selectedIds.has(la.animal_id))
+        : allLotAnimals;
       for (const la of lotAnimals) {
         const hasLoss = lossIds.has(la.animal_id);
         const mgmts = await offlineDb.animal_managements
@@ -8196,17 +8203,23 @@ export async function executeBatchLotManagementD9(params: {
         await offlineDb.management_events.update(targetEvent.id, {
           status: 'concluido',
           execution_date: params.executionDate,
-          animals_worked_count: lotAnimals.length - lossIds.size,
+          animals_worked_count: Math.max(0, lotAnimals.length - lossIds.size),
           losses_count: lossIds.size,
           updated_at: todayIso,
         });
         await syncEngine.enqueueMutation('update', 'management_events', targetEvent.id, targetEvent.farm_id, {
           status: 'concluido',
           execution_date: params.executionDate,
-          animals_worked_count: lotAnimals.length - lossIds.size,
+          animals_worked_count: Math.max(0, lotAnimals.length - lossIds.size),
           losses_count: lossIds.size,
           updated_at: todayIso,
         });
+      }
+
+      const workedAnimalIds = lotAnimals.filter((la) => !lossIds.has(la.animal_id)).map((la) => la.animal_id);
+      saveLocalLotStepChecks(params.lotId, stepCode, workedAnimalIds, true);
+      if (lossIds.size > 0) {
+        saveLocalLotStepChecks(params.lotId, stepCode, Array.from(lossIds), false);
       }
 
       invalidateCache('lot_animals');
@@ -8227,16 +8240,19 @@ export async function executeBatchLotManagementD9(params: {
 
   const supabase = createClient();
 
-  const { data: lotAnimals, error: laErr } = await supabase
+  const { data: allLotAnimals, error: laErr } = await supabase
     .from('iatf_lot_animals')
     .select('animal_id')
     .eq('lot_id', params.lotId);
 
   if (laErr) return { success: false, count: 0, error: laErr.message };
 
-  const total = lotAnimals?.length || 0;
+  const lotAnimals = selectedIds
+    ? (allLotAnimals || []).filter((la) => selectedIds.has(la.animal_id))
+    : (allLotAnimals || []);
+  const total = lotAnimals.length;
 
-  for (const la of lotAnimals || []) {
+  for (const la of lotAnimals) {
     const hasLoss = lossIds.has(la.animal_id);
 
     const { data: mgmts } = await supabase
@@ -8275,13 +8291,19 @@ export async function executeBatchLotManagementD9(params: {
     .update({
       status: 'concluido',
       execution_date: params.executionDate,
-      animals_worked_count: total - lossIds.size,
+      animals_worked_count: Math.max(0, total - lossIds.size),
       losses_count: lossIds.size,
       responsible_name: params.responsibleName || null,
       updated_at: todayIso,
     })
     .eq('lot_id', params.lotId)
     .eq('step_code', stepCode);
+
+  const workedAnimalIds = lotAnimals.filter((la) => !lossIds.has(la.animal_id)).map((la) => la.animal_id);
+  saveLocalLotStepChecks(params.lotId, stepCode, workedAnimalIds, true);
+  if (lossIds.size > 0) {
+    saveLocalLotStepChecks(params.lotId, stepCode, Array.from(lossIds), false);
+  }
 
   invalidateCache('lot_animals');
   invalidateCache('lots');
@@ -8389,6 +8411,12 @@ export async function executeBatchLotManagementIA(params: {
           animals_worked_count: activeItems.length,
           updated_at: todayIso,
         });
+      }
+
+      const skippedItems = params.items.filter((it) => it.skipped);
+      saveLocalLotStepChecks(params.lotId, 'IA', activeItems.map((it) => it.animal_id), true);
+      if (skippedItems.length > 0) {
+        saveLocalLotStepChecks(params.lotId, 'IA', skippedItems.map((it) => it.animal_id), false);
       }
 
       invalidateCache('lot_animals');
@@ -8519,6 +8547,12 @@ export async function executeBatchLotManagementIA(params: {
     .eq('lot_id', params.lotId)
     .eq('step_code', 'IA');
 
+  const skippedItems = params.items.filter((it) => it.skipped);
+  saveLocalLotStepChecks(params.lotId, 'IA', activeItems.map((it) => it.animal_id), true);
+  if (skippedItems.length > 0) {
+    saveLocalLotStepChecks(params.lotId, 'IA', skippedItems.map((it) => it.animal_id), false);
+  }
+
   invalidateCache('lot_animals');
   invalidateCache('lots');
   invalidateCache('animal_managements');
@@ -8606,6 +8640,8 @@ export async function executeBatchLotManagementDG(params: {
           updated_at: todayIso,
         });
       }
+
+      saveLocalLotStepChecks(params.lotId, 'DG', params.items.map((it) => it.animal_id), true);
 
       invalidateCache('lot_animals');
       invalidateCache('lots');
@@ -8715,6 +8751,8 @@ export async function executeBatchLotManagementDG(params: {
       .eq('id', params.lotId);
   }
 
+  saveLocalLotStepChecks(params.lotId, 'DG', params.items.map((it) => it.animal_id), true);
+
   invalidateCache('lot_animals');
   invalidateCache('lots');
   invalidateCache('animal_managements');
@@ -8722,4 +8760,405 @@ export async function executeBatchLotManagementDG(params: {
   invalidateCache('animals');
   invalidateCache('metrics');
   return { success: true, count: params.items.length };
+}
+
+// ============================================================
+// CHECKBOXES RÁPIDOS DE ETAPAS POR MATRIZ NO LOTE (D0, D7/D8/D9, IA, DG)
+// ============================================================
+
+const LOT_STEP_CHECKS_KEY_PREFIX = 'iatf_lot_step_checks_';
+
+export function readLocalLotStepChecks(lotId: string): Record<string, Record<string, boolean>> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(`${LOT_STEP_CHECKS_KEY_PREFIX}${lotId}`);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveLocalLotStepChecks(
+  lotId: string,
+  stepCode: string,
+  animalIds: string[],
+  checked: boolean
+): Record<string, Record<string, boolean>> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const current = readLocalLotStepChecks(lotId);
+    const upperStep = stepCode.toUpperCase();
+    for (const animalId of animalIds) {
+      if (!current[animalId]) current[animalId] = {};
+      current[animalId][upperStep] = checked;
+      if (upperStep === 'D7' || upperStep === 'D8' || upperStep === 'D9') {
+        current[animalId]['D9'] = checked;
+      }
+    }
+    localStorage.setItem(`${LOT_STEP_CHECKS_KEY_PREFIX}${lotId}`, JSON.stringify(current));
+    return current;
+  } catch {
+    return {};
+  }
+}
+
+export async function getLotAnimalStepChecks(
+  lotId: string,
+  lotAnimals?: LotAnimal[],
+  events?: ManagementEvent[]
+): Promise<Record<string, Record<string, boolean>>> {
+  const localMap = readLocalLotStepChecks(lotId);
+  const result: Record<string, Record<string, boolean>> = { ...localMap };
+
+  const ensureAnimal = (animalId: string) => {
+    if (!result[animalId]) result[animalId] = {};
+    return result[animalId];
+  };
+
+  try {
+    const animalsList = lotAnimals || (await getLotAnimals(lotId));
+    const lotEvents = (events || (await getManagementEvents(false))).filter((e) => e.lot_id === lotId);
+
+    const completedStepCodes = new Set(
+      lotEvents
+        .filter((e) => e.status === 'concluido' || e.status === 'realizado')
+        .map((e) => (e.step_code || '').toUpperCase())
+    );
+
+    let mgmtsByAnimal = new Map<string, Record<string, unknown>>();
+    if (isSystemOffline()) {
+      const allMgmts = await offlineDb.animal_managements.toArray();
+      for (const m of allMgmts) {
+        if (m.lot_id === lotId) {
+          mgmtsByAnimal.set(m.animal_id, m as Record<string, unknown>);
+        }
+      }
+    } else {
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from('animal_managements')
+        .select('animal_id, d0_executed_at, d9_executed_at, d9_device_loss, ia_executed_at, dg_executed_at, pregnancy_status')
+        .eq('lot_id', lotId);
+      if (!error && data) {
+        for (const m of data) {
+          mgmtsByAnimal.set(m.animal_id as string, m as Record<string, unknown>);
+        }
+      } else {
+        const allMgmts = await offlineDb.animal_managements.toArray();
+        for (const m of allMgmts) {
+          if (m.lot_id === lotId) {
+            mgmtsByAnimal.set(m.animal_id, m as Record<string, unknown>);
+          }
+        }
+      }
+    }
+
+    for (const la of animalsList) {
+      const animalChecks = ensureAnimal(la.animal_id);
+      const mgmt = mgmtsByAnimal.get(la.animal_id);
+      const rawLa = la as unknown as Record<string, unknown>;
+
+      // D0
+      if (animalChecks['D0'] === undefined) {
+        animalChecks['D0'] = Boolean(
+          mgmt?.d0_executed_at ||
+          completedStepCodes.has('D0')
+        );
+      }
+
+      // D7 / D8 / D9
+      const d9Done = Boolean(
+        (mgmt?.d9_executed_at && !mgmt?.d9_device_loss) ||
+        completedStepCodes.has('D9') ||
+        completedStepCodes.has('D8') ||
+        completedStepCodes.has('D7')
+      );
+      for (const code of ['D7', 'D8', 'D9']) {
+        if (animalChecks[code] === undefined) {
+          animalChecks[code] = d9Done;
+        }
+      }
+
+      // IA
+      if (animalChecks['IA'] === undefined) {
+        animalChecks['IA'] = Boolean(
+          mgmt?.ia_executed_at ||
+          la.bulls?.name ||
+          rawLa.bull_id ||
+          la.inseminator_name ||
+          la.ecc_ia != null ||
+          la.animals?.reproductive_status === 'inseminada' ||
+          la.animals?.reproductive_status === 'prenha' ||
+          completedStepCodes.has('IA')
+        );
+      }
+
+      // DG
+      if (animalChecks['DG'] === undefined) {
+        animalChecks['DG'] = Boolean(
+          mgmt?.dg_executed_at ||
+          la.pregnancy_status === 'prenha' ||
+          la.pregnancy_status === 'vazia' ||
+          completedStepCodes.has('DG') ||
+          completedStepCodes.has('DG1')
+        );
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(`${LOT_STEP_CHECKS_KEY_PREFIX}${lotId}`, JSON.stringify(result));
+    }
+  } catch (e) {
+    console.warn('getLotAnimalStepChecks error:', e);
+  }
+
+  return result;
+}
+
+export async function toggleLotAnimalStepCheck(params: {
+  lotId: string;
+  stepCode: string;
+  animalIds: string[];
+  checked: boolean;
+  totalAnimalsInLot?: number;
+  checkedCountInStep?: number;
+  executionDate?: string;
+  responsibleName?: string | null;
+}): Promise<{ success: boolean }> {
+  const upperStep = params.stepCode.toUpperCase();
+  const execDate = params.executionDate || getTodayDateString();
+  const todayIso = new Date().toISOString();
+
+  // 1. Persistir imediatamente no mapa local
+  const updatedMap = saveLocalLotStepChecks(params.lotId, upperStep, params.animalIds, params.checked);
+
+  // Contar quantos animais estão marcados nesta etapa
+  const totalChecked =
+    params.checkedCountInStep !== undefined
+      ? params.checkedCountInStep
+      : Object.values(updatedMap).filter((steps) => Boolean(steps[upperStep])).length;
+
+  const isOffline = isSystemOffline();
+
+  try {
+    if (isOffline) {
+      const lot = await offlineDb.lots.get(params.lotId);
+      const baseIaDate = (lot?.ia_planned_date as string | undefined) || execDate;
+
+      for (const animalId of params.animalIds) {
+        const la = await offlineDb.lot_animals
+          .where('lot_id')
+          .equals(params.lotId)
+          .and((item) => item.animal_id === animalId)
+          .first();
+
+        if (upperStep === 'D0') {
+          await offlineDb.animals.update(animalId, {
+            reproductive_status: params.checked ? 'em_protocolo' : 'vazia',
+            updated_at: todayIso,
+          });
+        } else if (upperStep === 'IA') {
+          await offlineDb.animals.update(animalId, {
+            reproductive_status: params.checked ? 'inseminada' : 'em_protocolo',
+            updated_at: todayIso,
+          });
+          if (la && params.checked && params.responsibleName && !la.inseminator_name) {
+            await offlineDb.lot_animals.update(la.id, {
+              inseminator_name: params.responsibleName,
+              updated_at: todayIso,
+            });
+          }
+        } else if (upperStep === 'DG' || upperStep === 'DG1') {
+          const newPregStatus = params.checked ? 'prenha' : 'pendente';
+          const expectedParturition = params.checked ? addDaysToDateString(baseIaDate, 295) : null;
+          if (la) {
+            await offlineDb.lot_animals.update(la.id, {
+              pregnancy_status: newPregStatus,
+              is_pregnant: params.checked ? true : null,
+              expected_parturition_date: expectedParturition,
+              updated_at: todayIso,
+            });
+            await syncEngine.enqueueMutation('update', 'iatf_lot_animals', la.id, la.farm_id, {
+              id: la.id,
+              pregnancy_status: newPregStatus,
+              expected_parturition_date: expectedParturition,
+              updated_at: todayIso,
+            });
+          }
+          await offlineDb.animals.update(animalId, {
+            reproductive_status: params.checked ? 'prenha' : 'inseminada',
+            updated_at: todayIso,
+          });
+        }
+      }
+
+      const events = await offlineDb.management_events.where('lot_id').equals(params.lotId).toArray();
+      const targetEvent = events.find((e) => {
+        const c = (e.step_code || '').toUpperCase();
+        if (upperStep === 'D9' || upperStep === 'D8' || upperStep === 'D7') {
+          return c === upperStep || c === 'D9' || c === 'D8' || c === 'D7';
+        }
+        if (upperStep === 'DG' || upperStep === 'DG1') {
+          return c === 'DG' || c === 'DG1';
+        }
+        return c === upperStep;
+      });
+
+      if (targetEvent) {
+        const newEventStatus = totalChecked > 0 ? 'concluido' : 'pendente';
+        await offlineDb.management_events.update(targetEvent.id, {
+          status: newEventStatus,
+          execution_date: totalChecked > 0 ? execDate : null,
+          animals_worked_count: totalChecked,
+          updated_at: todayIso,
+        });
+        await syncEngine.enqueueMutation('update', 'management_events', targetEvent.id, targetEvent.farm_id, {
+          status: newEventStatus,
+          execution_date: totalChecked > 0 ? execDate : null,
+          animals_worked_count: totalChecked,
+          updated_at: todayIso,
+        });
+      }
+
+      invalidateCache('lot_animals');
+      invalidateCache('lots');
+      invalidateCache('animal_managements');
+      invalidateCache('events');
+      invalidateCache('animals');
+      invalidateCache('metrics');
+      return { success: true };
+    }
+
+    // Modo Online
+    const supabase = createClient();
+
+    if (upperStep === 'D0') {
+      if (params.checked) {
+        await executeBatchLotManagementD0({
+          lotId: params.lotId,
+          executionDate: execDate,
+          responsibleName: params.responsibleName || null,
+          animalIds: params.animalIds,
+        });
+      } else {
+        await supabase
+          .from('animal_managements')
+          .update({ d0_executed_at: null, updated_at: todayIso })
+          .eq('lot_id', params.lotId)
+          .in('animal_id', params.animalIds);
+      }
+    } else if (upperStep === 'D7' || upperStep === 'D8' || upperStep === 'D9') {
+      if (params.checked) {
+        await executeBatchLotManagementD9({
+          lotId: params.lotId,
+          stepCode: upperStep,
+          executionDate: execDate,
+          responsibleName: params.responsibleName || null,
+          animalIds: params.animalIds,
+        });
+      } else {
+        await supabase
+          .from('animal_managements')
+          .update({ d9_executed_at: null, updated_at: todayIso })
+          .eq('lot_id', params.lotId)
+          .in('animal_id', params.animalIds);
+      }
+    } else if (upperStep === 'IA') {
+      await supabase
+        .from('animal_managements')
+        .update({
+          ia_executed_at: params.checked ? execDate : null,
+          ...(params.checked && params.responsibleName ? { inseminator_name: params.responsibleName } : {}),
+          updated_at: todayIso,
+        })
+        .eq('lot_id', params.lotId)
+        .in('animal_id', params.animalIds);
+
+      await supabase
+        .from('animals')
+        .update({
+          reproductive_status: params.checked ? 'inseminada' : 'em_protocolo',
+          updated_at: todayIso,
+        })
+        .in('id', params.animalIds);
+
+      if (params.checked && params.responsibleName) {
+        await supabase
+          .from('iatf_lot_animals')
+          .update({ inseminator_name: params.responsibleName, updated_at: todayIso })
+          .eq('lot_id', params.lotId)
+          .in('animal_id', params.animalIds)
+          .is('inseminator_name', null);
+      }
+    } else if (upperStep === 'DG' || upperStep === 'DG1') {
+      const { data: lot } = await supabase
+        .from('iatf_lots')
+        .select('ia_planned_date')
+        .eq('id', params.lotId)
+        .maybeSingle();
+      const baseIaDate = lot?.ia_planned_date || execDate;
+      const expectedParturition = params.checked ? addDaysToDateString(baseIaDate, 295) : null;
+      const newPregStatus = params.checked ? 'prenha' : 'pendente';
+
+      await supabase
+        .from('iatf_lot_animals')
+        .update({
+          pregnancy_status: newPregStatus,
+          expected_parturition_date: expectedParturition,
+          updated_at: todayIso,
+        })
+        .eq('lot_id', params.lotId)
+        .in('animal_id', params.animalIds);
+
+      await supabase
+        .from('animal_managements')
+        .update({
+          dg_executed_at: params.checked ? execDate : null,
+          pregnancy_status: newPregStatus,
+          expected_parturition_date: expectedParturition,
+          status: params.checked ? 'concluido' : 'em_andamento',
+          updated_at: todayIso,
+        })
+        .eq('lot_id', params.lotId)
+        .in('animal_id', params.animalIds);
+
+      await supabase
+        .from('animals')
+        .update({
+          reproductive_status: params.checked ? 'prenha' : 'inseminada',
+          updated_at: todayIso,
+        })
+        .in('id', params.animalIds);
+    }
+
+    const newEventStatus = totalChecked > 0 ? 'concluido' : 'pendente';
+    const stepCodesToMatch =
+      upperStep === 'D9' || upperStep === 'D8' || upperStep === 'D7'
+        ? [upperStep, 'D9', 'D8', 'D7']
+        : upperStep === 'DG' || upperStep === 'DG1'
+        ? ['DG', 'DG1']
+        : [upperStep];
+
+    await supabase
+      .from('management_events')
+      .update({
+        status: newEventStatus,
+        execution_date: totalChecked > 0 ? execDate : null,
+        animals_worked_count: totalChecked,
+        updated_at: todayIso,
+      })
+      .eq('lot_id', params.lotId)
+      .in('step_code', stepCodesToMatch);
+
+    invalidateCache('lot_animals');
+    invalidateCache('lots');
+    invalidateCache('animal_managements');
+    invalidateCache('events');
+    invalidateCache('animals');
+    invalidateCache('metrics');
+    return { success: true };
+  } catch (e) {
+    console.warn('toggleLotAnimalStepCheck fallback:', e);
+    return { success: true };
+  }
 }

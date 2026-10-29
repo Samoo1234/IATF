@@ -82,6 +82,7 @@ export default function BatchLotManagementModal({
   const [d9Date, setD9Date] = useState(getTodayDateString());
   const [d9Responsible, setD9Responsible] = useState(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
   const [d9Notes, setD9Notes] = useState('');
+  const [d9SelectedIds, setD9SelectedIds] = useState<string[]>([]);
   const [d9DeviceLossIds, setD9DeviceLossIds] = useState<string[]>([]);
 
   // ----------------------------------------------------
@@ -129,6 +130,7 @@ export default function BatchLotManagementModal({
       pregnancy_status: 'prenha' | 'vazia' | 'inconclusivo';
       ecc_dg: string;
       notes: string;
+      checked: boolean;
     }[]
   >([]);
 
@@ -146,6 +148,7 @@ export default function BatchLotManagementModal({
 
     setD9Date(getTodayDateString());
     setD9Responsible(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
+    setD9SelectedIds(lotAnimals.map((la) => la.animal_id));
     setD9DeviceLossIds([]);
 
     setIaDate(lot.ia_planned_date || getTodayDateString());
@@ -184,6 +187,7 @@ export default function BatchLotManagementModal({
             : 'prenha', // Default suggestion
         ecc_dg: la.ecc_dg ? la.ecc_dg.toFixed(2) : '3.00',
         notes: (la as unknown as { notes?: string }).notes || '',
+        checked: true,
       }))
     );
     setDgSearchQuery('');
@@ -399,6 +403,7 @@ export default function BatchLotManagementModal({
           responsibleName: d9Responsible,
           notes: d9Notes,
           deviceLossAnimalIds: d9DeviceLossIds,
+          animalIds: d9SelectedIds,
         });
 
         if (!res.success) {
@@ -447,13 +452,15 @@ export default function BatchLotManagementModal({
           return;
         }
 
-        const items = dgRows.map((r) => ({
-          animal_id: r.animal_id,
-          lot_animal_id: r.lot_animal_id,
-          pregnancy_status: r.pregnancy_status,
-          ecc_dg: r.ecc_dg ? parseFloat(r.ecc_dg) : null,
-          notes: r.notes?.trim() || null,
-        }));
+        const items = dgRows
+          .filter((r) => r.checked)
+          .map((r) => ({
+            animal_id: r.animal_id,
+            lot_animal_id: r.lot_animal_id,
+            pregnancy_status: r.pregnancy_status,
+            ecc_dg: r.ecc_dg ? parseFloat(r.ecc_dg) : null,
+            notes: r.notes?.trim() || null,
+          }));
 
         const res = await executeBatchLotManagementDG({
           lotId: lot.id,
@@ -649,23 +656,101 @@ export default function BatchLotManagementModal({
                 />
               </div>
 
-              {/* Matrizes Preview */}
-              <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2">
+              {/* Matrizes com Checkbox em D0 */}
+              <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-bold text-slate-300 flex items-center gap-1.5">
-                    <Layers className="w-4 h-4 text-sky-400" /> Matrizes do Lote que Receberão D0 ({lotAnimals.length})
+                    <Layers className="w-4 h-4 text-sky-400" /> Matrizes do Lote que Receberão D0 ({d0SelectedIds.length}/{lotAnimals.length})
                   </span>
-                  <span className="text-slate-400 font-mono text-[11px]">Protocolo: {lot.protocol_name || 'IATF'}</span>
-                </div>
-                <div className="flex flex-wrap gap-2 pt-2">
-                  {lotAnimals.map((la) => (
-                    <span
-                      key={la.id}
-                      className="px-2.5 py-1 rounded-lg bg-sky-500/10 border border-sky-500/30 text-sky-300 font-mono font-bold text-xs"
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setD0SelectedIds(
+                          d0SelectedIds.length === lotAnimals.length
+                            ? []
+                            : lotAnimals.map((la) => la.animal_id)
+                        )
+                      }
+                      className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-sky-300 font-bold text-[11px] transition-all cursor-pointer"
                     >
-                      {la.animals?.tag_number || 'S/N'}
-                    </span>
-                  ))}
+                      {d0SelectedIds.length === lotAnimals.length ? 'Desmarcar Todas' : 'Marcar Todas'}
+                    </button>
+                    <span className="text-slate-400 font-mono text-[11px]">Protocolo: {lot.protocol_name || 'IATF'}</span>
+                  </div>
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-56 overflow-y-auto">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0 z-10">
+                      <tr>
+                        <th className="p-3 w-12 text-center">
+                          <input
+                            type="checkbox"
+                            checked={lotAnimals.length > 0 && d0SelectedIds.length === lotAnimals.length}
+                            onChange={(e) =>
+                              setD0SelectedIds(
+                                e.target.checked ? lotAnimals.map((la) => la.animal_id) : []
+                              )
+                            }
+                            className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-sky-500 focus:ring-sky-500 cursor-pointer accent-sky-500"
+                            title="Marcar ou desmarcar todas as matrizes no D0"
+                          />
+                        </th>
+                        <th className="p-3">Brinco</th>
+                        <th className="p-3">Categoria</th>
+                        <th className="p-3 text-center">Status D0</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80 font-mono">
+                      {lotAnimals.map((la) => {
+                        const isChecked = d0SelectedIds.includes(la.animal_id);
+                        return (
+                          <tr
+                            key={la.id}
+                            onClick={() =>
+                              setD0SelectedIds((prev) =>
+                                prev.includes(la.animal_id)
+                                  ? prev.filter((id) => id !== la.animal_id)
+                                  : [...prev, la.animal_id]
+                              )
+                            }
+                            className={`hover:bg-slate-900 transition-colors cursor-pointer ${!isChecked ? 'opacity-45 bg-slate-950/80' : ''}`}
+                          >
+                            <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  setD0SelectedIds((prev) =>
+                                    checked
+                                      ? prev.includes(la.animal_id)
+                                        ? prev
+                                        : [...prev, la.animal_id]
+                                      : prev.filter((id) => id !== la.animal_id)
+                                  );
+                                }}
+                                className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-sky-500 focus:ring-sky-500 cursor-pointer accent-sky-500"
+                              />
+                            </td>
+                            <td className="p-3 font-bold text-white font-mono">{la.animals?.tag_number || 'S/N'}</td>
+                            <td className="p-3 font-sans text-slate-400">{la.animals?.animal_categories?.name || 'Matriz'}</td>
+                            <td className="p-3 text-center font-sans">
+                              {isChecked ? (
+                                <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px] font-bold">
+                                  Selecionada p/ D0
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-bold">
+                                  Não selecionada
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>
@@ -714,21 +799,49 @@ export default function BatchLotManagementModal({
                 </div>
               </div>
 
-              {/* Tabela de Matrizes com Marcação de Perda de Dispositivo */}
+              {/* Tabela de Matrizes com Checkbox e Marcação de Perda de Dispositivo */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center justify-between text-xs flex-wrap gap-2">
                   <span className="font-bold text-slate-300">
-                    Conferência de Dispositivo das Matrizes ({lotAnimals.length})
+                    Conferência de Dispositivo das Matrizes ({d9SelectedIds.length}/{lotAnimals.length})
                   </span>
-                  <span className="text-[11px] text-amber-400">
-                    {d9DeviceLossIds.length > 0 ? `${d9DeviceLossIds.length} perda(s) registrada(s)` : 'Nenhuma perda (100% retido)'}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setD9SelectedIds(
+                          d9SelectedIds.length === lotAnimals.length
+                            ? []
+                            : lotAnimals.map((la) => la.animal_id)
+                        )
+                      }
+                      className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-bold text-[11px] transition-all cursor-pointer"
+                    >
+                      {d9SelectedIds.length === lotAnimals.length ? 'Desmarcar Todas' : 'Marcar Todas'}
+                    </button>
+                    <span className="text-[11px] text-amber-400">
+                      {d9DeviceLossIds.length > 0 ? `${d9DeviceLossIds.length} perda(s) registrada(s)` : 'Nenhuma perda (100% retido)'}
+                    </span>
+                  </div>
                 </div>
 
-                <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-52 overflow-y-auto">
+                <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-56 overflow-y-auto">
                   <table className="w-full text-left text-xs text-slate-300">
-                    <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0">
+                    <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0 z-10">
                       <tr>
+                        <th className="p-3 w-12 text-center">
+                          <input
+                            type="checkbox"
+                            checked={lotAnimals.length > 0 && d9SelectedIds.length === lotAnimals.length}
+                            onChange={(e) =>
+                              setD9SelectedIds(
+                                e.target.checked ? lotAnimals.map((la) => la.animal_id) : []
+                              )
+                            }
+                            className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-amber-500 focus:ring-amber-500 cursor-pointer accent-amber-500"
+                            title="Marcar ou desmarcar todas as matrizes no D9"
+                          />
+                        </th>
                         <th className="p-3">Brinco</th>
                         <th className="p-3">Categoria</th>
                         <th className="p-3 text-center">Status Retirada</th>
@@ -737,13 +850,38 @@ export default function BatchLotManagementModal({
                     </thead>
                     <tbody className="divide-y divide-slate-800/80 font-mono">
                       {lotAnimals.map((la) => {
+                        const isChecked = d9SelectedIds.includes(la.animal_id);
                         const hasLoss = d9DeviceLossIds.includes(la.animal_id);
                         return (
-                          <tr key={la.id} className="hover:bg-slate-900 transition-colors">
+                          <tr
+                            key={la.id}
+                            className={`hover:bg-slate-900 transition-colors ${!isChecked ? 'opacity-45 bg-slate-950/80' : ''}`}
+                          >
+                            <td className="p-3 text-center">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  setD9SelectedIds((prev) =>
+                                    checked
+                                      ? prev.includes(la.animal_id)
+                                        ? prev
+                                        : [...prev, la.animal_id]
+                                      : prev.filter((id) => id !== la.animal_id)
+                                  );
+                                }}
+                                className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-amber-500 focus:ring-amber-500 cursor-pointer accent-amber-500"
+                              />
+                            </td>
                             <td className="p-3 font-bold text-white font-mono">{la.animals?.tag_number || 'S/N'}</td>
                             <td className="p-3 font-sans text-slate-400">{la.animals?.animal_categories?.name || 'Matriz'}</td>
                             <td className="p-3 text-center font-sans">
-                              {hasLoss ? (
+                              {!isChecked ? (
+                                <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-bold">
+                                  Não selecionada
+                                </span>
+                              ) : hasLoss ? (
                                 <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-bold">
                                   Interrompido (Perda)
                                 </span>
@@ -756,8 +894,9 @@ export default function BatchLotManagementModal({
                             <td className="p-3 text-center">
                               <button
                                 type="button"
+                                disabled={!isChecked}
                                 onClick={() => handleToggleDeviceLoss(la.animal_id)}
-                                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 disabled:opacity-40 ${
                                   hasLoss
                                     ? 'bg-rose-500 text-white font-extrabold shadow-sm shadow-rose-500/40'
                                     : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'
@@ -991,6 +1130,15 @@ export default function BatchLotManagementModal({
                   <table className="w-full text-left text-xs text-slate-300">
                     <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0 z-10">
                       <tr>
+                        <th className="p-2.5 w-10 text-center">
+                          <input
+                            type="checkbox"
+                            checked={filteredIaRows.length > 0 && filteredIaRows.every((r) => !r.skipped)}
+                            onChange={(e) => handleSetAllIaSkipped(!e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-emerald-500 focus:ring-emerald-500 cursor-pointer accent-emerald-500"
+                            title="Marcar ou desmarcar todas as matrizes para IA"
+                          />
+                        </th>
                         <th className="p-2.5">Brinco</th>
                         <th className="p-2.5">Categoria</th>
                         <th className="p-2.5">Touro Utilizado</th>
@@ -1003,7 +1151,7 @@ export default function BatchLotManagementModal({
                     <tbody className="divide-y divide-slate-800/80 font-sans">
                       {filteredIaRows.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="p-6 text-center text-slate-400 font-sans">
+                          <td colSpan={8} className="p-6 text-center text-slate-400 font-sans">
                             Nenhuma matriz encontrada com o termo &quot;{iaSearchQuery}&quot;.
                           </td>
                         </tr>
@@ -1013,6 +1161,15 @@ export default function BatchLotManagementModal({
                             key={row.animal_id}
                             className={`hover:bg-slate-900 transition-colors ${row.skipped ? 'opacity-40 bg-slate-950/80' : ''}`}
                           >
+                            <td className="p-2.5 text-center">
+                              <input
+                                type="checkbox"
+                                checked={!row.skipped}
+                                onChange={(e) => updateIaRow(row.animal_id, { skipped: !e.target.checked })}
+                                className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-emerald-500 focus:ring-emerald-500 cursor-pointer accent-emerald-500"
+                                title={row.skipped ? 'Dar check para inseminar esta matriz' : 'Desmarcar matriz'}
+                              />
+                            </td>
                             <td className="p-2.5 font-bold text-white font-mono whitespace-nowrap">{row.tag_number}</td>
                             <td className="p-2.5 text-slate-400 text-xs whitespace-nowrap">{row.category_name}</td>
                             <td className="p-2.5 whitespace-nowrap">
@@ -1230,6 +1387,21 @@ export default function BatchLotManagementModal({
                 <table className="w-full text-left text-xs text-slate-300">
                   <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0 z-10">
                     <tr>
+                      <th className="p-3 w-10 text-center">
+                        <input
+                          type="checkbox"
+                          checked={filteredDgRows.length > 0 && filteredDgRows.every((r) => r.checked)}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            const targetIds = new Set(filteredDgRows.map((r) => r.animal_id));
+                            setDgRows((prev) =>
+                              prev.map((r) => (targetIds.has(r.animal_id) ? { ...r, checked } : r))
+                            );
+                          }}
+                          className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-purple-500 focus:ring-purple-500 cursor-pointer accent-purple-500"
+                          title="Marcar ou desmarcar todas as matrizes no DG"
+                        />
+                      </th>
                       <th className="p-3">Brinco</th>
                       <th className="p-3">Categoria</th>
                       <th className="p-3 text-center">Diagnóstico</th>
@@ -1241,21 +1413,34 @@ export default function BatchLotManagementModal({
                   <tbody className="divide-y divide-slate-800/80 font-mono">
                     {filteredDgRows.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="p-6 text-center text-slate-400 font-sans">
+                        <td colSpan={7} className="p-6 text-center text-slate-400 font-sans">
                           Nenhuma matriz encontrada com o termo &quot;{dgSearchQuery}&quot;.
                         </td>
                       </tr>
                     ) : (
                       filteredDgRows.map((row) => (
-                        <tr key={row.animal_id} className="hover:bg-slate-900 transition-colors">
+                        <tr
+                          key={row.animal_id}
+                          className={`hover:bg-slate-900 transition-colors ${!row.checked ? 'opacity-40 bg-slate-950/80' : ''}`}
+                        >
+                          <td className="p-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={row.checked}
+                              onChange={(e) => updateDgRow(row.animal_id, { checked: e.target.checked })}
+                              className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-purple-500 focus:ring-purple-500 cursor-pointer accent-purple-500"
+                              title={row.checked ? 'Desmarcar esta matriz do DG' : 'Dar check para registrar DG nesta matriz'}
+                            />
+                          </td>
                           <td className="p-3 font-bold text-white whitespace-nowrap">{row.tag_number}</td>
                           <td className="p-3 text-slate-400 font-sans whitespace-nowrap">{row.category_name}</td>
                           <td className="p-3 text-center whitespace-nowrap">
                             <div className="inline-flex items-center p-0.5 rounded-lg bg-slate-900 border border-slate-800 gap-1 font-sans">
                               <button
                                 type="button"
+                                disabled={!row.checked}
                                 onClick={() => updateDgRow(row.animal_id, { pregnancy_status: 'prenha' })}
-                                className={`px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
+                                className={`px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer disabled:opacity-40 ${
                                   row.pregnancy_status === 'prenha'
                                     ? 'bg-emerald-500 text-slate-950 font-black shadow-sm'
                                     : 'text-slate-400 hover:text-white'
@@ -1265,8 +1450,9 @@ export default function BatchLotManagementModal({
                               </button>
                               <button
                                 type="button"
+                                disabled={!row.checked}
                                 onClick={() => updateDgRow(row.animal_id, { pregnancy_status: 'vazia' })}
-                                className={`px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
+                                className={`px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer disabled:opacity-40 ${
                                   row.pregnancy_status === 'vazia'
                                     ? 'bg-rose-500 text-white font-black shadow-sm'
                                     : 'text-slate-400 hover:text-white'
@@ -1279,10 +1465,11 @@ export default function BatchLotManagementModal({
                           <td className="p-3 min-w-[200px]">
                             <input
                               type="text"
+                              disabled={!row.checked}
                               placeholder="Ex: 35 dias, CL D, reavaliar..."
                               value={row.notes || ''}
                               onChange={(e) => updateDgRow(row.animal_id, { notes: e.target.value })}
-                              className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-purple-500 font-sans"
+                              className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-purple-500 font-sans disabled:opacity-40"
                             />
                           </td>
                           <td className="p-3 text-center whitespace-nowrap">
@@ -1291,13 +1478,14 @@ export default function BatchLotManagementModal({
                               step="0.25"
                               min="1"
                               max="5"
+                              disabled={!row.checked}
                               value={row.ecc_dg}
                               onChange={(e) => updateDgRow(row.animal_id, { ecc_dg: e.target.value })}
-                              className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono text-center focus:outline-none focus:border-purple-500"
+                              className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono text-center focus:outline-none focus:border-purple-500 disabled:opacity-40"
                             />
                           </td>
                           <td className="p-3 text-center text-emerald-400 font-mono font-bold text-xs whitespace-nowrap">
-                            {getExpectedParturitionDate(row.pregnancy_status)}
+                            {row.checked ? getExpectedParturitionDate(row.pregnancy_status) : '-'}
                           </td>
                         </tr>
                       ))
