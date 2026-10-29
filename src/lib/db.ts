@@ -8825,7 +8825,7 @@ export async function getLotAnimalStepChecks(
         .map((e) => (e.step_code || '').toUpperCase())
     );
 
-    let mgmtsByAnimal = new Map<string, Record<string, unknown>>();
+    const mgmtsByAnimal = new Map<string, Record<string, unknown>>();
     if (isSystemOffline()) {
       const allMgmts = await offlineDb.animal_managements.toArray();
       for (const m of allMgmts) {

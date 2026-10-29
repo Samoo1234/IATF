@@ -27,7 +27,7 @@ import { getTodayDateString } from '@/lib/dateUtils';
 type TabType = 'matrizes' | 'bulls' | 'farms' | 'breeds' | 'seasons' | 'veterinarians';
 
 export default function RegistriesPage() {
-  const { activeFarmId, activeFarm, refreshFarms, setActiveFarmId } = useActiveFarm();
+  const { activeFarmId, refreshFarms, setActiveFarmId } = useActiveFarm();
   const { seasons, refreshSeasons, setAsGlobalActiveSeason } = useActiveSeason();
   const [activeTab, setActiveTab] = useState<TabType>('farms');
   const [farmStatusFilter, setFarmStatusFilter] = useState<'active' | 'frozen' | 'all'>('active');

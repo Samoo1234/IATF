@@ -12,7 +12,7 @@ import {
 import { 
   ClipboardList, Plus, RefreshCw, X, Pill, Trash2, 
   Edit2, Copy, Search, Archive, CheckCircle2, AlertCircle, 
-  Sparkles, Clock, Calendar, Check, ArrowRight
+  Sparkles, Clock, ArrowRight
 } from 'lucide-react';
 
 interface StepFormItem {

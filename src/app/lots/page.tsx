@@ -219,7 +219,7 @@ export default function LotsPage() {
   const [showNewLot, setShowNewLot] = useState(false);
   const [protocols, setProtocols] = useState<Protocol[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
-  const [farms, setFarms] = useState<Farm[]>([]);
+  const [, setFarms] = useState<Farm[]>([]);
   const [breeds, setBreeds] = useState<Breed[]>([]);
   const [categories, setCategories] = useState<AnimalCategory[]>([]);
   const [veterinarians, setVeterinarians] = useState<Veterinarian[]>([]);
