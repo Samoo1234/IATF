@@ -161,44 +161,49 @@ export default function RegistriesPage() {
 
   const loadAllData = useCallback(async () => {
     setLoading(true);
-    const [a, b, f, br, c, v, gc] = await Promise.all([
-      getAnimals(1000, true),
-      getBulls(true),
-      getFarms(true, true),
-      getBreeds(),
-      getAnimalCategories(),
-      getVeterinarians(true),
-      getGeneticCenters(true),
-    ]);
-    setAnimals(a);
-    setBulls(b);
-    setFarms(f);
-    setBreeds(br);
-    setCategories(c);
-    setVeterinarians(v);
-    setCenters(gc);
+    try {
+      const [a, b, f, br, c, v, gc] = await Promise.all([
+        getAnimals(1000, true),
+        getBulls(true),
+        getFarms(true, true),
+        getBreeds(),
+        getAnimalCategories(),
+        getVeterinarians(true),
+        getGeneticCenters(true),
+      ]);
+      setAnimals(a);
+      setBulls(b);
+      setFarms(f);
+      setBreeds(br);
+      setCategories(c);
+      setVeterinarians(v);
+      setCenters(gc);
 
-    const defaultVet = v.find((vet) => vet.is_default) || v[0];
-    if (defaultVet) {
-      const vetName = defaultVet.crmv ? `${defaultVet.name} (${defaultVet.crmv})` : defaultVet.name;
-      setFarmForm((prev) => ({
+      const defaultVet = v.find((vet) => vet.is_default) || v[0];
+      if (defaultVet) {
+        const vetName = defaultVet.crmv ? `${defaultVet.name} (${defaultVet.crmv})` : defaultVet.name;
+        setFarmForm((prev) => ({
+          ...prev,
+          technical_responsible: prev.technical_responsible || vetName,
+        }));
+      }
+
+      const farmToUse = activeFarmId || f[0]?.id || '';
+      const activeFarmObj = f.find(farm => farm.id === farmToUse);
+      setAnimalForm((prev) => ({
         ...prev,
-        technical_responsible: prev.technical_responsible || vetName,
+        farm_id: farmToUse,
+        property_id: activeFarmObj?.properties?.[0]?.id || '',
       }));
+      setPropertyForm((prev) => ({
+        ...prev,
+        farm_id: farmToUse,
+      }));
+    } catch (err) {
+      console.error('Erro ao carregar dados gerais:', err);
+    } finally {
+      setLoading(false);
     }
-
-    const farmToUse = activeFarmId || f[0]?.id || '';
-    const activeFarmObj = f.find(farm => farm.id === farmToUse);
-    setAnimalForm((prev) => ({
-      ...prev,
-      farm_id: farmToUse,
-      property_id: activeFarmObj?.properties?.[0]?.id || '',
-    }));
-    setPropertyForm((prev) => ({
-      ...prev,
-      farm_id: farmToUse,
-    }));
-    setLoading(false);
   }, [activeFarmId]);
 
   useEffect(() => {

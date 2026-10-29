@@ -4,6 +4,7 @@ import { use, useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { 
+  getAnimalById,
   getAnimalHistory, 
   getAnimalManagements, 
   updateAnimal,
@@ -81,25 +82,23 @@ export default function AnimalDetailPage({ params }: { params: Promise<{ id: str
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const { createClient } = await import('@/lib/supabase/client');
-    const supabase = createClient();
-    
-    const [animalRes, hList, mList] = await Promise.all([
-      supabase
-        .from('animals')
-        .select('*, breeds(name), animal_categories(name), properties(name), farms(name)')
-        .eq('id', id)
-        .single(),
-      getAnimalHistory(id),
-      getAnimalManagements(id, true),
-    ]);
+    try {
+      const [animalData, hList, mList] = await Promise.all([
+        getAnimalById(id),
+        getAnimalHistory(id),
+        getAnimalManagements(id, true),
+      ]);
 
-    if (animalRes.data) {
-      setAnimal(animalRes.data as unknown as Animal);
+      if (animalData) {
+        setAnimal(animalData);
+      }
+      setHistory(hList as Record<string, unknown>[]);
+      setManagements(mList);
+    } catch (err) {
+      console.error('Erro ao carregar dados da matriz:', err);
+    } finally {
+      setLoading(false);
     }
-    setHistory(hList as Record<string, unknown>[]);
-    setManagements(mList);
-    setLoading(false);
   }, [id]);
 
   useEffect(() => {

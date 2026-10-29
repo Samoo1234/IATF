@@ -187,7 +187,7 @@ class SyncEngine {
     this.notify();
 
     // Se estiver online, tenta enviar imediatamente
-    if (this.isOnline && !this.isSyncing) {
+    if (!this.isOffline() && !this.isSyncing) {
       this.syncNow();
     }
 
@@ -198,7 +198,7 @@ class SyncEngine {
    * Executa a sincronização de todas as alterações pendentes da fila (FIFO)
    */
   public async syncNow(): Promise<{ synced: number; failed: number }> {
-    if (this.isSyncing) {
+    if (this.isSyncing || this.isOffline()) {
       return { synced: 0, failed: 0 };
     }
 
@@ -297,7 +297,7 @@ class SyncEngine {
    * garantindo que todo o sistema funcione 100% offline.
    */
   public async syncDownAllData(orgIdParam?: string): Promise<void> {
-    if (typeof window !== 'undefined' && !navigator.onLine) return;
+    if (this.isOffline()) return;
 
     try {
       const supabase = createClient();
@@ -318,7 +318,9 @@ class SyncEngine {
         lotsRes,
         lotAnimalsRes,
         eventsRes,
-        vetsRes
+        vetsRes,
+        managementsRes,
+        centersRes,
       ] = await Promise.all([
         supabase.from('farms').select('*').eq('organization_id', orgId),
         supabase.from('properties').select('*').eq('organization_id', orgId),
@@ -333,6 +335,8 @@ class SyncEngine {
         supabase.from('iatf_lot_animals').select('*, animals(tag_number, reproductive_status, breeds(name), animal_categories(name), properties(name)), bulls(name), semen_batches(batch_number)').limit(5000),
         supabase.from('management_events').select('*').eq('organization_id', orgId),
         supabase.from('veterinarians').select('*').eq('organization_id', orgId),
+        supabase.from('animal_managements').select('*').eq('organization_id', orgId).limit(5000),
+        supabase.from('genetic_centers').select('*').eq('organization_id', orgId),
       ]);
 
       if (farmsRes.data && farmsRes.data.length > 0) {
@@ -390,6 +394,37 @@ class SyncEngine {
       }
       if (vetsRes.data && vetsRes.data.length > 0) {
         await offlineDb.veterinarians.bulkPut(vetsRes.data as OfflineVeterinarian[]);
+      }
+      if (managementsRes.data && managementsRes.data.length > 0) {
+        await offlineDb.animal_managements.bulkPut(
+          managementsRes.data.map((m: Record<string, unknown>): OfflineManagementRecord => ({
+            ...m,
+            id: m.id as string,
+            lot_id: (m.lot_id as string) || '',
+            animal_id: m.animal_id as string,
+            farm_id: (m.farm_id as string) || '',
+            step_code: (m.dg_executed_at
+              ? 'DG'
+              : m.ia_executed_at
+              ? 'IA'
+              : m.d9_executed_at
+              ? 'D9'
+              : 'D0') as 'D0' | 'D7' | 'D8' | 'D9' | 'IA' | 'DG',
+            date: ((m.dg_executed_at || m.ia_executed_at || m.d9_executed_at || m.d0_executed_at || m.start_date) as string) || new Date().toISOString().split('T')[0],
+            inseminator: (m.inseminator_name || m.d9_responsible || m.d0_responsible) as string | undefined,
+            semen_batch_id: m.semen_batch_id as string | undefined,
+            notes: (m.dg_notes || m.ia_notes || m.d9_notes || m.d0_notes || m.notes) as string | undefined,
+            created_at: (m.created_at as string) || new Date().toISOString(),
+            updated_at: (m.updated_at as string) || new Date().toISOString(),
+          }))
+        );
+      }
+      if (centersRes.data && centersRes.data.length > 0 && typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('iatf_offline_genetic_centers', JSON.stringify(centersRes.data));
+        } catch {
+          // ignore storage quota errors
+        }
       }
     } catch (err) {
       console.warn('[SyncEngine] Aviso durante syncDownAllData:', err);
@@ -514,11 +549,34 @@ class SyncEngine {
     managementId: string,
     data: { executed_at: string; responsible?: string | null; device_loss?: boolean; notes?: string | null }
   ): Promise<void> {
+    if (managementId.startsWith('lot_virtual_')) {
+      const lotAnimalId = managementId.replace('lot_virtual_', '');
+      const la = await offlineDb.lot_animals.get(lotAnimalId);
+      if (la) {
+        await offlineDb.lot_animals.update(lotAnimalId, {
+          current_step: 'D9',
+          d9_device_loss: Boolean(data.device_loss),
+          notes: data.notes || (la.notes as string | undefined),
+          updated_at: new Date().toISOString(),
+        });
+        await this.enqueueMutation('update', 'iatf_lot_animals', lotAnimalId, la.farm_id, {
+          id: lotAnimalId,
+          notes: data.notes || null,
+          updated_at: new Date().toISOString(),
+        });
+      }
+      return;
+    }
+
     const existing = await offlineDb.animal_managements.get(managementId);
     if (existing) {
       await offlineDb.animal_managements.update(managementId, {
         step_code: 'D9',
         date: data.executed_at,
+        d9_executed_at: data.executed_at,
+        d9_responsible: data.responsible || null,
+        d9_device_loss: Boolean(data.device_loss),
+        d9_notes: data.notes || null,
         inseminator: data.responsible || existing.inseminator,
         notes: data.notes || existing.notes,
         updated_at: new Date().toISOString(),
@@ -551,16 +609,23 @@ class SyncEngine {
     }
   ): Promise<void> {
     // 1. Atualizar registro local de manejo
-    const existing = await offlineDb.animal_managements.get(managementId);
-    if (existing) {
-      await offlineDb.animal_managements.update(managementId, {
-        step_code: 'IA',
-        date: data.executed_at,
-        semen_batch_id: data.semen_batch_id,
-        inseminator: data.inseminator_name || existing.inseminator,
-        notes: data.notes || existing.notes,
-        updated_at: new Date().toISOString(),
-      });
+    if (!managementId.startsWith('lot_virtual_')) {
+      const existing = await offlineDb.animal_managements.get(managementId);
+      if (existing) {
+        await offlineDb.animal_managements.update(managementId, {
+          step_code: 'IA',
+          date: data.executed_at,
+          ia_executed_at: data.executed_at,
+          bull_id: data.bull_id || null,
+          semen_batch_id: data.semen_batch_id || undefined,
+          inseminator_name: data.inseminator_name || null,
+          ecc_ia: data.ecc_ia ? parseFloat(data.ecc_ia) : null,
+          ia_notes: data.notes || null,
+          inseminator: data.inseminator_name || existing.inseminator,
+          notes: data.notes || existing.notes,
+          updated_at: new Date().toISOString(),
+        });
+      }
     }
 
     // 2. Dar baixa local de 1 dose do sêmen
@@ -573,7 +638,7 @@ class SyncEngine {
       const animal = await offlineDb.animals.get(data.animal_id);
       if (animal) {
         await offlineDb.animals.update(data.animal_id, {
-          status: 'inseminada',
+          reproductive_status: 'inseminada',
           updated_at: new Date().toISOString(),
         });
       }
@@ -584,12 +649,18 @@ class SyncEngine {
         .equals(data.animal_id)
         .toArray();
 
+      const bullObj = data.bull_id ? await offlineDb.bulls.get(data.bull_id) : undefined;
+      const batchObj = data.semen_batch_id ? await offlineDb.semen_batches.get(data.semen_batch_id) : undefined;
+
       for (const la of lotAnimals) {
         await offlineDb.lot_animals.update(la.id, {
-          bull_id: data.bull_id,
-          semen_batch_id: data.semen_batch_id,
+          bull_id: data.bull_id || null,
+          semen_batch_id: data.semen_batch_id || null,
           inseminator_name: data.inseminator_name || null,
+          ecc_ia: data.ecc_ia ? parseFloat(data.ecc_ia) : null,
           current_step: 'IA',
+          bulls: bullObj ? { name: bullObj.name } : la.bulls,
+          semen_batches: batchObj ? { batch_number: batchObj.batch_number } : la.semen_batches,
           updated_at: new Date().toISOString(),
         });
       }
@@ -598,16 +669,29 @@ class SyncEngine {
     }
 
     // 4. Enfileirar mutações para sincronização
-    await this.enqueueMutation('update', 'animal_managements', managementId, undefined, {
-      id: managementId,
-      ia_executed_at: data.executed_at,
-      bull_id: data.bull_id,
-      semen_batch_id: data.semen_batch_id,
-      inseminator_name: data.inseminator_name || null,
-      ecc_ia: data.ecc_ia ? parseFloat(data.ecc_ia) : null,
-      ia_notes: data.notes || null,
-      updated_at: new Date().toISOString(),
-    });
+    if (managementId.startsWith('lot_virtual_')) {
+      const lotAnimalId = managementId.replace('lot_virtual_', '');
+      await this.enqueueMutation('update', 'iatf_lot_animals', lotAnimalId, undefined, {
+        id: lotAnimalId,
+        bull_id: data.bull_id || null,
+        semen_batch_id: data.semen_batch_id || null,
+        inseminator_name: data.inseminator_name || null,
+        ecc_ia: data.ecc_ia ? parseFloat(data.ecc_ia) : null,
+        notes: data.notes || null,
+        updated_at: new Date().toISOString(),
+      });
+    } else {
+      await this.enqueueMutation('update', 'animal_managements', managementId, undefined, {
+        id: managementId,
+        ia_executed_at: data.executed_at,
+        bull_id: data.bull_id || null,
+        semen_batch_id: data.semen_batch_id || null,
+        inseminator_name: data.inseminator_name || null,
+        ecc_ia: data.ecc_ia ? parseFloat(data.ecc_ia) : null,
+        ia_notes: data.notes || null,
+        updated_at: new Date().toISOString(),
+      });
+    }
 
     await this.enqueueMutation('update', 'animals', data.animal_id, undefined, {
       id: data.animal_id,
@@ -630,18 +714,25 @@ class SyncEngine {
     }
   ): Promise<void> {
     const isPregnant = data.pregnancy_status === 'prenha';
-    const repStatus = isPregnant ? 'prenha' : data.pregnancy_status === 'vazia' ? 'vazia' : 'indefinido';
+    const repStatus = isPregnant ? 'prenha' : 'vazia';
 
     // 1. Atualizar registro local
-    const existing = await offlineDb.animal_managements.get(managementId);
-    if (existing) {
-      await offlineDb.animal_managements.update(managementId, {
-        step_code: 'DG',
-        date: data.executed_at,
-        diagnosis_result: data.pregnancy_status === 'inconclusivo' ? 'duvidosa' : data.pregnancy_status,
-        notes: data.notes || existing.notes,
-        updated_at: new Date().toISOString(),
-      });
+    if (!managementId.startsWith('lot_virtual_')) {
+      const existing = await offlineDb.animal_managements.get(managementId);
+      if (existing) {
+        await offlineDb.animal_managements.update(managementId, {
+          step_code: 'DG',
+          date: data.executed_at,
+          dg_executed_at: data.executed_at,
+          pregnancy_status: data.pregnancy_status,
+          ecc_dg: data.ecc_dg ?? null,
+          dg_notes: data.notes || null,
+          status: 'concluido',
+          diagnosis_result: data.pregnancy_status === 'inconclusivo' ? 'duvidosa' : data.pregnancy_status,
+          notes: data.notes || existing.notes,
+          updated_at: new Date().toISOString(),
+        });
+      }
     }
 
     // 2. Atualizar status na matriz local
@@ -649,7 +740,7 @@ class SyncEngine {
       const animal = await offlineDb.animals.get(data.animal_id);
       if (animal) {
         await offlineDb.animals.update(data.animal_id, {
-          status: repStatus,
+          reproductive_status: repStatus,
           updated_at: new Date().toISOString(),
         });
       }
@@ -673,15 +764,26 @@ class SyncEngine {
     }
 
     // 3. Enfileirar mutações
-    await this.enqueueMutation('update', 'animal_managements', managementId, undefined, {
-      id: managementId,
-      dg_executed_at: data.executed_at,
-      pregnancy_status: data.pregnancy_status,
-      ecc_dg: data.ecc_dg ?? null,
-      dg_notes: data.notes || null,
-      status: isPregnant ? 'concluido' : 'em_andamento',
-      updated_at: new Date().toISOString(),
-    });
+    if (managementId.startsWith('lot_virtual_')) {
+      const lotAnimalId = managementId.replace('lot_virtual_', '');
+      await this.enqueueMutation('update', 'iatf_lot_animals', lotAnimalId, undefined, {
+        id: lotAnimalId,
+        pregnancy_status: data.pregnancy_status,
+        ecc_dg: data.ecc_dg ?? null,
+        notes: data.notes || null,
+        updated_at: new Date().toISOString(),
+      });
+    } else {
+      await this.enqueueMutation('update', 'animal_managements', managementId, undefined, {
+        id: managementId,
+        dg_executed_at: data.executed_at,
+        pregnancy_status: data.pregnancy_status,
+        ecc_dg: data.ecc_dg ?? null,
+        dg_notes: data.notes || null,
+        status: 'concluido',
+        updated_at: new Date().toISOString(),
+      });
+    }
 
     await this.enqueueMutation('update', 'animals', data.animal_id, undefined, {
       id: data.animal_id,
@@ -865,7 +967,9 @@ class SyncEngine {
     // Se o animal pertence a um lote, atualiza a etapa no lot_animals local
     if (record.lot_id && record.animal_id) {
       const lotAnimal = await offlineDb.lot_animals
-        .where({ lot_id: record.lot_id, animal_id: record.animal_id })
+        .where('lot_id')
+        .equals(record.lot_id)
+        .and((la) => la.animal_id === record.animal_id)
         .first();
 
       if (lotAnimal) {
@@ -1033,6 +1137,42 @@ class SyncEngine {
     const downloadedBatches = semenBatchesData || [];
     if (downloadedBatches.length > 0) {
       await offlineDb.semen_batches.bulkPut(downloadedBatches as unknown as OfflineSemenBatch[]);
+    }
+
+    // 6. Manejos Individuais / de Lote (animal_managements)
+    updateProgress('Baixando histórico de manejos reprodutivos...', 92);
+    try {
+      const { data: managementsData } = await supabase
+        .from('animal_managements')
+        .select('*')
+        .eq('farm_id', farmId);
+
+      if (managementsData && managementsData.length > 0) {
+        await offlineDb.animal_managements.bulkPut(
+          managementsData.map((m: Record<string, unknown>): OfflineManagementRecord => ({
+            ...m,
+            id: m.id as string,
+            lot_id: (m.lot_id as string) || '',
+            animal_id: m.animal_id as string,
+            farm_id: (m.farm_id as string) || farmId,
+            step_code: (m.dg_executed_at
+              ? 'DG'
+              : m.ia_executed_at
+              ? 'IA'
+              : m.d9_executed_at
+              ? 'D9'
+              : 'D0') as 'D0' | 'D7' | 'D8' | 'D9' | 'IA' | 'DG',
+            date: ((m.dg_executed_at || m.ia_executed_at || m.d9_executed_at || m.d0_executed_at || m.start_date) as string) || new Date().toISOString().split('T')[0],
+            inseminator: (m.inseminator_name || m.d9_responsible || m.d0_responsible) as string | undefined,
+            semen_batch_id: m.semen_batch_id as string | undefined,
+            notes: (m.dg_notes || m.ia_notes || m.d9_notes || m.d0_notes || m.notes) as string | undefined,
+            created_at: (m.created_at as string) || new Date().toISOString(),
+            updated_at: (m.updated_at as string) || new Date().toISOString(),
+          }))
+        );
+      }
+    } catch (e) {
+      console.warn('Aviso ao baixar manejos reprodutivos para o curral:', e);
     }
 
     updateProgress('Base local 100% pronta para o campo!', 100);

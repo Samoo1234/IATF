@@ -435,13 +435,18 @@ export default function LotsPage() {
 
   const loadLots = useCallback(async () => {
     setLoading(true);
-    const [lotsData, eventsData] = await Promise.all([
-      getLots(false, activeFarmId || undefined),
-      getManagementEvents(false, activeFarmId || undefined),
-    ]);
-    setLots(lotsData);
-    setManagementEvents(eventsData);
-    setLoading(false);
+    try {
+      const [lotsData, eventsData] = await Promise.all([
+        getLots(false, activeFarmId || undefined),
+        getManagementEvents(false, activeFarmId || undefined),
+      ]);
+      setLots(lotsData);
+      setManagementEvents(eventsData);
+    } catch (err) {
+      console.error('Erro ao carregar lotes:', err);
+    } finally {
+      setLoading(false);
+    }
   }, [activeFarmId]);
 
   const loadAuxData = useCallback(async () => {

@@ -241,6 +241,31 @@ export async function getOrgMetadata(): Promise<OrgMetadata | null> {
   const orgId = await getCurrentOrgId();
   if (!orgId) return null;
 
+  if (isSystemOffline()) {
+    if (cachedMetadata) return cachedMetadata;
+    try {
+      const offlineFarms = await offlineDb.farms.toArray();
+      const firstFarm = offlineFarms[0];
+      return {
+        id: orgId,
+        name: firstFarm?.name || 'Organização Offline',
+        code: null,
+        document_number: null,
+        farm: firstFarm
+          ? {
+              id: firstFarm.id,
+              name: firstFarm.name,
+              technical_responsible: (firstFarm.technical_responsible as string | null) || null,
+              city: (firstFarm.city as string | null) || null,
+              state: (firstFarm.state as string | null) || null,
+            }
+          : null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   const supabase = createClient();
   const { data: org, error: orgErr } = await supabase
     .from('organizations')
@@ -249,6 +274,10 @@ export async function getOrgMetadata(): Promise<OrgMetadata | null> {
     .maybeSingle();
 
   if (orgErr || !org) {
+    if (isNetworkError(orgErr)) {
+      syncEngine.markOffline();
+      return cachedMetadata;
+    }
     console.error('getOrgMetadata error:', orgErr);
     return null;
   }
@@ -936,7 +965,9 @@ export async function createAndAddAnimalToLot(
       let animalId = existingAnimal?.id;
       if (animalId) {
         const alreadyInLot = await offlineDb.lot_animals
-          .where({ lot_id: lotId, animal_id: animalId })
+          .where('lot_id')
+          .equals(lotId)
+          .and((la) => la.animal_id === animalId)
           .first();
 
         if (alreadyInLot) {
@@ -2500,7 +2531,176 @@ export async function deleteAnimal(
   return { success: true };
 }
 
+export async function getAnimalById(animalId: string): Promise<Animal | null> {
+  const buildOfflineAnimal = async (): Promise<Animal | null> => {
+    try {
+      const a = await offlineDb.animals.get(animalId);
+      if (!a) return null;
+      const [farm, prop, breed, cat] = await Promise.all([
+        a.farm_id ? offlineDb.farms.get(a.farm_id) : Promise.resolve(undefined),
+        a.property_id ? offlineDb.properties.get(a.property_id) : Promise.resolve(undefined),
+        a.breed_id ? offlineDb.breeds.get(a.breed_id) : Promise.resolve(undefined),
+        a.category_id ? offlineDb.categories.get(a.category_id) : Promise.resolve(undefined),
+      ]);
+      const raw = a as Record<string, unknown>;
+      return {
+        id: a.id,
+        farm_id: a.farm_id,
+        property_id: (a.property_id as string | null) || null,
+        tag_number: String(a.tag_number || a.ear_tag || ''),
+        rfid_number: (raw.rfid_number as string | null) || null,
+        breed_id: (a.breed_id as string | null) || null,
+        category_id: (a.category_id as string | null) || null,
+        birth_date: (raw.birth_date as string | null) || null,
+        sex: (raw.sex as string) || 'F',
+        status: a.status || 'active',
+        reproductive_status: String(a.reproductive_status || 'vazia'),
+        breeds: breed ? { name: breed.name } : a.breed ? { name: String(a.breed) } : null,
+        animal_categories: cat ? { name: cat.name } : a.category ? { name: String(a.category) } : null,
+        properties: prop ? { name: prop.name } : null,
+        farms: farm ? { name: farm.name } : null,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  if (isSystemOffline()) {
+    return buildOfflineAnimal();
+  }
+
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('animals')
+    .select(`
+      id, farm_id, property_id, tag_number, rfid_number, breed_id, category_id,
+      birth_date, sex, status, reproductive_status,
+      breeds (name),
+      animal_categories (name),
+      properties (name),
+      farms (name)
+    `)
+    .eq('id', animalId)
+    .maybeSingle();
+
+  if (error || !data) {
+    if (isNetworkError(error)) {
+      syncEngine.markOffline();
+    }
+    return buildOfflineAnimal();
+  }
+
+  return data as unknown as Animal;
+}
+
 export async function getAnimalHistory(animalId: string) {
+  const buildOfflineHistory = async () => {
+    try {
+      const [lotAnimals, managements, lots, protocols, seasons, properties, bulls] = await Promise.all([
+        offlineDb.lot_animals.where('animal_id').equals(animalId).toArray(),
+        offlineDb.animal_managements.where('animal_id').equals(animalId).toArray(),
+        offlineDb.lots.toArray(),
+        offlineDb.protocols.toArray(),
+        offlineDb.seasons.toArray(),
+        offlineDb.properties.toArray(),
+        offlineDb.bulls.toArray(),
+      ]);
+
+      const lotMap = new Map(lots.map((l) => [l.id, l]));
+      const protoMap = new Map(protocols.map((p) => [p.id, p]));
+      const seasonMap = new Map(seasons.map((s) => [s.id, s]));
+      const propMap = new Map(properties.map((p) => [p.id, p]));
+      const bullMap = new Map(bulls.map((b) => [b.id, b]));
+
+      const lotData = lotAnimals.map((la) => {
+        const lot = lotMap.get(la.lot_id);
+        const season = lot?.season_id ? seasonMap.get(lot.season_id) : undefined;
+        const proto = lot?.protocol_id ? protoMap.get(lot.protocol_id) : undefined;
+        const prop = lot?.property_id ? propMap.get(lot.property_id as string) : undefined;
+        const bull = la.bull_id ? bullMap.get(la.bull_id as string) : undefined;
+
+        return {
+          id: la.id,
+          ecc_ia: la.ecc_ia ?? null,
+          ecc_dg: la.ecc_dg ?? null,
+          inseminator_name: la.inseminator_name ?? null,
+          pregnancy_status: la.pregnancy_status || 'pendente',
+          expected_parturition_date: la.expected_parturition_date ?? null,
+          created_at: la.created_at || la.updated_at || new Date().toISOString(),
+          source: 'lot',
+          iatf_lots: lot
+            ? {
+                code: lot.code,
+                start_date: lot.start_date,
+                ia_planned_date: lot.ia_planned_date,
+                status: lot.status,
+                reproductive_seasons: season ? { name: season.name } : null,
+                protocols: proto ? { name: proto.name } : null,
+                properties: prop ? { name: prop.name } : null,
+              }
+            : null,
+          bulls: bull ? { name: bull.name } : la.bulls || null,
+        };
+      });
+
+      const mgmtData = managements.map((m) => {
+        const raw = m as Record<string, unknown>;
+        const lot = m.lot_id ? lotMap.get(m.lot_id) : undefined;
+        const season = raw.season_id ? seasonMap.get(raw.season_id as string) : undefined;
+        const proto = raw.protocol_id ? protoMap.get(raw.protocol_id as string) : undefined;
+        const bull = raw.bull_id ? bullMap.get(raw.bull_id as string) : undefined;
+        const cycleNumber = (raw.cycle_number as number) || 1;
+
+        return {
+          id: m.id,
+          ecc_ia: raw.ecc_ia ?? null,
+          ecc_dg: raw.ecc_dg ?? null,
+          inseminator_name: raw.inseminator_name || m.inseminator || null,
+          pregnancy_status: raw.pregnancy_status || m.diagnosis_result || 'pendente',
+          expected_parturition_date: raw.expected_parturition_date ?? null,
+          created_at: m.created_at || m.updated_at || new Date().toISOString(),
+          cycle_number: cycleNumber,
+          source: 'individual',
+          d0_executed_at: raw.d0_executed_at || (m.step_code === 'D0' ? m.date : null),
+          d9_executed_at: raw.d9_executed_at || (m.step_code === 'D9' ? m.date : null),
+          ia_executed_at: raw.ia_executed_at || (m.step_code === 'IA' ? m.date : null),
+          dg_executed_at: raw.dg_executed_at || (m.step_code === 'DG' ? m.date : null),
+          iatf_lots: lot
+            ? {
+                code: lot.code,
+                start_date: raw.start_date || m.date,
+                ia_planned_date: raw.ia_date || lot.ia_planned_date,
+                status: raw.status || 'em_andamento',
+                reproductive_seasons: season ? { name: season.name } : null,
+                protocols: proto ? { name: proto.name } : null,
+              }
+            : {
+                code: `Manejo Indiv. (${cycleNumber}ª IATF)`,
+                start_date: raw.start_date || m.date,
+                ia_planned_date: raw.ia_date || null,
+                status: raw.status || 'em_andamento',
+                reproductive_seasons: season ? { name: season.name } : null,
+                protocols: proto ? { name: proto.name } : null,
+              },
+          bulls: bull ? { name: bull.name } : m.bull_name ? { name: m.bull_name } : null,
+        };
+      });
+
+      return [...mgmtData, ...lotData].sort((a, b) => {
+        const dateA = new Date(String(a.created_at || 0)).getTime();
+        const dateB = new Date(String(b.created_at || 0)).getTime();
+        return dateB - dateA;
+      });
+    } catch (e) {
+      console.warn('getAnimalHistory offline fallback error:', e);
+      return [];
+    }
+  };
+
+  if (isSystemOffline()) {
+    return buildOfflineHistory();
+  }
+
   const supabase = createClient();
   const [lotRes, mgmtRes] = await Promise.all([
     supabase
@@ -2531,11 +2731,13 @@ export async function getAnimalHistory(animalId: string) {
       .order('created_at', { ascending: false }),
   ]);
 
-  if (lotRes.error) {
-    console.error('getAnimalHistory lot error:', lotRes.error);
-  }
-  if (mgmtRes.error) {
-    console.error('getAnimalHistory mgmt error:', mgmtRes.error);
+  if (lotRes.error || mgmtRes.error) {
+    if (isNetworkError(lotRes.error) || isNetworkError(mgmtRes.error)) {
+      syncEngine.markOffline();
+      return buildOfflineHistory();
+    }
+    if (lotRes.error) console.error('getAnimalHistory lot error:', lotRes.error);
+    if (mgmtRes.error) console.error('getAnimalHistory mgmt error:', mgmtRes.error);
   }
 
   const lotData = (lotRes.data ?? []).map((row: Record<string, unknown>) => ({
@@ -2612,6 +2814,10 @@ export async function getOrgMetrics(forceRefresh = false): Promise<OrgMetrics | 
     if (cached) return cached;
   }
 
+  if (isSystemOffline()) {
+    return getCached<OrgMetrics>(cacheKey);
+  }
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('organization_metrics')
@@ -2620,7 +2826,11 @@ export async function getOrgMetrics(forceRefresh = false): Promise<OrgMetrics | 
     .maybeSingle();
 
   if (error) {
-    console.error('getOrgMetrics error:', error);
+    if (isNetworkError(error)) {
+      syncEngine.markOffline();
+    } else {
+      console.error('getOrgMetrics error:', error);
+    }
     return getCached<OrgMetrics>(cacheKey);
   }
   const result = data as OrgMetrics;
@@ -3449,6 +3659,25 @@ export interface GeneticCenter {
   updated_at?: string;
 }
 
+function getOfflineGeneticCentersFromStorage(): GeneticCenter[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem('iatf_offline_genetic_centers');
+    return raw ? (JSON.parse(raw) as GeneticCenter[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveOfflineGeneticCentersToStorage(centers: GeneticCenter[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem('iatf_offline_genetic_centers', JSON.stringify(centers));
+  } catch {
+    // ignore storage errors
+  }
+}
+
 export async function getGeneticCenters(forceRefresh = false, onlyActive = false): Promise<GeneticCenter[]> {
   const orgId = await getCurrentOrgId();
   const cacheKey = `genetic_centers_${orgId || 'all'}_${onlyActive ? 'active' : 'all'}`;
@@ -3456,6 +3685,17 @@ export async function getGeneticCenters(forceRefresh = false, onlyActive = false
   if (!forceRefresh) {
     const cached = getCached<GeneticCenter[]>(cacheKey);
     if (cached) return cached;
+  }
+
+  const filterOfflineCenters = (): GeneticCenter[] => {
+    const list = getOfflineGeneticCentersFromStorage();
+    return list
+      .filter((c) => (!orgId || !c.organization_id || c.organization_id === orgId) && (!onlyActive || c.active))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  };
+
+  if (isSystemOffline()) {
+    return filterOfflineCenters();
   }
 
   const supabase = createClient();
@@ -3470,12 +3710,19 @@ export async function getGeneticCenters(forceRefresh = false, onlyActive = false
 
   const { data, error } = await query;
   if (error) {
+    if (isNetworkError(error)) {
+      syncEngine.markOffline();
+      return filterOfflineCenters();
+    }
     console.error('getGeneticCenters error:', error);
-    return getCached<GeneticCenter[]>(cacheKey) ?? [];
+    return getCached<GeneticCenter[]>(cacheKey) ?? filterOfflineCenters();
   }
 
   const result = (data ?? []) as GeneticCenter[];
   setCached(cacheKey, result);
+  if (!onlyActive) {
+    saveOfflineGeneticCentersToStorage(result);
+  }
   return result;
 }
 
@@ -3487,8 +3734,35 @@ export async function createGeneticCenter(center: {
   contact_email?: string | null;
   active?: boolean;
 }): Promise<{ success: boolean; data?: GeneticCenter; error?: string }> {
-  const orgId = await getCurrentOrgId();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return { success: false, error: 'Organização não identificada.' };
+
+  const saveCenterOffline = async (): Promise<{ success: boolean; data?: GeneticCenter; error?: string }> => {
+    const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'center_' + Date.now();
+    const nowIso = new Date().toISOString();
+    const newCenter: GeneticCenter = {
+      id,
+      organization_id: orgId,
+      name: center.name.trim(),
+      short_name: center.short_name?.trim() || null,
+      document_number: center.document_number?.trim() || null,
+      contact_phone: center.contact_phone?.trim() || null,
+      contact_email: center.contact_email?.trim() || null,
+      active: center.active !== undefined ? center.active : true,
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+    const existing = getOfflineGeneticCentersFromStorage();
+    saveOfflineGeneticCentersToStorage([...existing, newCenter]);
+    await syncEngine.enqueueMutation('insert', 'genetic_centers', id, undefined, { ...newCenter }, orgId);
+    invalidateCache('genetic_centers');
+    return { success: true, data: newCenter };
+  };
+
+  if (isSystemOffline()) {
+    return saveCenterOffline();
+  }
 
   const supabase = createClient();
   const { data, error } = await supabase
@@ -3506,10 +3780,16 @@ export async function createGeneticCenter(center: {
     .single();
 
   if (error) {
+    if (isNetworkError(error)) {
+      syncEngine.markOffline();
+      return saveCenterOffline();
+    }
     console.error('createGeneticCenter error:', error);
     return { success: false, error: error.message };
   }
 
+  const existing = getOfflineGeneticCentersFromStorage();
+  saveOfflineGeneticCentersToStorage([...existing.filter((c) => c.id !== data.id), data as GeneticCenter]);
   invalidateCache('genetic_centers');
   return { success: true, data: data as GeneticCenter };
 }
@@ -3525,6 +3805,24 @@ export async function updateGeneticCenter(
     active?: boolean;
   }
 ): Promise<{ success: boolean; error?: string }> {
+  const updateOffline = async (): Promise<{ success: boolean; error?: string }> => {
+    const nowIso = new Date().toISOString();
+    const list = getOfflineGeneticCentersFromStorage();
+    const updated = list.map((c) => (c.id === id ? { ...c, ...center, updated_at: nowIso } : c));
+    saveOfflineGeneticCentersToStorage(updated);
+    await syncEngine.enqueueMutation('update', 'genetic_centers', id, undefined, {
+      id,
+      ...center,
+      updated_at: nowIso,
+    });
+    invalidateCache('genetic_centers');
+    return { success: true };
+  };
+
+  if (isSystemOffline()) {
+    return updateOffline();
+  }
+
   const supabase = createClient();
   const { error } = await supabase
     .from('genetic_centers')
@@ -3535,22 +3833,45 @@ export async function updateGeneticCenter(
     .eq('id', id);
 
   if (error) {
+    if (isNetworkError(error)) {
+      syncEngine.markOffline();
+      return updateOffline();
+    }
     console.error('updateGeneticCenter error:', error);
     return { success: false, error: error.message };
   }
 
+  const list = getOfflineGeneticCentersFromStorage();
+  saveOfflineGeneticCentersToStorage(list.map((c) => (c.id === id ? { ...c, ...center } : c)));
   invalidateCache('genetic_centers');
   return { success: true };
 }
 
 export async function deleteGeneticCenter(id: string): Promise<{ success: boolean; error?: string }> {
+  const deleteOffline = async (): Promise<{ success: boolean; error?: string }> => {
+    const list = getOfflineGeneticCentersFromStorage();
+    saveOfflineGeneticCentersToStorage(list.filter((c) => c.id !== id));
+    await syncEngine.enqueueMutation('delete', 'genetic_centers', id);
+    invalidateCache('genetic_centers');
+    return { success: true };
+  };
+
+  if (isSystemOffline()) {
+    return deleteOffline();
+  }
+
   const supabase = createClient();
 
   // Verificar se a central possui lotes de sêmen/embrião vinculados
-  const { count } = await supabase
+  const { count, error: countErr } = await supabase
     .from('genetic_material_batches')
     .select('id', { count: 'exact', head: true })
     .eq('center_id', id);
+
+  if (isNetworkError(countErr)) {
+    syncEngine.markOffline();
+    return deleteOffline();
+  }
 
   if (count && count > 0) {
     return {
@@ -3565,10 +3886,16 @@ export async function deleteGeneticCenter(id: string): Promise<{ success: boolea
     .eq('id', id);
 
   if (error) {
+    if (isNetworkError(error)) {
+      syncEngine.markOffline();
+      return deleteOffline();
+    }
     console.error('deleteGeneticCenter error:', error);
     return { success: false, error: error.message };
   }
 
+  const list = getOfflineGeneticCentersFromStorage();
+  saveOfflineGeneticCentersToStorage(list.filter((c) => c.id !== id));
   invalidateCache('genetic_centers');
   return { success: true };
 }
@@ -4601,11 +4928,36 @@ export async function getFarms(forceRefresh = false, includeFrozen = false): Pro
 }
 
 export async function freezeFarm(farmId: string): Promise<boolean> {
-  const orgId = await getCurrentOrgId();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return false;
+
+  const freezeOffline = async (): Promise<boolean> => {
+    try {
+      await offlineDb.farms.update(farmId, { status: 'frozen', updated_at: new Date().toISOString() });
+      await syncEngine.enqueueMutation('update', 'farms', farmId, farmId, {
+        id: farmId,
+        status: 'frozen',
+        updated_at: new Date().toISOString(),
+      }, orgId);
+      cachedFarms = null;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (isSystemOffline()) {
+    return freezeOffline();
+  }
+
   const supabase = createClient();
   const { error } = await supabase.rpc('freeze_farm', { p_farm_id: farmId, p_org_id: orgId });
   if (error) {
+    if (isNetworkError(error)) {
+      syncEngine.markOffline();
+      return freezeOffline();
+    }
     console.error('freezeFarm rpc error, attempting direct update:', error);
     const { error: err2 } = await supabase
       .from('farms')
@@ -4613,20 +4965,52 @@ export async function freezeFarm(farmId: string): Promise<boolean> {
       .eq('id', farmId)
       .eq('organization_id', orgId);
     if (err2) {
+      if (isNetworkError(err2)) {
+        syncEngine.markOffline();
+        return freezeOffline();
+      }
       console.error('freezeFarm direct update error:', err2);
       return false;
     }
   }
+  try {
+    await offlineDb.farms.update(farmId, { status: 'frozen', updated_at: new Date().toISOString() });
+  } catch {}
   cachedFarms = null;
   return true;
 }
 
 export async function unfreezeFarm(farmId: string): Promise<boolean> {
-  const orgId = await getCurrentOrgId();
+  const storedOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+  const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return false;
+
+  const unfreezeOffline = async (): Promise<boolean> => {
+    try {
+      await offlineDb.farms.update(farmId, { status: 'active', updated_at: new Date().toISOString() });
+      await syncEngine.enqueueMutation('update', 'farms', farmId, farmId, {
+        id: farmId,
+        status: 'active',
+        updated_at: new Date().toISOString(),
+      }, orgId);
+      cachedFarms = null;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (isSystemOffline()) {
+    return unfreezeOffline();
+  }
+
   const supabase = createClient();
   const { error } = await supabase.rpc('unfreeze_farm', { p_farm_id: farmId, p_org_id: orgId });
   if (error) {
+    if (isNetworkError(error)) {
+      syncEngine.markOffline();
+      return unfreezeOffline();
+    }
     console.error('unfreezeFarm rpc error, attempting direct update:', error);
     const { error: err2 } = await supabase
       .from('farms')
@@ -4634,10 +5018,17 @@ export async function unfreezeFarm(farmId: string): Promise<boolean> {
       .eq('id', farmId)
       .eq('organization_id', orgId);
     if (err2) {
+      if (isNetworkError(err2)) {
+        syncEngine.markOffline();
+        return unfreezeOffline();
+      }
       console.error('unfreezeFarm direct update error:', err2);
       return false;
     }
   }
+  try {
+    await offlineDb.farms.update(farmId, { status: 'active', updated_at: new Date().toISOString() });
+  } catch {}
   cachedFarms = null;
   return true;
 }
@@ -5642,7 +6033,7 @@ export async function setActiveReproductiveSeason(id: string): Promise<boolean> 
   const orgId = (await getCurrentOrgId()) || storedOrgId;
   if (!orgId) return false;
 
-  if (isOffline) {
+  const setOfflineActiveSeason = async (): Promise<boolean> => {
     try {
       const all = await offlineDb.seasons.toArray();
       for (const s of all) {
@@ -5656,11 +6047,18 @@ export async function setActiveReproductiveSeason(id: string): Promise<boolean> 
         status: 'active',
         updated_at: new Date().toISOString(),
       }, orgId);
-
-        } catch (e) {
+      invalidateCache('seasons');
+      invalidateCache('lots');
+      invalidateCache('metrics');
+      return true;
+    } catch (e) {
       console.error('setActiveReproductiveSeason offline error:', e);
       return false;
     }
+  };
+
+  if (isOffline) {
+    return setOfflineActiveSeason();
   }
 
   const supabase = createClient();
@@ -5679,6 +6077,10 @@ export async function setActiveReproductiveSeason(id: string): Promise<boolean> 
     .eq('organization_id', orgId);
 
   if (error) {
+    if (isNetworkError(error)) {
+      syncEngine.markOffline();
+      return setOfflineActiveSeason();
+    }
     console.error('setActiveReproductiveSeason error:', error);
     return false;
   }
@@ -6241,6 +6643,167 @@ export async function getAnimalManagements(animalId: string, forceRefresh = fals
     if (cached) return cached;
   }
 
+  const buildOfflineAnimalManagements = async (): Promise<AnimalManagement[]> => {
+    try {
+      const [mgmts, lotAnimals, protocols, bulls, batches, seasons, lots] = await Promise.all([
+        offlineDb.animal_managements.where('animal_id').equals(animalId).toArray(),
+        offlineDb.lot_animals.where('animal_id').equals(animalId).toArray(),
+        offlineDb.protocols.toArray(),
+        offlineDb.bulls.toArray(),
+        offlineDb.semen_batches.toArray(),
+        offlineDb.seasons.toArray(),
+        offlineDb.lots.toArray(),
+      ]);
+
+      const protoMap = new Map(protocols.map((p) => [p.id, p]));
+      const bullMap = new Map(bulls.map((b) => [b.id, b]));
+      const batchMap = new Map(batches.map((b) => [b.id, b]));
+      const seasonMap = new Map(seasons.map((s) => [s.id, s]));
+      const lotMap = new Map(lots.map((l) => [l.id, l]));
+
+      const mappedMgmts: AnimalManagement[] = mgmts.map((m, idx) => {
+        const raw = m as Record<string, unknown>;
+        const lot = m.lot_id ? lotMap.get(m.lot_id) : undefined;
+        const protoId = (raw.protocol_id as string) || lot?.protocol_id || null;
+        const proto = protoId ? protoMap.get(protoId) : undefined;
+        const bullId = (raw.bull_id as string) || null;
+        const bull = bullId ? bullMap.get(bullId) : undefined;
+        const batchId = m.semen_batch_id || (raw.semen_batch_id as string) || null;
+        const batch = batchId ? batchMap.get(batchId) : undefined;
+        const seasonId = (raw.season_id as string) || lot?.season_id || null;
+        const season = seasonId ? seasonMap.get(seasonId) : undefined;
+        const startDate = String(raw.start_date || lot?.start_date || m.date || new Date().toISOString().split('T')[0]);
+        const lotIaPlanned = (lot?.ia_planned_date as string | undefined) || undefined;
+        const lotDgPlanned = (lot?.dg_planned_date as string | undefined) || undefined;
+        const nowIso = new Date().toISOString();
+
+        return {
+          id: m.id,
+          organization_id: (raw.organization_id as string) || '',
+          farm_id: m.farm_id || lot?.farm_id || '',
+          animal_id: m.animal_id,
+          season_id: seasonId,
+          protocol_id: protoId,
+          lot_id: m.lot_id || null,
+          cycle_number: (raw.cycle_number as number) || idx + 1,
+          start_date: startDate,
+          d7_date: (raw.d7_date as string) || null,
+          d9_date: (raw.d9_date as string) || addDaysToDateString(startDate, 9),
+          ia_date: (raw.ia_date as string) || lotIaPlanned || addDaysToDateString(startDate, 11),
+          dg_date: (raw.dg_date as string) || lotDgPlanned || addDaysToDateString(startDate, 44),
+          d0_executed_at: (raw.d0_executed_at as string) || (m.step_code === 'D0' ? m.date : startDate),
+          d0_responsible: (raw.d0_responsible as string) || m.inseminator || null,
+          d0_notes: (raw.d0_notes as string) || null,
+          d9_executed_at: (raw.d9_executed_at as string) || (m.step_code === 'D9' || m.step_code === 'IA' || m.step_code === 'DG' ? ((raw.d9_executed_at as string) || m.date) : null),
+          d9_responsible: (raw.d9_responsible as string) || null,
+          d9_device_loss: Boolean(raw.d9_device_loss),
+          d9_notes: (raw.d9_notes as string) || null,
+          ia_executed_at: (raw.ia_executed_at as string) || (m.step_code === 'IA' ? m.date : null),
+          bull_id: bullId,
+          semen_batch_id: batchId,
+          inseminator_name: (raw.inseminator_name as string) || m.inseminator || null,
+          ecc_ia: (raw.ecc_ia as number) ?? null,
+          ia_notes: (raw.ia_notes as string) || null,
+          dg_executed_at: (raw.dg_executed_at as string) || (m.step_code === 'DG' ? m.date : null),
+          pregnancy_status: ((raw.pregnancy_status as string) || m.diagnosis_result || 'pendente') as AnimalManagement['pregnancy_status'],
+          ecc_dg: (raw.ecc_dg as number) ?? null,
+          expected_parturition_date: (raw.expected_parturition_date as string) || null,
+          dg_notes: (raw.dg_notes as string) || null,
+          status: ((raw.status as string) || (m.step_code === 'DG' ? 'concluido' : 'em_andamento')) as AnimalManagement['status'],
+          notes: m.notes || null,
+          created_at: m.created_at || nowIso,
+          updated_at: m.updated_at || m.created_at || nowIso,
+          protocols: proto
+            ? {
+                name: proto.name,
+                number_of_managements: (proto.number_of_managements as number) || 3,
+                protocol_steps: (proto.protocol_steps as NonNullable<AnimalManagement['protocols']>['protocol_steps']) || [],
+              }
+            : null,
+          bulls: bull ? { name: bull.name, code: bull.code || null } : m.bull_name ? { name: m.bull_name } : null,
+          semen_batches: batch ? { batch_number: batch.batch_number } : null,
+          reproductive_seasons: season ? { name: season.name } : null,
+          iatf_lots: lot ? { code: lot.code } : null,
+        };
+      });
+
+      const existingLotIds = new Set(mappedMgmts.map((m) => m.lot_id).filter(Boolean));
+      for (const la of lotAnimals) {
+        if (la.lot_id && !existingLotIds.has(la.lot_id)) {
+          const lot = lotMap.get(la.lot_id);
+          if (!lot) continue;
+          const proto = lot.protocol_id ? protoMap.get(lot.protocol_id) : undefined;
+          const bull = la.bull_id ? bullMap.get(la.bull_id as string) : undefined;
+          const batch = la.semen_batch_id ? batchMap.get(la.semen_batch_id as string) : undefined;
+          const season = lot.season_id ? seasonMap.get(lot.season_id) : undefined;
+          const startDate = String(lot.start_date || new Date().toISOString().split('T')[0]);
+          const lotIaPlanned = (lot.ia_planned_date as string | undefined) || undefined;
+          const lotDgPlanned = (lot.dg_planned_date as string | undefined) || undefined;
+          const isConcluded = lot.status === 'concluido' || (la.pregnancy_status && la.pregnancy_status !== 'pendente');
+          const nowIso = new Date().toISOString();
+
+          mappedMgmts.push({
+            id: `lot_virtual_${la.id}`,
+            organization_id: (lot.organization_id as string) || '',
+            farm_id: lot.farm_id,
+            animal_id: animalId,
+            season_id: lot.season_id || null,
+            protocol_id: lot.protocol_id || null,
+            lot_id: lot.id,
+            cycle_number: mappedMgmts.length + 1,
+            start_date: startDate,
+            d7_date: null,
+            d9_date: addDaysToDateString(startDate, 9),
+            ia_date: lotIaPlanned || addDaysToDateString(startDate, 11),
+            dg_date: lotDgPlanned || addDaysToDateString(startDate, 44),
+            d0_executed_at: startDate,
+            d0_responsible: null,
+            d0_notes: null,
+            d9_executed_at: la.current_step === 'D9' || la.current_step === 'IA' || la.current_step === 'DG' || la.bull_id ? addDaysToDateString(startDate, 9) : null,
+            d9_responsible: null,
+            d9_device_loss: Boolean(la.d9_device_loss),
+            d9_notes: null,
+            ia_executed_at: la.bull_id || la.current_step === 'IA' || la.current_step === 'DG' ? (lotIaPlanned || addDaysToDateString(startDate, 11)) : null,
+            bull_id: (la.bull_id as string) || null,
+            semen_batch_id: (la.semen_batch_id as string) || null,
+            inseminator_name: (la.inseminator_name as string) || null,
+            ecc_ia: (la.ecc_ia as number) ?? null,
+            ia_notes: null,
+            dg_executed_at: isConcluded ? (lotDgPlanned || addDaysToDateString(startDate, 44)) : null,
+            pregnancy_status: ((la.pregnancy_status as string) || 'pendente') as AnimalManagement['pregnancy_status'],
+            ecc_dg: (la.ecc_dg as number) ?? null,
+            expected_parturition_date: (la.expected_parturition_date as string) || null,
+            dg_notes: null,
+            status: isConcluded ? 'concluido' : 'em_andamento',
+            notes: (la.notes as string) || null,
+            created_at: (la.created_at as string) || nowIso,
+            updated_at: (la.updated_at as string) || (la.created_at as string) || nowIso,
+            protocols: proto
+              ? {
+                  name: proto.name,
+                  number_of_managements: (proto.number_of_managements as number) || 3,
+                  protocol_steps: (proto.protocol_steps as NonNullable<AnimalManagement['protocols']>['protocol_steps']) || [],
+                }
+              : null,
+            bulls: bull ? { name: bull.name, code: bull.code || null } : (la.bulls as AnimalManagement['bulls']) || null,
+            semen_batches: batch ? { batch_number: batch.batch_number } : (la.semen_batches as AnimalManagement['semen_batches']) || null,
+            reproductive_seasons: season ? { name: season.name } : null,
+            iatf_lots: { code: lot.code },
+          });
+        }
+      }
+
+      return mappedMgmts.sort((a, b) => (b.cycle_number || 0) - (a.cycle_number || 0));
+    } catch (e) {
+      console.warn('getAnimalManagements offline error:', e);
+      return getCached<AnimalManagement[]>(cacheKey) ?? [];
+    }
+  };
+
+  if (isSystemOffline()) {
+    return buildOfflineAnimalManagements();
+  }
+
   const supabase = createClient();
   const { data, error } = await supabase
     .from('animal_managements')
@@ -6260,6 +6823,10 @@ export async function getAnimalManagements(animalId: string, forceRefresh = fals
     .order('cycle_number', { ascending: false });
 
   if (error) {
+    if (isNetworkError(error)) {
+      syncEngine.markOffline();
+      return buildOfflineAnimalManagements();
+    }
     console.error('getAnimalManagements error:', error);
     return getCached<AnimalManagement[]>(cacheKey) ?? [];
   }
@@ -6788,9 +7355,31 @@ export async function recordDirectDG(params: {
   expected_parturition_date?: string | null;
   management_id?: string | null;
 }): Promise<{ success: boolean; error?: string }> {
-  const isOffline = isSystemOffline();
-  if (isOffline) {
+  // 1. Se tem management_id fornecido, executa via executeStepDG (que já possui suporte offline completo)
+  if (params.management_id) {
+    return executeStepDG(params.management_id, {
+      animal_id: params.animal_id,
+      executed_at: params.dg_date,
+      pregnancy_status: params.pregnancy_status,
+      ecc_dg: params.ecc_dg,
+      notes: params.notes,
+    });
+  }
+
+  const recordOfflineDGDirect = async (): Promise<{ success: boolean; error?: string }> => {
     try {
+      const existingMgmts = await offlineDb.animal_managements.where('animal_id').equals(params.animal_id).toArray();
+      const activeMgmt = existingMgmts.find((m) => (m as Record<string, unknown>).status === 'em_andamento' || m.step_code !== 'DG');
+      if (activeMgmt) {
+        return executeStepDG(activeMgmt.id, {
+          animal_id: params.animal_id,
+          executed_at: params.dg_date,
+          pregnancy_status: params.pregnancy_status,
+          ecc_dg: params.ecc_dg,
+          notes: params.notes,
+        });
+      }
+
       const offlineId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'mgmt_' + Date.now();
       await syncEngine.recordOfflineManagement({
         id: offlineId,
@@ -6803,11 +7392,31 @@ export async function recordDirectDG(params: {
         notes: params.notes || 'Diagnóstico de Gestação (Modo Curral)',
         created_at: new Date().toISOString(),
       });
+
+      const newAnimalStatus = params.pregnancy_status === 'prenha' ? 'prenha' : 'vazia';
+      await offlineDb.animals.update(params.animal_id, {
+        reproductive_status: newAnimalStatus,
+        updated_at: new Date().toISOString(),
+      });
+      await syncEngine.enqueueMutation('update', 'animals', params.animal_id, params.farm_id, {
+        id: params.animal_id,
+        reproductive_status: newAnimalStatus,
+        updated_at: new Date().toISOString(),
+      });
+
+      invalidateCache('animal_managements');
+      invalidateCache('animals');
+      invalidateCache('lots');
+      invalidateCache('metrics');
       return { success: true };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Falha ao registrar DG offline';
       return { success: false, error: msg };
     }
+  };
+
+  if (isSystemOffline()) {
+    return recordOfflineDGDirect();
   }
 
   const orgId = await getCurrentOrgId();
@@ -6815,19 +7424,8 @@ export async function recordDirectDG(params: {
 
   const supabase = createClient();
 
-  // 1. Se tem management_id fornecido, executa via executeStepDG
-  if (params.management_id) {
-    return executeStepDG(params.management_id, {
-      animal_id: params.animal_id,
-      executed_at: params.dg_date,
-      pregnancy_status: params.pregnancy_status,
-      ecc_dg: params.ecc_dg,
-      notes: params.notes,
-    });
-  }
-
   // 2. Verificar se existe algum manejo em andamento para este animal
-  const { data: activeMgmt } = await supabase
+  const { data: activeMgmt, error: activeErr } = await supabase
     .from('animal_managements')
     .select('id, ia_executed_at, ia_date')
     .eq('animal_id', params.animal_id)
@@ -6835,6 +7433,11 @@ export async function recordDirectDG(params: {
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
+
+  if (isNetworkError(activeErr)) {
+    syncEngine.markOffline();
+    return recordOfflineDGDirect();
+  }
 
   if (activeMgmt) {
     return executeStepDG(activeMgmt.id, {
@@ -6881,6 +7484,10 @@ export async function recordDirectDG(params: {
     });
 
   if (insertError) {
+    if (isNetworkError(insertError)) {
+      syncEngine.markOffline();
+      return recordOfflineDGDirect();
+    }
     console.error('recordDirectDG error:', insertError);
     return { success: false, error: insertError.message };
   }
@@ -6914,6 +7521,24 @@ export async function recordDirectDG(params: {
 }
 
 export async function deleteAnimalManagement(managementId: string): Promise<boolean> {
+  const deleteOffline = async (): Promise<boolean> => {
+    try {
+      await offlineDb.animal_managements.delete(managementId);
+      if (!managementId.startsWith('lot_virtual_')) {
+        await syncEngine.enqueueMutation('delete', 'animal_managements', managementId);
+      }
+      invalidateCache('animal_managements');
+      invalidateCache('animals');
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (isSystemOffline()) {
+    return deleteOffline();
+  }
+
   const supabase = createClient();
   const { error } = await supabase
     .from('animal_managements')
@@ -6921,9 +7546,17 @@ export async function deleteAnimalManagement(managementId: string): Promise<bool
     .eq('id', managementId);
 
   if (error) {
+    if (isNetworkError(error)) {
+      syncEngine.markOffline();
+      return deleteOffline();
+    }
     console.error('deleteAnimalManagement error:', error);
     return false;
   }
+
+  try {
+    await offlineDb.animal_managements.delete(managementId);
+  } catch {}
 
   invalidateCache('animal_managements');
   invalidateCache('animals');
@@ -7694,11 +8327,16 @@ export async function executeBatchLotManagementIA(params: {
         const inseminator = item.inseminator_name || params.defaultInseminatorName || null;
         const ecc = item.ecc_ia !== undefined && item.ecc_ia !== null ? item.ecc_ia : (params.defaultEccIa || null);
 
+        const bullObj = bullId ? await offlineDb.bulls.get(bullId) : undefined;
+        const batchObj = batchId ? await offlineDb.semen_batches.get(batchId) : undefined;
+
         await offlineDb.lot_animals.update(item.lot_animal_id, {
           bull_id: bullId || undefined,
           semen_batch_id: batchId || undefined,
           inseminator_name: inseminator || undefined,
           ecc_ia: ecc || undefined,
+          bulls: bullObj ? { id: bullObj.id, name: bullObj.name } : undefined,
+          semen_batches: batchObj ? { id: batchObj.id, batch_code: batchObj.batch_code } : undefined,
           ...(item.notes ? { notes: item.notes } : {}),
           updated_at: todayIso,
         });
@@ -7731,6 +8369,8 @@ export async function executeBatchLotManagementIA(params: {
             ecc_ia: ecc != null ? String(ecc) : null,
             notes: item.notes || params.notes || null,
           });
+        } else if (batchId) {
+          await syncEngine.decrementLocalSemenBatch(batchId, 1);
         }
       }
 

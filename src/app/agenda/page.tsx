@@ -210,27 +210,30 @@ export default function AgendaPage() {
       }
 
       setCreating(true);
-      const ok = await insertManagementEvent({
-        farm_id: targetFarmId,
-        lot_id: createLotId,
-        event_type: 'lote',
-        step_code: createStepCode,
-        planned_date: createDate,
-        start_time: createTime ? `${createTime}:00` : null,
-        responsible_name: createResponsible,
-        notes: createNotes || null,
-        status: 'pendente'
-      });
+      try {
+        const ok = await insertManagementEvent({
+          farm_id: targetFarmId,
+          lot_id: createLotId,
+          event_type: 'lote',
+          step_code: createStepCode,
+          planned_date: createDate,
+          start_time: createTime ? `${createTime}:00` : null,
+          responsible_name: createResponsible,
+          notes: createNotes || null,
+          status: 'pendente'
+        });
 
-      if (ok) {
-        showToast('Manejo de lote agendado com sucesso!');
-        await loadData(true);
-        setShowCreateModal(false);
-        setCreateNotes('');
-      } else {
-        showToast('Erro ao agendar manejo.');
+        if (ok) {
+          setShowCreateModal(false);
+          setCreateNotes('');
+          showToast('Manejo de lote agendado com sucesso!');
+          await loadData(true);
+        } else {
+          showToast('Erro ao agendar manejo.');
+        }
+      } finally {
+        setCreating(false);
       }
-      setCreating(false);
     } else {
       // Serviço Avulso vinculado à fazenda
       const targetFarmId = createFarmId || (selectedFarmId !== 'all' ? selectedFarmId : farms[0]?.id);
@@ -244,31 +247,34 @@ export default function AgendaPage() {
       }
 
       setCreating(true);
-      const titleToSave = createTitle.trim();
-      const ok = await insertManagementEvent({
-        farm_id: targetFarmId,
-        lot_id: null,
-        title: titleToSave,
-        event_type: 'avulso',
-        step_code: createStepCode || 'SRV',
-        step_name: titleToSave,
-        planned_date: createDate,
-        start_time: createTime ? `${createTime}:00` : null,
-        responsible_name: createResponsible,
-        notes: createNotes || null,
-        status: 'pendente'
-      });
+      try {
+        const titleToSave = createTitle.trim();
+        const ok = await insertManagementEvent({
+          farm_id: targetFarmId,
+          lot_id: null,
+          title: titleToSave,
+          event_type: 'avulso',
+          step_code: createStepCode || 'SRV',
+          step_name: titleToSave,
+          planned_date: createDate,
+          start_time: createTime ? `${createTime}:00` : null,
+          responsible_name: createResponsible,
+          notes: createNotes || null,
+          status: 'pendente'
+        });
 
-      if (ok) {
-        showToast('Serviço veterinário agendado com sucesso!');
-        await loadData(true);
-        setShowCreateModal(false);
-        setCreateNotes('');
-        setCreateTitle('');
-      } else {
-        showToast('Erro ao agendar serviço avulso.');
+        if (ok) {
+          setShowCreateModal(false);
+          setCreateNotes('');
+          setCreateTitle('');
+          showToast('Serviço veterinário agendado com sucesso!');
+          await loadData(true);
+        } else {
+          showToast('Erro ao agendar serviço avulso.');
+        }
+      } finally {
+        setCreating(false);
       }
-      setCreating(false);
     }
   };
 
@@ -276,21 +282,24 @@ export default function AgendaPage() {
   const handleCompleteSubmit = async () => {
     if (!selectedEvent) return;
     setCompleting(true);
-    const ok = await completeManagementEvent(
-      selectedEvent.id,
-      parseInt(animalsWorked) || 0,
-      parseInt(lossesCount) || 0
-    );
-    if (ok) {
-      showToast('Manejo concluído com sucesso!');
-      await loadData(true);
-      setSelectedEvent(null);
-      setAnimalsWorked('');
-      setLossesCount('0');
-    } else {
-      showToast('Erro ao concluir manejo.');
+    try {
+      const ok = await completeManagementEvent(
+        selectedEvent.id,
+        parseInt(animalsWorked) || 0,
+        parseInt(lossesCount) || 0
+      );
+      if (ok) {
+        setSelectedEvent(null);
+        setAnimalsWorked('');
+        setLossesCount('0');
+        showToast('Manejo concluído com sucesso!');
+        await loadData(true);
+      } else {
+        showToast('Erro ao concluir manejo.');
+      }
+    } finally {
+      setCompleting(false);
     }
-    setCompleting(false);
   };
 
   // Excluir Manejo
