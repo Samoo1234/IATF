@@ -8455,19 +8455,26 @@ export async function executeBatchLotManagementIA(params: {
         }
       }
 
+      const workedCountInLot = await offlineDb.lot_animals
+        .where('lot_id')
+        .equals(params.lotId)
+        .filter((la) => Boolean(la.bull_id || la.inseminator_name || la.semen_batch_id))
+        .count();
+      const iaCountToSave = Math.max(workedCountInLot, activeItems.length);
+
       const events = await offlineDb.management_events.where('lot_id').equals(params.lotId).toArray();
       const iaEvent = events.find((e) => e.step_code === 'IA');
       if (iaEvent) {
         await offlineDb.management_events.update(iaEvent.id, {
           status: 'concluido',
           execution_date: params.executionDate,
-          animals_worked_count: activeItems.length,
+          animals_worked_count: iaCountToSave,
           updated_at: todayIso,
         });
         await syncEngine.enqueueMutation('update', 'management_events', iaEvent.id, iaEvent.farm_id, {
           status: 'concluido',
           execution_date: params.executionDate,
-          animals_worked_count: activeItems.length,
+          animals_worked_count: iaCountToSave,
           updated_at: todayIso,
         });
       }
@@ -8628,12 +8635,20 @@ export async function executeBatchLotManagementIA(params: {
   }
 
   // 5. Concluir evento de IA em management_events
+  const { count: dbIaWorkedCount } = await supabase
+    .from('iatf_lot_animals')
+    .select('id', { count: 'exact', head: true })
+    .eq('lot_id', params.lotId)
+    .not('bull_id', 'is', null);
+
+  const iaCountToSave = Math.max(dbIaWorkedCount || 0, activeItems.length);
+
   await supabase
     .from('management_events')
     .update({
       status: 'concluido',
       execution_date: params.executionDate,
-      animals_worked_count: activeItems.length,
+      animals_worked_count: iaCountToSave,
       responsible_name: params.defaultInseminatorName || null,
       updated_at: todayIso,
     })
@@ -8717,19 +8732,26 @@ export async function executeBatchLotManagementDG(params: {
         }
       }
 
+      const dgDoneCount = await offlineDb.lot_animals
+        .where('lot_id')
+        .equals(params.lotId)
+        .filter((la) => la.pregnancy_status === 'prenha' || la.pregnancy_status === 'vazia' || la.pregnancy_status === 'repeticao')
+        .count();
+      const dgCountToSave = Math.max(dgDoneCount, params.items.length);
+
       const events = await offlineDb.management_events.where('lot_id').equals(params.lotId).toArray();
       const dgEvent = events.find((e) => e.step_code === 'DG' || e.step_code === 'DG1');
       if (dgEvent) {
         await offlineDb.management_events.update(dgEvent.id, {
           status: 'concluido',
           execution_date: params.executionDate,
-          animals_worked_count: params.items.length,
+          animals_worked_count: dgCountToSave,
           updated_at: todayIso,
         });
         await syncEngine.enqueueMutation('update', 'management_events', dgEvent.id, dgEvent.farm_id, {
           status: 'concluido',
           execution_date: params.executionDate,
-          animals_worked_count: params.items.length,
+          animals_worked_count: dgCountToSave,
           updated_at: todayIso,
         });
       }
@@ -8817,12 +8839,20 @@ export async function executeBatchLotManagementDG(params: {
   }
 
   // 4. Concluir evento de DG em management_events
+  const { count: dbDgCount } = await supabase
+    .from('iatf_lot_animals')
+    .select('id', { count: 'exact', head: true })
+    .eq('lot_id', params.lotId)
+    .in('pregnancy_status', ['prenha', 'vazia']);
+
+  const dgCountToSave = Math.max(dbDgCount || 0, params.items.length);
+
   await supabase
     .from('management_events')
     .update({
       status: 'concluido',
       execution_date: params.executionDate,
-      animals_worked_count: params.items.length,
+      animals_worked_count: dgCountToSave,
       responsible_name: params.responsibleName || null,
       updated_at: todayIso,
     })

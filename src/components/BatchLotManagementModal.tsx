@@ -28,6 +28,8 @@ import {
   Activity,
   Award,
   Search,
+  Save,
+  Loader2,
 } from 'lucide-react';
 
 interface BatchLotManagementModalProps {
@@ -63,6 +65,9 @@ export default function BatchLotManagementModal({
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [savingRowId, setSavingRowId] = useState<string | null>(null);
+  const [savedRowsMap, setSavedRowsMap] = useState<Record<string, boolean>>({});
+  const [rowSuccessMsg, setRowSuccessMsg] = useState<string | null>(null);
 
   const handleSafeClose = () => {
     if (hasUnsavedChanges) {
@@ -259,6 +264,7 @@ export default function BatchLotManagementModal({
   // Atualizar linha de IA pelo ID único do animal (blindado contra filtros e buscas)
   const updateIaRow = (animalId: string, updates: Partial<(typeof iaRows)[number]>) => {
     setHasUnsavedChanges(true);
+    setSavedRowsMap((prev) => ({ ...prev, [animalId]: false }));
     setIaRows((prev) =>
       prev.map((row) => (row.animal_id === animalId ? { ...row, ...updates } : row))
     );
@@ -362,6 +368,7 @@ export default function BatchLotManagementModal({
   // Atualizar linha de DG pelo ID único do animal (blindado contra filtros e buscas)
   const updateDgRow = (animalId: string, updates: Partial<(typeof dgRows)[number]>) => {
     setHasUnsavedChanges(true);
+    setSavedRowsMap((prev) => ({ ...prev, [animalId]: false }));
     setDgRows((prev) =>
       prev.map((row) => (row.animal_id === animalId ? { ...row, ...updates } : row))
     );
@@ -405,6 +412,103 @@ export default function BatchLotManagementModal({
     const parturitionStr = addDaysToDateString(baseDate, 295);
     const parts = parturitionStr.split('-');
     return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : parturitionStr;
+  };
+
+  // Salvar linha individual de IA (para operador no tronco salvar matriz por matriz)
+  const handleSaveSingleIaRow = async (animalId: string) => {
+    const row = iaRows.find((r) => r.animal_id === animalId);
+    if (!row) return;
+
+    if (!iaDate) {
+      setErrorMsg('Informe a data da Inseminação Artificial no cabeçalho antes de salvar.');
+      return;
+    }
+
+    setSavingRowId(animalId);
+    setErrorMsg(null);
+    try {
+      const item = {
+        animal_id: row.animal_id,
+        lot_animal_id: row.lot_animal_id,
+        bull_id: row.bull_id || iaDefaultBullId || null,
+        semen_batch_id: row.semen_batch_id || iaDefaultBatchId || null,
+        inseminator_name: row.inseminator_name || iaInseminator || null,
+        ecc_ia: row.ecc_ia ? parseFloat(row.ecc_ia) : null,
+        skipped: row.skipped,
+        notes: row.notes?.trim() || null,
+      };
+
+      const res = await executeBatchLotManagementIA({
+        lotId: lot.id,
+        executionDate: iaDate,
+        defaultBullId: iaDefaultBullId || null,
+        defaultSemenBatchId: iaDefaultBatchId || null,
+        defaultInseminatorName: iaInseminator || null,
+        defaultEccIa: iaDefaultEcc ? parseFloat(iaDefaultEcc) : null,
+        notes: iaNotes,
+        items: [item],
+      });
+
+      if (!res.success) {
+        setErrorMsg(res.error || `Erro ao salvar matriz ${row.tag_number}.`);
+      } else {
+        setSavedRowsMap((prev) => ({ ...prev, [animalId]: true }));
+        setRowSuccessMsg(`Matriz ${row.tag_number} salva com sucesso!`);
+        setTimeout(() => setRowSuccessMsg(null), 3500);
+        onSuccess();
+      }
+    } catch (err: unknown) {
+      console.error('Erro ao salvar IA individual:', err);
+      setErrorMsg(err instanceof Error ? err.message : 'Erro ao salvar matriz.');
+    } finally {
+      setSavingRowId(null);
+    }
+  };
+
+  // Salvar linha individual de DG (para operador no tronco salvar matriz por matriz)
+  const handleSaveSingleDgRow = async (animalId: string) => {
+    const row = dgRows.find((r) => r.animal_id === animalId);
+    if (!row) return;
+
+    if (!dgDate) {
+      setErrorMsg('Informe a data do Diagnóstico de Gestação no cabeçalho antes de salvar.');
+      return;
+    }
+
+    setSavingRowId(animalId);
+    setErrorMsg(null);
+    try {
+      const item = {
+        animal_id: row.animal_id,
+        lot_animal_id: row.lot_animal_id,
+        pregnancy_status: row.pregnancy_status,
+        ecc_dg: row.ecc_dg ? parseFloat(row.ecc_dg) : null,
+        notes: row.notes?.trim() || null,
+      };
+
+      const res = await executeBatchLotManagementDG({
+        lotId: lot.id,
+        executionDate: dgDate,
+        responsibleName: dgResponsible,
+        notes: dgNotes,
+        items: [item],
+      });
+
+      if (!res.success) {
+        setErrorMsg(res.error || `Erro ao salvar DG da matriz ${row.tag_number}.`);
+      } else {
+        setSavedRowsMap((prev) => ({ ...prev, [animalId]: true }));
+        const statusLabel = row.pregnancy_status === 'prenha' ? 'Prenha' : 'Vazia';
+        setRowSuccessMsg(`DG da matriz ${row.tag_number} (${statusLabel}) salvo com sucesso!`);
+        setTimeout(() => setRowSuccessMsg(null), 3500);
+        onSuccess();
+      }
+    } catch (err: unknown) {
+      console.error('Erro ao salvar DG individual:', err);
+      setErrorMsg(err instanceof Error ? err.message : 'Erro ao salvar diagnóstico da matriz.');
+    } finally {
+      setSavingRowId(null);
+    }
   };
 
   // Submit Handler
@@ -1250,6 +1354,14 @@ export default function BatchLotManagementModal({
                 </div>
               </div>
 
+              {/* Toast / Alerta de Sucesso por Linha Salva */}
+              {rowSuccessMsg && (
+                <div className="flex items-center gap-2 p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-semibold animate-in fade-in">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{rowSuccessMsg}</span>
+                </div>
+              )}
+
               {/* Tabela de Matrizes IA */}
               <div className="space-y-2">
                 <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-72 overflow-y-auto">
@@ -1272,12 +1384,13 @@ export default function BatchLotManagementModal({
                         <th className="p-2.5">Observação</th>
                         <th className="p-2.5 text-center">ECC IA</th>
                         <th className="p-2.5 text-center">Inseminar?</th>
+                        <th className="p-2.5 text-center">Ação</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/80 font-sans">
                       {filteredIaRows.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="p-6 text-center text-slate-400 font-sans">
+                          <td colSpan={9} className="p-6 text-center text-slate-400 font-sans">
                             Nenhuma matriz encontrada com o termo &quot;{iaSearchQuery}&quot;.
                           </td>
                         </tr>
@@ -1362,6 +1475,36 @@ export default function BatchLotManagementModal({
                                 title={row.skipped ? 'Marcar para inseminar' : 'Pular esta matriz'}
                               >
                                 {row.skipped ? <X className="w-4 h-4" /> : <Check className="w-4 h-4" />}
+                              </button>
+                            </td>
+                            <td className="p-2.5 text-center whitespace-nowrap">
+                              <button
+                                type="button"
+                                disabled={savingRowId === row.animal_id}
+                                onClick={() => handleSaveSingleIaRow(row.animal_id)}
+                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm ${
+                                  savedRowsMap[row.animal_id]
+                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
+                                    : 'bg-emerald-600 hover:bg-emerald-500 text-white hover:shadow-emerald-900/30'
+                                } disabled:opacity-50`}
+                                title="Salvar imediatamente as alterações desta matriz"
+                              >
+                                {savingRowId === row.animal_id ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    <span>Salvando...</span>
+                                  </>
+                                ) : savedRowsMap[row.animal_id] ? (
+                                  <>
+                                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                    <span>Salvo!</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Save className="w-3.5 h-3.5" />
+                                    <span>Salvar</span>
+                                  </>
+                                )}
                               </button>
                             </td>
                           </tr>
@@ -1520,6 +1663,14 @@ export default function BatchLotManagementModal({
                 </div>
               </div>
 
+              {/* Toast / Alerta de Sucesso por Linha Salva no DG */}
+              {rowSuccessMsg && (
+                <div className="flex items-center gap-2 p-2.5 rounded-xl bg-purple-500/15 border border-purple-500/30 text-purple-300 text-xs font-semibold animate-in fade-in">
+                  <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0" />
+                  <span>{rowSuccessMsg}</span>
+                </div>
+              )}
+
               {/* Tabela de Matrizes DG */}
               <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-72 overflow-y-auto">
                 <table className="w-full text-left text-xs text-slate-300">
@@ -1546,12 +1697,13 @@ export default function BatchLotManagementModal({
                       <th className="p-3">Observação</th>
                       <th className="p-3 text-center">ECC DG</th>
                       <th className="p-3 text-center">Previsão Parto</th>
+                      <th className="p-3 text-center">Ação</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/80 font-mono">
                     {filteredDgRows.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="p-6 text-center text-slate-400 font-sans">
+                        <td colSpan={8} className="p-6 text-center text-slate-400 font-sans">
                           Nenhuma matriz encontrada com o termo &quot;{dgSearchQuery}&quot;.
                         </td>
                       </tr>
@@ -1624,6 +1776,36 @@ export default function BatchLotManagementModal({
                           </td>
                           <td className="p-3 text-center text-emerald-400 font-mono font-bold text-xs whitespace-nowrap">
                             {row.checked ? getExpectedParturitionDate(row.pregnancy_status) : '-'}
+                          </td>
+                          <td className="p-3 text-center whitespace-nowrap font-sans">
+                            <button
+                              type="button"
+                              disabled={!row.checked || savingRowId === row.animal_id}
+                              onClick={() => handleSaveSingleDgRow(row.animal_id)}
+                              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm ${
+                                savedRowsMap[row.animal_id]
+                                  ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40 hover:bg-purple-500/30'
+                                  : 'bg-purple-600 hover:bg-purple-500 text-white hover:shadow-purple-900/30'
+                              } disabled:opacity-40`}
+                              title="Salvar imediatamente o diagnóstico desta matriz"
+                            >
+                              {savingRowId === row.animal_id ? (
+                                <>
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  <span>Salvando...</span>
+                                </>
+                              ) : savedRowsMap[row.animal_id] ? (
+                                <>
+                                  <Check className="w-3.5 h-3.5 text-purple-400" />
+                                  <span>Salvo!</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Save className="w-3.5 h-3.5" />
+                                  <span>Salvar</span>
+                                </>
+                              )}
+                            </button>
                           </td>
                         </tr>
                       ))
