@@ -4291,6 +4291,63 @@ export async function createLot(lot: {
 }
 
 // ============================================================
+// CREATE RESYNC LOT (RESSINCRONIZAÇÃO DE VAZIAS - 2ª IATF)
+// ============================================================
+
+export async function createResyncLot(params: {
+  parentLotId: string;
+  code: string;
+  property_id: string;
+  protocol_id: string;
+  start_date: string;
+  responsible_name: string;
+  season_id?: string;
+  notes?: string;
+  animalIds: string[];
+}): Promise<{ success: boolean; lotId?: string; count?: number; error?: string }> {
+  try {
+    if (!params.animalIds.length) {
+      return { success: false, error: 'Nenhuma matriz vazia informada para ressincronizar.' };
+    }
+
+    const lotId = await createLot({
+      code: params.code.trim(),
+      property_id: params.property_id,
+      protocol_id: params.protocol_id,
+      start_date: params.start_date,
+      responsible_name: params.responsible_name,
+      season_id: params.season_id,
+      notes: params.notes || `Ressincronização (2ª IATF) gerada a partir do lote anterior.`,
+    });
+
+    if (!lotId) {
+      return { success: false, error: 'Não foi possível gerar o novo lote da 2ª IATF.' };
+    }
+
+    const addRes = await addAnimalsToLot(lotId, params.animalIds);
+    if (!addRes.success) {
+      return {
+        success: false,
+        lotId,
+        error: addRes.error || 'Lote criado, mas ocorreu um erro ao vincular as matrizes.',
+      };
+    }
+
+    return {
+      success: true,
+      lotId,
+      count: addRes.count,
+    };
+  } catch (err) {
+    console.error('createResyncLot error:', err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+// ============================================================
 // UPDATE LOT CODE
 // ============================================================
 

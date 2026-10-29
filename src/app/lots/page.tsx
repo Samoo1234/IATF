@@ -11,6 +11,7 @@ import {
   getProtocols,
   getProperties,
   createLot,
+  createResyncLot,
   updateLotCode,
   updateLotNotes,
   updateLotProtocol,
@@ -803,6 +804,95 @@ export default function LotsPage() {
 
   const selectedLot = lots.find((l) => l.id === selectedLotId);
 
+  // Matrizes vazias e prenhas do lote selecionado
+  const vaziaAnimalsInSelectedLot = useMemo(
+    () => lotAnimals.filter((la) => la.pregnancy_status === 'vazia'),
+    [lotAnimals]
+  );
+  const pregnantAnimalsInSelectedLot = useMemo(
+    () => lotAnimals.filter((la) => la.pregnancy_status === 'prenha'),
+    [lotAnimals]
+  );
+
+  // Modal de Ressincronização (2ª IATF para Vazias com 1 clique)
+  const [showResyncModal, setShowResyncModal] = useState(false);
+  const [resyncLotCode, setResyncLotCode] = useState('');
+  const [resyncProtocolId, setResyncProtocolId] = useState('');
+  const [resyncStartDate, setResyncStartDate] = useState('');
+  const [resyncResponsibleName, setResyncResponsibleName] = useState('');
+  const [resyncNotes, setResyncNotes] = useState('');
+  const [resyncSelectedAnimalIds, setResyncSelectedAnimalIds] = useState<string[]>([]);
+  const [resyncSaving, setResyncSaving] = useState(false);
+
+  const handleOpenResyncModal = () => {
+    if (!selectedLot) return;
+    const vazias = lotAnimals.filter((la) => la.pregnancy_status === 'vazia');
+    if (vazias.length === 0) {
+      showToast('Não há matrizes diagnosticadas como "Vazia" neste lote para ressincronizar.', 'error');
+      return;
+    }
+    const baseCode = (selectedLot.code || 'LOTE').trim();
+    const suggestedCode = baseCode.toUpperCase().includes('2ª IA') || baseCode.toUpperCase().includes('RESSINC')
+      ? `${baseCode} - R2`
+      : `${baseCode} - 2ª IA`;
+
+    setResyncLotCode(suggestedCode);
+    const currProto = protocols.find(
+      (p) => p.id === selectedLot.protocol_id || p.name.trim().toLowerCase() === (selectedLot.protocol_name || '').trim().toLowerCase()
+    );
+    setResyncProtocolId(currProto?.id || protocols[0]?.id || '');
+    setResyncStartDate(getTodayDateString());
+    setResyncResponsibleName(selectedLot.responsible_name || 'MV. DR. SAMOEL DUARTE');
+    setResyncNotes(`Ressincronização (2ª IATF) originada do lote "${selectedLot.code}". Matrizes prenhas mantidas no lote de origem.`);
+    setResyncSelectedAnimalIds(vazias.map((la) => la.animal_id));
+    setShowResyncModal(true);
+  };
+
+  const handleExecuteResync = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedLot || !resyncLotCode.trim() || !resyncProtocolId || !resyncStartDate) return;
+    if (resyncSelectedAnimalIds.length === 0) {
+      showToast('Selecione ao menos 1 matriz vazia para ressincronizar.', 'error');
+      return;
+    }
+
+    setResyncSaving(true);
+    try {
+      const prop = properties.find((p) => p.name === selectedLot.property_name || p.farm_id === selectedLot.farm_id) || properties[0];
+      const propertyId = prop?.id || '';
+
+      const res = await createResyncLot({
+        parentLotId: selectedLot.id,
+        code: resyncLotCode.trim(),
+        property_id: propertyId,
+        protocol_id: resyncProtocolId,
+        start_date: resyncStartDate,
+        responsible_name: resyncResponsibleName,
+        season_id: selectedLot.season_id || activeSeasonId || undefined,
+        notes: resyncNotes.trim() || undefined,
+        animalIds: resyncSelectedAnimalIds,
+      });
+
+      if (!res.success || !res.lotId) {
+        showToast(res.error || 'Erro ao criar lote de ressincronização.', 'error');
+        setResyncSaving(false);
+        return;
+      }
+
+      showToast(
+        `Lote "${resyncLotCode}" criado com sucesso! ${resyncSelectedAnimalIds.length} matrizes vazias iniciaram a 2ª IATF. As ${pregnantAnimalsInSelectedLot.length} prenhas permanecem 100% blindadas no lote ${selectedLot.code}.`
+      );
+      setShowResyncModal(false);
+      await loadLots();
+      await handleSelectLot(res.lotId);
+    } catch (err) {
+      console.error('Erro ao executar ressincronização:', err);
+      showToast('Ocorreu uma falha ao criar a ressincronização.', 'error');
+    } finally {
+      setResyncSaving(false);
+    }
+  };
+
   // Filtrar matrizes dentro da Ficha do Lote pelo campo de pesquisa
   const filteredLotAnimals = useMemo(() => {
     if (!lotAnimalSearch.trim()) return lotAnimals;
@@ -1485,6 +1575,19 @@ export default function LotsPage() {
 
                   {/* Botões de Ação Rápida para o Veterinário em Campo */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                    {vaziaAnimalsInSelectedLot.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleOpenResyncModal}
+                        className="py-2.5 px-4 rounded-xl bg-linear-to-r from-amber-500 via-orange-500 to-amber-600 hover:brightness-110 active:scale-[0.99] text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 transition-all cursor-pointer touch-manipulation sm:col-span-2 border border-amber-300/40"
+                        title="Criar novo lote da 2ª IATF para as matrizes vazias, mantendo as matrizes prenhas 100% blindadas no lote original"
+                      >
+                        <Sparkles className="w-4 h-4 stroke-2" />
+                        Ressincronizar Vazias ({vaziaAnimalsInSelectedLot.length} matrizes para 2ª IATF)
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       onClick={() => {
@@ -1555,6 +1658,18 @@ export default function LotsPage() {
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap">
+                  {vaziaAnimalsInSelectedLot.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleOpenResyncModal}
+                      className="bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-bold px-3 py-1.5 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                      title="Ressincronizar matrizes vazias (2ª IATF)"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                      Ressincronizar Vazias ({vaziaAnimalsInSelectedLot.length})
+                    </button>
+                  )}
+
                   {lotAnimals.length > 0 && (
                     <button
                       type="button"
@@ -2556,6 +2671,244 @@ export default function LotsPage() {
           lotAnimals={lotAnimals}
           initialStepCode={batchModalStep}
         />
+      )}
+
+      {/* Modal: Ressincronizar Vazias (2ª IATF) */}
+      {showResyncModal && selectedLot && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="glass-card w-full max-w-2xl max-h-[90vh] rounded-2xl border border-amber-500/40 bg-slate-900 p-6 flex flex-col space-y-5 shadow-2xl overflow-y-auto">
+            {/* Header */}
+            <div className="flex items-start justify-between border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    Ressincronização de Matrizes Vazias (2ª IATF)
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Origem: <strong className="text-slate-200">{selectedLot.code}</strong> • As{' '}
+                    <strong className="text-emerald-400">{pregnantAnimalsInSelectedLot.length} matrizes prenhas</strong> permanecerão 100% blindadas e salvas no lote original.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowResyncModal(false)}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Banner explicativo */}
+            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-3">
+              <Layers className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <span className="font-bold text-amber-300 block">Como funciona a Ressincronização:</span>
+                <p className="text-slate-300 leading-relaxed">
+                  Um novo lote para a <strong>2ª IATF</strong> será criado automaticamente com as matrizes que deram vazia no diagnóstico. Os dados de touro, data de IA e previsão de parto das matrizes prenhas permanecem <strong>intactos</strong> no lote de origem.
+                </p>
+              </div>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={handleExecuteResync} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                    Nome / Código do Novo Lote *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={resyncLotCode}
+                    onChange={(e) => setResyncLotCode(e.target.value)}
+                    placeholder="Ex: LOTE 01 - 2ª IA"
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3.5 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                    Data de Início (D0) da 2ª IA *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={resyncStartDate}
+                    onChange={(e) => setResyncStartDate(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3.5 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                    Protocolo de IATF para a 2ª IA *
+                  </label>
+                  <select
+                    required
+                    value={resyncProtocolId}
+                    onChange={(e) => setResyncProtocolId(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3.5 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  >
+                    {protocols.map((proto) => (
+                      <option key={proto.id} value={proto.id}>
+                        {proto.name} ({proto.protocol_steps?.length || 0} etapas)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                    Veterinário Responsável
+                  </label>
+                  <input
+                    type="text"
+                    value={resyncResponsibleName}
+                    onChange={(e) => setResyncResponsibleName(e.target.value)}
+                    placeholder="Ex: MV. DR. SAMOEL DUARTE"
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3.5 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+              </div>
+
+              {/* Tabela de Matrizes Vazias Selecionadas */}
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center justify-between text-xs flex-wrap gap-2">
+                  <span className="font-bold text-slate-300 flex items-center gap-1.5">
+                    <Tag className="w-4 h-4 text-amber-400" />
+                    Matrizes Vazias a Incluir ({resyncSelectedAnimalIds.length} de {vaziaAnimalsInSelectedLot.length})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (resyncSelectedAnimalIds.length === vaziaAnimalsInSelectedLot.length) {
+                        setResyncSelectedAnimalIds([]);
+                      } else {
+                        setResyncSelectedAnimalIds(vaziaAnimalsInSelectedLot.map((la) => la.animal_id));
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-bold text-[11px] transition-all cursor-pointer"
+                  >
+                    {resyncSelectedAnimalIds.length === vaziaAnimalsInSelectedLot.length
+                      ? 'Desmarcar Todas'
+                      : 'Marcar Todas'}
+                  </button>
+                </div>
+
+                <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/80 max-h-48 overflow-y-auto">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0 z-10">
+                      <tr>
+                        <th className="p-2.5 w-10 text-center">
+                          <input
+                            type="checkbox"
+                            checked={
+                              vaziaAnimalsInSelectedLot.length > 0 &&
+                              resyncSelectedAnimalIds.length === vaziaAnimalsInSelectedLot.length
+                            }
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setResyncSelectedAnimalIds(vaziaAnimalsInSelectedLot.map((la) => la.animal_id));
+                              } else {
+                                setResyncSelectedAnimalIds([]);
+                              }
+                            }}
+                            className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-amber-500 focus:ring-amber-500 cursor-pointer accent-amber-500"
+                          />
+                        </th>
+                        <th className="p-2.5">Brinco</th>
+                        <th className="p-2.5">Categoria</th>
+                        <th className="p-2.5">Raça</th>
+                        <th className="p-2.5 text-center">Diagnóstico 1ª IA</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800 font-mono">
+                      {vaziaAnimalsInSelectedLot.map((la) => {
+                        const isChecked = resyncSelectedAnimalIds.includes(la.animal_id);
+                        return (
+                          <tr
+                            key={la.id}
+                            onClick={() =>
+                              setResyncSelectedAnimalIds((prev) =>
+                                prev.includes(la.animal_id)
+                                  ? prev.filter((id) => id !== la.animal_id)
+                                  : [...prev, la.animal_id]
+                              )
+                            }
+                            className={`hover:bg-slate-900 transition-colors cursor-pointer ${
+                              !isChecked ? 'opacity-40 bg-slate-950' : ''
+                            }`}
+                          >
+                            <td className="p-2.5 text-center" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  setResyncSelectedAnimalIds((prev) =>
+                                    checked
+                                      ? prev.includes(la.animal_id)
+                                        ? prev
+                                        : [...prev, la.animal_id]
+                                      : prev.filter((id) => id !== la.animal_id)
+                                  );
+                                }}
+                                className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-amber-500 focus:ring-amber-500 cursor-pointer accent-amber-500"
+                              />
+                            </td>
+                            <td className="p-2.5 font-bold text-white font-mono">{la.animals?.tag_number || 'S/N'}</td>
+                            <td className="p-2.5 font-sans text-slate-400">{la.animals?.animal_categories?.name || 'Matriz'}</td>
+                            <td className="p-2.5 font-sans text-slate-400">{la.animals?.breeds?.name || '-'}</td>
+                            <td className="p-2.5 text-center font-sans">
+                              <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px] font-bold">
+                                Vazia (Liberada p/ 2ª IA)
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Botões do Modal */}
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowResyncModal(false)}
+                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-300 hover:bg-slate-800 font-bold text-xs transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={resyncSaving || resyncSelectedAnimalIds.length === 0}
+                  className="px-5 py-2.5 rounded-xl bg-linear-to-r from-amber-500 to-orange-500 hover:brightness-110 active:scale-[0.99] text-slate-950 font-black text-xs flex items-center gap-2 shadow-lg shadow-amber-500/25 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {resyncSaving ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      Criando Lote de 2ª IA...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 stroke-2" />
+                      Criar Lote de 2ª IA ({resyncSelectedAnimalIds.length} Matrizes)
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

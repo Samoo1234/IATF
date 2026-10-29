@@ -1445,6 +1445,18 @@ export default function BatchLotManagementModal({
                 </div>
               </div>
 
+              {/* Dica de Ressincronização para o Veterinário */}
+              {dgStats.empty > 0 && (
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>
+                      <strong>{dgStats.empty} matriz(es) vazia(s)</strong> identificada(s). Ao concluir este diagnóstico, você poderá acionar a <strong>Ressincronização em 1 clique</strong> na ficha do lote para iniciar a 2ª IATF mantendo as {dgStats.pregnant} prenhas 100% blindadas!
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* Barra de Busca da Matriz */}
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-950 p-3 rounded-2xl border border-slate-800">
                 <div className="relative flex-1">
