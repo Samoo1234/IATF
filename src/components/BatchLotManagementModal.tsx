@@ -1840,12 +1840,12 @@ export default function BatchLotManagementModal({
               {submitting ? (
                 <>
                   <RefreshCw className="w-4 h-4 animate-spin" />
-                  Gravando Ação Coletiva...
+                  Salvando Informações do Lote...
                 </>
               ) : (
                 <>
                   <Check className="w-4 h-4 stroke-3" />
-                  Salvar {activeTab} para Todas as {lotAnimals.length} Matrizes
+                  Salvar Informações do Lote
                 </>
               )}
             </button>
