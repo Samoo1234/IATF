@@ -926,6 +926,26 @@ export async function getAvailableAnimalsForLot(lotId: string, search?: string, 
   return available as unknown as Animal[];
 }
 
+export function getNextSuggestedLotCode(existingLots: LotStat[]): string {
+  if (!existingLots || existingLots.length === 0) return 'Lote-01';
+
+  let maxNum = 0;
+  for (const lot of existingLots) {
+    if (!lot.code) continue;
+    const match = lot.code.match(/(?:Lote|LOTE)[^0-9]*(\d+)/i) || lot.code.match(/(\d+)/);
+    if (match && match[1]) {
+      const num = parseInt(match[1], 10);
+      if (!isNaN(num) && num > maxNum) {
+        maxNum = num;
+      }
+    }
+  }
+
+  const nextNum = maxNum + 1;
+  const padded = nextNum < 10 ? `0${nextNum}` : String(nextNum);
+  return `Lote-${padded}`;
+}
+
 export async function createAndAddAnimalToLot(
   lotId: string,
   animal: {
@@ -938,7 +958,7 @@ export async function createAndAddAnimalToLot(
     reproductive_status?: string;
     birth_date?: string;
   }
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; alreadyExisted?: boolean; animalId?: string }> {
   const cleanTag = animal.tag_number.trim();
   const isOffline = isSystemOffline();
 
@@ -979,9 +999,16 @@ export async function createAndAddAnimalToLot(
           };
         }
 
+        // Se já existe no rebanho nesta fazenda, vincula diretamente ao lote sem travar o operador
+        const linkRes = await addAnimalsToLot(lotId, [animalId]);
+        if (!linkRes.success) {
+          return { success: false, error: linkRes.error || 'Erro ao vincular matriz existente ao lote.' };
+        }
+
         return {
-          success: false,
-          error: `Já existe uma matriz cadastrada com o brinco "${cleanTag}" nesta fazenda. Use a aba "Selecionar Existentes" para vinculá-la a este lote.`,
+          success: true,
+          alreadyExisted: true,
+          animalId,
         };
       }
 
@@ -1021,7 +1048,7 @@ export async function createAndAddAnimalToLot(
       invalidateCache('lots');
       invalidateCache('animals');
       invalidateCache('metrics');
-      return { success: true };
+      return { success: true, alreadyExisted: false, animalId };
     } catch (err: unknown) {
       console.error('createAndAddAnimalToLot offline error:', err);
       return {
@@ -1085,9 +1112,16 @@ export async function createAndAddAnimalToLot(
       };
     }
 
+    // Se já existe no rebanho nesta fazenda, vincula diretamente ao lote sem travar o operador
+    const linkRes = await addAnimalsToLot(lotId, [animalId]);
+    if (!linkRes.success) {
+      return { success: false, error: linkRes.error || 'Erro ao vincular matriz existente ao lote.' };
+    }
+
     return {
-      success: false,
-      error: `Já existe uma matriz cadastrada com o brinco "${cleanTag}" nesta fazenda. Use a aba "Selecionar Existentes" para vinculá-la a este lote.`,
+      success: true,
+      alreadyExisted: true,
+      animalId,
     };
   }
 
@@ -1161,7 +1195,7 @@ export async function createAndAddAnimalToLot(
   invalidateCache('lots');
   invalidateCache('animals');
   invalidateCache('metrics');
-  return { success: true };
+  return { success: true, alreadyExisted: false, animalId };
 }
 
 // ============================================================

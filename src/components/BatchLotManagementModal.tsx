@@ -341,23 +341,6 @@ export default function BatchLotManagementModal({
     }
   };
 
-  // Ações em massa para IA (Inseminar Todas / Pular Todas)
-  const handleSetAllIaSkipped = (skipped: boolean) => {
-    if (iaSearchQuery.trim()) {
-      const targetIds = new Set(filteredIaRows.map((r) => r.animal_id));
-      setIaRows((prev) =>
-        prev.map((r) => (targetIds.has(r.animal_id) ? { ...r, skipped } : r))
-      );
-    } else {
-      setIaRows((prev) =>
-        prev.map((r) => ({
-          ...r,
-          skipped,
-        }))
-      );
-    }
-  };
-
   // Toggle Loss of device for an animal in D9
   const handleToggleDeviceLoss = (animalId: string) => {
     setD9DeviceLossIds((prev) =>
@@ -1276,36 +1259,17 @@ export default function BatchLotManagementModal({
                 </div>
               </div>
 
-              {/* Placar de IA & Ações Rápidas em Massa */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 p-3 rounded-2xl border border-slate-800">
-                <div className="flex items-center gap-3 text-xs font-bold flex-wrap">
-                  <span className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                    A INSEMINAR: {iaStats.toInseminate}
-                  </span>
-                  <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 border border-slate-700">
-                    PULADAS: {iaStats.skipped}
-                  </span>
-                  <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
-                    APROVEITAMENTO: {iaStats.rate}%
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleSetAllIaSkipped(false)}
-                    className="px-2.5 py-1 text-xs font-bold bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg transition-all cursor-pointer"
-                  >
-                    Inseminar Todas
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSetAllIaSkipped(true)}
-                    className="px-2.5 py-1 text-xs font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 rounded-lg transition-all cursor-pointer"
-                  >
-                    Pular Todas
-                  </button>
-                </div>
+              {/* Placar de IA */}
+              <div className="flex items-center gap-3 bg-slate-950 p-3 rounded-2xl border border-slate-800 text-xs font-bold flex-wrap">
+                <span className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  A INSEMINAR: {iaStats.toInseminate}
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 border border-slate-700">
+                  PULADAS: {iaStats.skipped}
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                  APROVEITAMENTO: {iaStats.rate}%
+                </span>
               </div>
 
               {/* Barra de Busca da Matriz na IA */}
@@ -1368,15 +1332,7 @@ export default function BatchLotManagementModal({
                   <table className="w-full text-left text-xs text-slate-300">
                     <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0 z-10">
                       <tr>
-                        <th className="p-2.5 w-10 text-center">
-                          <input
-                            type="checkbox"
-                            checked={filteredIaRows.length > 0 && filteredIaRows.every((r) => !r.skipped)}
-                            onChange={(e) => handleSetAllIaSkipped(!e.target.checked)}
-                            className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-emerald-500 focus:ring-emerald-500 cursor-pointer accent-emerald-500"
-                            title="Marcar ou desmarcar todas as matrizes para IA"
-                          />
-                        </th>
+                        <th className="p-2.5 w-10 text-center text-slate-500 text-[10px]">#</th>
                         <th className="p-2.5">Brinco</th>
                         <th className="p-2.5">Categoria</th>
                         <th className="p-2.5">Touro Utilizado</th>
@@ -1415,7 +1371,19 @@ export default function BatchLotManagementModal({
                               <select
                                 value={row.bull_id || iaDefaultBullId}
                                 disabled={row.skipped}
-                                onChange={(e) => updateIaRow(row.animal_id, { bull_id: e.target.value })}
+                                onChange={(e) => {
+                                  const newBullId = e.target.value;
+                                  const matchBatches = semenBatches.filter(
+                                    (b) =>
+                                      (b as unknown as { bull_id?: string }).bull_id === newBullId ||
+                                      (b.bulls as Record<string, unknown> | null)?.id === newBullId
+                                  );
+                                  const firstBatchId = matchBatches.length > 0 ? matchBatches[0].id : '';
+                                  updateIaRow(row.animal_id, {
+                                    bull_id: newBullId,
+                                    semen_batch_id: firstBatchId,
+                                  });
+                                }}
                                 className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-emerald-300 font-medium focus:outline-none"
                               >
                                 <option value="">Selecione...</option>
@@ -1427,19 +1395,35 @@ export default function BatchLotManagementModal({
                               </select>
                             </td>
                             <td className="p-2.5 whitespace-nowrap">
-                              <select
-                                value={row.semen_batch_id || iaDefaultBatchId}
-                                disabled={row.skipped}
-                                onChange={(e) => updateIaRow(row.animal_id, { semen_batch_id: e.target.value })}
-                                className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200 font-mono focus:outline-none"
-                              >
-                                <option value="">Selecione...</option>
-                                {semenBatches.map((b) => (
-                                  <option key={b.id} value={b.id}>
-                                    {b.batch_number}
-                                  </option>
-                                ))}
-                              </select>
+                              {(() => {
+                                const currentBullId = row.bull_id || iaDefaultBullId;
+                                const rowBatches = currentBullId
+                                  ? semenBatches.filter(
+                                      (b) =>
+                                        (b as unknown as { bull_id?: string }).bull_id === currentBullId ||
+                                        (b.bulls as Record<string, unknown> | null)?.id === currentBullId ||
+                                        b.id === row.semen_batch_id
+                                    )
+                                  : semenBatches;
+
+                                return (
+                                  <select
+                                    value={row.semen_batch_id || (currentBullId === iaDefaultBullId ? iaDefaultBatchId : '')}
+                                    disabled={row.skipped}
+                                    onChange={(e) => updateIaRow(row.animal_id, { semen_batch_id: e.target.value })}
+                                    className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200 font-mono focus:outline-none"
+                                  >
+                                    <option value="">
+                                      {rowBatches.length === 0 ? 'Sem partidas' : 'Selecione...'}
+                                    </option>
+                                    {rowBatches.map((b) => (
+                                      <option key={b.id} value={b.id}>
+                                        {b.batch_number}
+                                      </option>
+                                    ))}
+                                  </select>
+                                );
+                              })()}
                             </td>
                             <td className="p-2.5 min-w-[180px]">
                               <input

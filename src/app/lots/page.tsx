@@ -20,6 +20,7 @@ import {
   removeAnimalFromLot,
   getAvailableAnimalsForLot,
   createAndAddAnimalToLot,
+  getNextSuggestedLotCode,
   getBreeds,
   getAnimalCategories,
   getFarms,
@@ -247,6 +248,12 @@ export default function LotsPage() {
   const [selectedAnimalIds, setSelectedAnimalIds] = useState<string[]>([]);
   const [submittingAdd, setSubmittingAdd] = useState(false);
   const [deletingAnimalId, setDeletingAnimalId] = useState<string | null>(null);
+
+  // Entrada Rápida Contínua de Matrizes no Tronco (1 por vez)
+  const [quickTagInput, setQuickTagInput] = useState('');
+  const [isAddingQuickTag, setIsAddingQuickTag] = useState(false);
+  const [quickAutoD0, setQuickAutoD0] = useState(true);
+  const quickInputRef = useRef<HTMLInputElement>(null);
 
   // Edit Protocol Modal State
   const [editingProtocolLot, setEditingProtocolLot] = useState<LotStat | null>(null);
@@ -627,10 +634,33 @@ export default function LotsPage() {
     }
   }, [lots]);
 
+  // Abrir modal de novo lote já pré-preenchido de forma inteligente (velocidade de 1 clique)
+  const handleOpenNewLotModal = () => {
+    const suggestedCode = getNextSuggestedLotCode(lots);
+    const defaultProp = properties.find((p) => p.farm_id === activeFarmId)?.id || properties[0]?.id || '';
+    const defaultProtocol = protocols[0]?.id || '';
+    const defaultVet = veterinarians.find((vet) => vet.is_default) || veterinarians[0];
+    const defaultVetLabel = defaultVet
+      ? (defaultVet.crmv ? `${defaultVet.name} (${defaultVet.crmv})` : defaultVet.name)
+      : 'MV. DR. SAMOEL DUARTE';
+
+    setForm({
+      code: suggestedCode,
+      property_id: defaultProp,
+      protocol_id: defaultProtocol,
+      start_date: getTodayDateString(),
+      season_id: activeSeasonId || '',
+      responsible_name: defaultVetLabel,
+      notes: '',
+    });
+    setShowNewLot(true);
+  };
+
   async function handleCreateLot(e: React.FormEvent) {
     e.preventDefault();
     if (!form.code || !form.property_id || !form.protocol_id || !form.start_date) return;
     setSaving(true);
+    const createdCode = form.code;
     const id = await createLot({
       ...form,
       season_id: form.season_id || activeSeasonId || undefined,
@@ -650,9 +680,83 @@ export default function LotsPage() {
         notes: '',
       });
       await loadLots();
-      showToast(`Lote ${form.code} criado com sucesso! Agenda gerada.`);
+      showToast(`Lote ${createdCode} criado com sucesso! Agenda gerada.`);
+      // Seleciona e abre imediatamente o lote recém-criado
+      await handleSelectLot(id);
     }
   }
+
+  // Entrada Rápida de Matriz no Tronco (Curral - 1 animal por vez)
+  const handleQuickChuteAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedLotId || !quickTagInput.trim() || isAddingQuickTag) return;
+
+    const cleanTag = quickTagInput.trim();
+    setIsAddingQuickTag(true);
+
+    const currentLot = lots.find((l) => l.id === selectedLotId);
+    const farmId = currentLot?.farm_id || activeFarmId;
+    if (!farmId) {
+      showToast('Nenhuma fazenda selecionada para vincular a matriz.', 'error');
+      setIsAddingQuickTag(false);
+      return;
+    }
+
+    const matchedProp = properties.find((p) => p.name === currentLot?.property_name);
+    const neloreBreed = breeds.find((b) => b.name.toLowerCase().includes('nelore'))?.id || breeds[0]?.id || '';
+    const defaultCat = categories.find((c) => c.name.toLowerCase().includes('matriz') || c.name.toLowerCase().includes('vaca'))?.id || categories[0]?.id || '';
+
+    const res = await createAndAddAnimalToLot(selectedLotId, {
+      farm_id: farmId,
+      property_id: matchedProp?.id,
+      tag_number: cleanTag,
+      breed_id: neloreBreed || undefined,
+      category_id: defaultCat || undefined,
+      reproductive_status: 'vazia',
+    });
+
+    setIsAddingQuickTag(false);
+
+    if (res.success) {
+      if (res.alreadyExisted) {
+        showToast(`Matriz ${cleanTag} (já cadastrada no rebanho) vinculada ao lote com sucesso!`);
+      } else {
+        showToast(`Matriz ${cleanTag} cadastrada e adicionada ao lote com sucesso!`);
+      }
+
+      // Se marcou para registrar D0 automaticamente
+      if (quickAutoD0 && res.animalId) {
+        const targetAnimalId = res.animalId;
+        const currentAnimalsCount = lotAnimals.length + 1;
+        const currentD0Count = lotAnimals.filter((la) => Boolean(stepChecks[la.animal_id]?.['D0'])).length + 1;
+
+        setStepChecks((prev) => ({
+          ...prev,
+          [targetAnimalId]: { ...(prev[targetAnimalId] || {}), D0: true },
+        }));
+
+        toggleLotAnimalStepCheck({
+          lotId: selectedLotId,
+          stepCode: 'D0',
+          animalIds: [targetAnimalId],
+          checked: true,
+          totalAnimalsInLot: currentAnimalsCount,
+          checkedCountInStep: currentD0Count,
+          executionDate: getTodayDateString(),
+          responsibleName: currentLot?.responsible_name || null,
+        });
+      }
+
+      setQuickTagInput('');
+      await Promise.all([handleSelectLot(selectedLotId), loadLots()]);
+      setTimeout(() => {
+        quickInputRef.current?.focus();
+      }, 50);
+    } else {
+      showToast(res.error || 'Erro ao adicionar matriz.', 'error');
+      quickInputRef.current?.focus();
+    }
+  };
 
   // Load available animals when opening the Add Modal
   const loadAvailableAnimals = useCallback(async (lotId: string, search = '') => {
@@ -979,10 +1083,7 @@ export default function LotsPage() {
             />
           </div>
           <button
-            onClick={() => {
-              setForm((f) => ({ ...f, season_id: f.season_id || activeSeasonId || '' }));
-              setShowNewLot(true);
-            }}
+            onClick={handleOpenNewLotModal}
             className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md glow-emerald cursor-pointer"
           >
             <Plus className="w-4 h-4" /> Novo Lote
@@ -1691,6 +1792,54 @@ export default function LotsPage() {
                     <Plus className="w-4 h-4" /> Inserir Mais Animais
                   </button>
                 </div>
+              </div>
+
+              {/* Barra de Entrada Rápida de Matriz no Curral (1 por vez) */}
+              <div className="bg-slate-900/90 border border-slate-800 hover:border-emerald-500/40 rounded-2xl p-3 sm:p-4 shadow-lg transition-all">
+                <form onSubmit={handleQuickChuteAdd} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex-1 flex items-center gap-2">
+                    <div className="relative flex-1 max-w-md">
+                      <Tag className="w-4 h-4 text-emerald-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        ref={quickInputRef}
+                        type="text"
+                        value={quickTagInput}
+                        onChange={(e) => setQuickTagInput(e.target.value)}
+                        placeholder="Brinco da matriz (ex: 2045) e tecle ENTER..."
+                        disabled={isAddingQuickTag}
+                        className="w-full bg-slate-950 border border-slate-700/80 rounded-xl pl-9 pr-3 py-2 text-xs sm:text-sm text-white placeholder-slate-500 font-mono focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={isAddingQuickTag || !quickTagInput.trim()}
+                      className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-slate-950 font-black px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md glow-emerald cursor-pointer whitespace-nowrap"
+                      title="Adicionar matriz ao lote (ou tecle Enter)"
+                    >
+                      {isAddingQuickTag ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>Adicionando...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="w-4 h-4 stroke-3" />
+                          <span>Adicionar</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  <label className="flex items-center gap-2 text-xs text-slate-300 font-medium cursor-pointer select-none px-1">
+                    <input
+                      type="checkbox"
+                      checked={quickAutoD0}
+                      onChange={(e) => setQuickAutoD0(e.target.checked)}
+                      className="w-4 h-4 rounded border-slate-600 bg-slate-950 text-emerald-500 focus:ring-emerald-500 cursor-pointer accent-emerald-500"
+                    />
+                    <span>Marcar <strong className="text-emerald-400">D0 (Implante)</strong> automaticamente</span>
+                  </label>
+                </form>
               </div>
 
               {loadingAnimals ? (
