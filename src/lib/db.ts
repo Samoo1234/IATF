@@ -7304,33 +7304,43 @@ export async function executeStepIA(
     .update({ reproductive_status: 'inseminada', updated_at: new Date().toISOString() })
     .eq('id', data.animal_id);
 
-  // 3. Dar baixa automática de 1 dose do sêmen selecionado (RN-08)
+  // 3. Dar baixa automática de 1 dose do sêmen selecionado (RN-08) se ainda não foi baixada
   if (data.semen_batch_id) {
-    const { data: batch } = await supabase
-      .from('semen_batches')
-      .select('id, batch_number, bull_id, used_quantity')
-      .eq('id', data.semen_batch_id)
+    const { data: existingMgmt } = await supabase
+      .from('animal_managements')
+      .select('semen_batch_id')
+      .eq('id', managementId)
       .maybeSingle();
 
-    if (batch) {
-      // 3.1 Atualização legada
-      await supabase
-        .from('semen_batches')
-        .update({
-          used_quantity: (batch.used_quantity || 0) + 1,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', data.semen_batch_id);
+    const isNewBatch = !existingMgmt?.semen_batch_id || existingMgmt.semen_batch_id !== data.semen_batch_id;
 
-      // 3.2 Integração com o novo módulo de Estoque Genético Criogênico
-      await deductGeneticInventoryForSemenBatch({
-        semenBatchId: data.semen_batch_id,
-        quantity: 1,
-        referenceType: 'animal_managements',
-        referenceId: managementId,
-        inseminatorName: data.inseminator_name,
-        notes: `Baixa automática IA da matriz em animal_managements`,
-      });
+    if (isNewBatch) {
+      const { data: batch } = await supabase
+        .from('semen_batches')
+        .select('id, batch_number, bull_id, used_quantity')
+        .eq('id', data.semen_batch_id)
+        .maybeSingle();
+
+      if (batch) {
+        // 3.1 Atualização legada
+        await supabase
+          .from('semen_batches')
+          .update({
+            used_quantity: (batch.used_quantity || 0) + 1,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', data.semen_batch_id);
+
+        // 3.2 Integração com o novo módulo de Estoque Genético Criogênico
+        await deductGeneticInventoryForSemenBatch({
+          semenBatchId: data.semen_batch_id,
+          quantity: 1,
+          referenceType: 'animal_managements',
+          referenceId: managementId,
+          inseminatorName: data.inseminator_name,
+          notes: `Baixa automática IA da matriz em animal_managements`,
+        });
+      }
     }
   }
 
@@ -8539,13 +8549,29 @@ export async function executeBatchLotManagementIA(params: {
   const supabase = createClient();
   const batchUsageCount: Record<string, number> = {};
 
+  // 0. Buscar estado atual dos animais no lote para evitar dupla baixa de sêmen
+  const lotAnimalIds = activeItems.map((it) => it.lot_animal_id).filter(Boolean);
+  const { data: currentLotAnimals } = lotAnimalIds.length > 0
+    ? await supabase
+        .from('iatf_lot_animals')
+        .select('id, semen_batch_id')
+        .in('id', lotAnimalIds)
+    : { data: [] };
+
+  const existingBatchMap = new Map<string, string | null>();
+  (currentLotAnimals || []).forEach((la: { id: string; semen_batch_id: string | null }) => {
+    existingBatchMap.set(la.id, la.semen_batch_id || null);
+  });
+
   for (const item of activeItems) {
     const bullId = item.bull_id || params.defaultBullId || null;
     const batchId = item.semen_batch_id || params.defaultSemenBatchId || null;
     const inseminator = item.inseminator_name || params.defaultInseminatorName || null;
     const ecc = item.ecc_ia !== undefined && item.ecc_ia !== null ? item.ecc_ia : (params.defaultEccIa || null);
 
-    if (batchId) {
+    const prevBatchId = existingBatchMap.get(item.lot_animal_id);
+    // Só contabiliza baixa de estoque se a matriz ainda não tinha esta mesma partida associada
+    if (batchId && prevBatchId !== batchId) {
       batchUsageCount[batchId] = (batchUsageCount[batchId] || 0) + 1;
     }
 

@@ -127,6 +127,10 @@ export default function EstoqueSemenPage() {
   const loadData = useCallback(async (forceRefresh = false) => {
     if (!activeFarmId) return;
 
+    // Se houver fazenda principal cadastrada (ex: Fazenda Principal Mastercriareproducao),
+    // o estoque criogênico é centralizado nela. Carregamos o estoque central para correta exibição.
+    const targetFarmId = mainFarm?.id || activeFarmId;
+
     const currentReqId = ++requestIdRef.current;
     setLoading(true);
 
@@ -141,12 +145,12 @@ export default function EstoqueSemenPage() {
         centersData,
         bullsData,
       ] = await Promise.all([
-        getInventoryDashboardMetrics(activeFarmId, materialType),
-        getTanks(activeFarmId, forceRefresh),
-        getInventoryBalances(activeFarmId, { materialType }),
-        getMovementHistory(activeFarmId, { materialType, limit: 100 }),
-        getWithdrawalReceipts(activeFarmId),
-        getClients(activeFarmId),
+        getInventoryDashboardMetrics(targetFarmId, materialType),
+        getTanks(targetFarmId, forceRefresh),
+        getInventoryBalances(targetFarmId, { materialType }),
+        getMovementHistory(targetFarmId, { materialType, limit: 100 }),
+        getWithdrawalReceipts(targetFarmId),
+        getClients(targetFarmId),
         getGeneticCenters(),
         getBulls(forceRefresh),
       ]);
@@ -169,7 +173,7 @@ export default function EstoqueSemenPage() {
         setLoading(false);
       }
     }
-  }, [activeFarmId, materialType]);
+  }, [activeFarmId, materialType, mainFarm?.id]);
 
   useEffect(() => {
     loadData();
@@ -222,7 +226,10 @@ export default function EstoqueSemenPage() {
     });
   };
 
-  const farmName = activeFarm?.name || 'Fazenda Principal';
+  const targetFarmId = mainFarm?.id || activeFarmId;
+  const farmName = !isMainFarm && mainFarm
+    ? `${activeFarm?.name || 'Fazenda'} (Estoque: ${mainFarm.name})`
+    : (activeFarm?.name || 'Fazenda Principal');
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
@@ -479,7 +486,7 @@ export default function EstoqueSemenPage() {
 
           {activeTab === 'tanks' && (
             <TanksView
-              farmId={activeFarmId!}
+              farmId={targetFarmId!}
               tanks={tanks}
               balances={balances}
               onRefresh={() => loadData(true)}
@@ -510,7 +517,7 @@ export default function EstoqueSemenPage() {
 
           {activeTab === 'clients' && (
             <ClientsView
-              farmId={activeFarmId!}
+              farmId={targetFarmId!}
               clients={clients}
               balances={balances}
               onRefresh={() => loadData(true)}
@@ -521,7 +528,7 @@ export default function EstoqueSemenPage() {
 
           {activeTab === 'movements' && (
             <MovementsLedgerView
-              farmId={activeFarmId!}
+              farmId={targetFarmId!}
               movements={movements}
               farmName={farmName}
               activeMaterialType={materialType}
@@ -548,9 +555,9 @@ export default function EstoqueSemenPage() {
       )}
 
       {/* Modal Assistente de Movimentação */}
-      {wizardOpen && activeFarmId && (
+      {wizardOpen && targetFarmId && (
         <MovementWizard
-          farmId={activeFarmId}
+          farmId={targetFarmId}
           initialMode={wizardMode}
           tanks={tanks}
           clients={clients}
@@ -568,9 +575,9 @@ export default function EstoqueSemenPage() {
       )}
 
       {/* Modal Consulta Rápida de Animal */}
-      {animalLookupOpen && activeFarmId && (
+      {animalLookupOpen && targetFarmId && (
         <AnimalGeneticLookupModal
-          farmId={activeFarmId}
+          farmId={targetFarmId}
           farmName={farmName}
           onSelectAction={handleSelectAnimalPosition}
           onClose={() => setAnimalLookupOpen(false)}
