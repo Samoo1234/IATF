@@ -8051,6 +8051,20 @@ export async function toggleTeamMemberStatus(memberId: string, status: 'active' 
 // MANEJOS COLETIVOS EM LOTE (BATCH LOT MANAGEMENT)
 // ==========================================
 
+async function runInParallelChunks<T, R>(
+  items: T[],
+  chunkSize: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize);
+    const chunkResults = await Promise.all(chunk.map((item) => fn(item)));
+    results.push(...chunkResults);
+  }
+  return results;
+}
+
 export async function executeBatchLotManagementD0(params: {
   lotId: string;
   executionDate: string;
@@ -8172,64 +8186,92 @@ export async function executeBatchLotManagementD0(params: {
   if (!iaDate) iaDate = addDaysToDateString(params.executionDate, 11);
   if (!dgDate) dgDate = addDaysToDateString(params.executionDate, 44);
 
-  for (const animalId of params.animalIds) {
-    const { data: existingMgmt } = await supabase
-      .from('animal_managements')
-      .select('id')
-      .eq('animal_id', animalId)
-      .eq('lot_id', params.lotId)
-      .maybeSingle();
-
-    if (existingMgmt) {
-      await supabase
-        .from('animal_managements')
-        .update({
-          start_date: params.executionDate,
-          d0_executed_at: params.executionDate,
-          d0_responsible: params.responsibleName || null,
-          d0_notes: params.notes || null,
-          d9_date: d9Date,
-          ia_date: iaDate,
-          dg_date: dgDate,
-          status: 'em_andamento',
-          updated_at: todayIso,
-        })
-        .eq('id', existingMgmt.id);
-    } else {
-      const { count: cycleCount } = await supabase
-        .from('animal_managements')
-        .select('id', { count: 'exact', head: true })
-        .eq('animal_id', animalId);
-
-      await supabase
-        .from('animal_managements')
-        .insert({
-          organization_id: orgId,
-          farm_id: lot.farm_id,
-          animal_id: animalId,
-          season_id: lot.season_id,
-          protocol_id: lot.protocol_id,
-          lot_id: params.lotId,
-          cycle_number: (cycleCount ?? 0) + 1,
-          start_date: params.executionDate,
-          d0_executed_at: params.executionDate,
-          d0_responsible: params.responsibleName || null,
-          d0_notes: params.notes || null,
-          d9_date: d9Date,
-          ia_date: iaDate,
-          dg_date: dgDate,
-          status: 'em_andamento',
-          pregnancy_status: 'pendente',
-        });
-    }
-
+  // 1. Atualizar todos os animais para 'em_protocolo' em massa em uma única chamada
+  if (params.animalIds.length > 0) {
     await supabase
       .from('animals')
       .update({
         reproductive_status: 'em_protocolo',
         updated_at: todayIso,
       })
-      .eq('id', animalId);
+      .in('id', params.animalIds);
+  }
+
+  // 2. Buscar todos os manejos existentes deste lote em uma única consulta
+  const { data: existingMgmts } = await supabase
+    .from('animal_managements')
+    .select('id, animal_id')
+    .eq('lot_id', params.lotId);
+
+  const existingMgmtMap = new Map<string, string>();
+  (existingMgmts || []).forEach((m: { id: string; animal_id: string }) => {
+    existingMgmtMap.set(m.animal_id, m.id);
+  });
+
+  const existingMgmtIds: string[] = [];
+  const newAnimalIds: string[] = [];
+
+  for (const animalId of params.animalIds) {
+    const mgmtId = existingMgmtMap.get(animalId);
+    if (mgmtId) {
+      existingMgmtIds.push(mgmtId);
+    } else {
+      newAnimalIds.push(animalId);
+    }
+  }
+
+  // 3. Atualizar manejos existentes em massa em uma única chamada
+  if (existingMgmtIds.length > 0) {
+    await supabase
+      .from('animal_managements')
+      .update({
+        start_date: params.executionDate,
+        d0_executed_at: params.executionDate,
+        d0_responsible: params.responsibleName || null,
+        d0_notes: params.notes || null,
+        d9_date: d9Date,
+        ia_date: iaDate,
+        dg_date: dgDate,
+        status: 'em_andamento',
+        updated_at: todayIso,
+      })
+      .in('id', existingMgmtIds);
+  }
+
+  // 4. Inserir novos manejos em lote em uma única chamada
+  if (newAnimalIds.length > 0) {
+    const { data: pastMgmts } = await supabase
+      .from('animal_managements')
+      .select('animal_id')
+      .in('animal_id', newAnimalIds);
+
+    const cycleCountPerAnimal: Record<string, number> = {};
+    (pastMgmts || []).forEach((pm: { animal_id: string }) => {
+      cycleCountPerAnimal[pm.animal_id] = (cycleCountPerAnimal[pm.animal_id] || 0) + 1;
+    });
+
+    const newRows = newAnimalIds.map((animalId) => ({
+      organization_id: orgId,
+      farm_id: lot.farm_id,
+      animal_id: animalId,
+      season_id: lot.season_id,
+      protocol_id: lot.protocol_id,
+      lot_id: params.lotId,
+      cycle_number: (cycleCountPerAnimal[animalId] || 0) + 1,
+      start_date: params.executionDate,
+      d0_executed_at: params.executionDate,
+      d0_responsible: params.responsibleName || null,
+      d0_notes: params.notes || null,
+      d9_date: d9Date,
+      ia_date: iaDate,
+      dg_date: dgDate,
+      status: 'em_andamento',
+      pregnancy_status: 'pendente',
+      created_at: todayIso,
+      updated_at: todayIso,
+    }));
+
+    await supabase.from('animal_managements').insert(newRows);
   }
 
   await supabase
@@ -8355,38 +8397,68 @@ export async function executeBatchLotManagementD9(params: {
     : (allLotAnimals || []);
   const total = lotAnimals.length;
 
+  // 1. Buscar todos os animal_managements do lote em uma única consulta
+  const { data: lotMgmts } = await supabase
+    .from('animal_managements')
+    .select('id, animal_id')
+    .eq('lot_id', params.lotId);
+
+  const mgmtMap = new Map<string, string>();
+  (lotMgmts || []).forEach((m: { id: string; animal_id: string }) => {
+    mgmtMap.set(m.animal_id, m.id);
+  });
+
+  const normalMgmtIds: string[] = [];
+  const lossMgmtIds: string[] = [];
+  const lossAnimalIds: string[] = [];
+
   for (const la of lotAnimals) {
     const hasLoss = lossIds.has(la.animal_id);
-
-    const { data: mgmts } = await supabase
-      .from('animal_managements')
-      .select('id')
-      .eq('animal_id', la.animal_id)
-      .eq('lot_id', params.lotId)
-      .order('created_at', { ascending: false })
-      .limit(1);
-
-    const mgmtId = mgmts?.[0]?.id;
-    if (mgmtId) {
-      await supabase
-        .from('animal_managements')
-        .update({
-          d9_executed_at: params.executionDate,
-          d9_responsible: params.responsibleName || null,
-          d9_device_loss: hasLoss,
-          d9_notes: hasLoss ? 'Perda de implante no D9 coletivo' : params.notes || null,
-          status: hasLoss ? 'interrompido' : 'em_andamento',
-          updated_at: todayIso,
-        })
-        .eq('id', mgmtId);
-    }
-
+    const mgmtId = mgmtMap.get(la.animal_id);
     if (hasLoss) {
-      await supabase
-        .from('animals')
-        .update({ reproductive_status: 'vazia', updated_at: todayIso })
-        .eq('id', la.animal_id);
+      lossAnimalIds.push(la.animal_id);
+      if (mgmtId) lossMgmtIds.push(mgmtId);
+    } else {
+      if (mgmtId) normalMgmtIds.push(mgmtId);
     }
+  }
+
+  // 2. Atualizar manejos normais em lote (1 query!)
+  if (normalMgmtIds.length > 0) {
+    await supabase
+      .from('animal_managements')
+      .update({
+        d9_executed_at: params.executionDate,
+        d9_responsible: params.responsibleName || null,
+        d9_device_loss: false,
+        d9_notes: params.notes || null,
+        status: 'em_andamento',
+        updated_at: todayIso,
+      })
+      .in('id', normalMgmtIds);
+  }
+
+  // 3. Atualizar manejos com perda de implante em lote (1 query!)
+  if (lossMgmtIds.length > 0) {
+    await supabase
+      .from('animal_managements')
+      .update({
+        d9_executed_at: params.executionDate,
+        d9_responsible: params.responsibleName || null,
+        d9_device_loss: true,
+        d9_notes: 'Perda de implante no D9 coletivo',
+        status: 'interrompido',
+        updated_at: todayIso,
+      })
+      .in('id', lossMgmtIds);
+  }
+
+  // 4. Atualizar status reprodutivo das matrizes com perda para 'vazia' em lote (1 query!)
+  if (lossAnimalIds.length > 0) {
+    await supabase
+      .from('animals')
+      .update({ reproductive_status: 'vazia', updated_at: todayIso })
+      .in('id', lossAnimalIds);
   }
 
   await supabase
@@ -8566,6 +8638,22 @@ export async function executeBatchLotManagementIA(params: {
     existingBatchMap.set(la.id, la.semen_batch_id || null);
   });
 
+  // Pre-fetch all animal_managements for the lot in ONE single query
+  const { data: allMgmts } = await supabase
+    .from('animal_managements')
+    .select('id, animal_id')
+    .eq('lot_id', params.lotId);
+
+  const mgmtMap = new Map<string, string>();
+  (allMgmts || []).forEach((m: { id: string; animal_id: string }) => {
+    mgmtMap.set(m.animal_id, m.id);
+  });
+
+  const inseminatedAnimalIds: string[] = [];
+  const lotAnimalsToUpdate: { id: string; payload: Record<string, unknown> }[] = [];
+  const mgmtsToUpdate: { mgmtId: string; payload: Record<string, unknown> }[] = [];
+  const newMgmtsToInsert: Record<string, unknown>[] = [];
+
   for (const item of activeItems) {
     const bullId = item.bull_id || null;
     const batchId = item.semen_batch_id || null;
@@ -8579,61 +8667,25 @@ export async function executeBatchLotManagementIA(params: {
       batchUsageCount[batchId] = (batchUsageCount[batchId] || 0) + 1;
     }
 
-    // 1. Atualiza iatf_lot_animals
-    const { error: laUpdateErr } = await supabase
-      .from('iatf_lot_animals')
-      .update({
+    lotAnimalsToUpdate.push({
+      id: item.lot_animal_id,
+      payload: {
         bull_id: bullId,
         semen_batch_id: batchId,
         inseminator_name: inseminator,
         ecc_ia: ecc != null ? Number(ecc) : null,
         notes: item.notes || null,
         updated_at: todayIso,
-      })
-      .eq('id', item.lot_animal_id);
+      },
+    });
 
-    if (laUpdateErr) {
-      console.warn('Erro ao atualizar iatf_lot_animals na IA:', laUpdateErr);
-    }
-
-    // 1.1 Atualiza imediatamente no IndexedDB local também
-    try {
-      await offlineDb.lot_animals.update(item.lot_animal_id, {
-        bull_id: bullId || undefined,
-        semen_batch_id: batchId || undefined,
-        inseminator_name: inseminator || undefined,
-        ecc_ia: ecc != null ? Number(ecc) : undefined,
-        notes: item.notes || null,
-        updated_at: todayIso,
-      });
-    } catch {
-      // ignore
-    }
-
-    // 2. Atualiza status do animal APENAS se foi de fato inseminado
     if (isInseminated) {
-      await supabase
-        .from('animals')
-        .update({
-          reproductive_status: 'inseminada',
-          updated_at: todayIso,
-        })
-        .eq('id', item.animal_id);
-
-      // 3. Atualiza registro em animal_managements
-      const { data: mgmts } = await supabase
-        .from('animal_managements')
-        .select('id')
-        .eq('animal_id', item.animal_id)
-        .eq('lot_id', params.lotId)
-        .order('created_at', { ascending: false })
-        .limit(1);
-
-      const mgmtId = mgmts?.[0]?.id;
+      inseminatedAnimalIds.push(item.animal_id);
+      const mgmtId = mgmtMap.get(item.animal_id);
       if (mgmtId) {
-        await supabase
-          .from('animal_managements')
-          .update({
+        mgmtsToUpdate.push({
+          mgmtId,
+          payload: {
             ia_executed_at: params.executionDate,
             bull_id: bullId,
             semen_batch_id: batchId,
@@ -8641,10 +8693,10 @@ export async function executeBatchLotManagementIA(params: {
             ecc_ia: ecc != null ? Number(ecc) : null,
             ia_notes: item.notes || params.notes || null,
             updated_at: todayIso,
-          })
-          .eq('id', mgmtId);
+          },
+        });
       } else {
-        await supabase.from('animal_managements').insert({
+        newMgmtsToInsert.push({
           organization_id: orgId,
           lot_id: params.lotId,
           animal_id: item.animal_id,
@@ -8661,6 +8713,46 @@ export async function executeBatchLotManagementIA(params: {
         });
       }
     }
+  }
+
+  // 1. Atualizar status dos animais inseminados em massa em 1 única chamada
+  if (inseminatedAnimalIds.length > 0) {
+    await supabase
+      .from('animals')
+      .update({
+        reproductive_status: 'inseminada',
+        updated_at: todayIso,
+      })
+      .in('id', inseminatedAnimalIds);
+  }
+
+  // 2. Inserir novos animal_managements em lote em 1 única chamada
+  if (newMgmtsToInsert.length > 0) {
+    await supabase.from('animal_managements').insert(newMgmtsToInsert);
+  }
+
+  // 3. Atualizar iatf_lot_animals em lotes paralelos (chunks de 15)
+  await runInParallelChunks(lotAnimalsToUpdate, 15, async (entry) => {
+    await supabase.from('iatf_lot_animals').update(entry.payload).eq('id', entry.id);
+    try {
+      await offlineDb.lot_animals.update(entry.id, {
+        bull_id: (entry.payload.bull_id as string) || undefined,
+        semen_batch_id: (entry.payload.semen_batch_id as string) || undefined,
+        inseminator_name: (entry.payload.inseminator_name as string) || undefined,
+        ecc_ia: entry.payload.ecc_ia != null ? Number(entry.payload.ecc_ia) : undefined,
+        notes: (entry.payload.notes as string) || null,
+        updated_at: todayIso,
+      });
+    } catch {
+      // ignore
+    }
+  });
+
+  // 4. Atualizar animal_managements existentes em lotes paralelos (chunks de 15)
+  if (mgmtsToUpdate.length > 0) {
+    await runInParallelChunks(mgmtsToUpdate, 15, async (entry) => {
+      await supabase.from('animal_managements').update(entry.payload).eq('id', entry.mgmtId);
+    });
   }
 
   // 4. Baixa de estoque de sêmen para as partidas utilizadas
@@ -8851,48 +8943,51 @@ export async function executeBatchLotManagementDG(params: {
 
   const baseIaDate = lot?.ia_planned_date;
 
+  // 1. Pre-fetch todos os animal_managements deste lote em 1 única chamada
+  const { data: allMgmts } = await supabase
+    .from('animal_managements')
+    .select('id, animal_id')
+    .eq('lot_id', params.lotId);
+
+  const mgmtMap = new Map<string, string>();
+  (allMgmts || []).forEach((m: { id: string; animal_id: string }) => {
+    mgmtMap.set(m.animal_id, m.id);
+  });
+
+  const pregnantAnimalIds: string[] = [];
+  const emptyAnimalIds: string[] = [];
+  const lotAnimalsToUpdate: { id: string; payload: Record<string, unknown> }[] = [];
+  const mgmtsToUpdate: { mgmtId: string; payload: Record<string, unknown> }[] = [];
+
   for (const item of params.items) {
     const isPregnant = item.pregnancy_status === 'prenha';
+    if (isPregnant) {
+      pregnantAnimalIds.push(item.animal_id);
+    } else if (item.pregnancy_status === 'vazia') {
+      emptyAnimalIds.push(item.animal_id);
+    }
+
     let expectedParturition: string | null = null;
     if (isPregnant) {
       expectedParturition = addDaysToDateString(baseIaDate || params.executionDate, baseIaDate ? 295 : 250);
     }
 
-    // 1. Atualiza iatf_lot_animals
-    await supabase
-      .from('iatf_lot_animals')
-      .update({
+    lotAnimalsToUpdate.push({
+      id: item.lot_animal_id,
+      payload: {
         pregnancy_status: item.pregnancy_status,
         ecc_dg: item.ecc_dg !== undefined && item.ecc_dg !== null ? Number(item.ecc_dg) : null,
         expected_parturition_date: expectedParturition,
         notes: item.notes || null,
         updated_at: todayIso,
-      })
-      .eq('id', item.lot_animal_id);
+      },
+    });
 
-    // 2. Atualiza animals
-    await supabase
-      .from('animals')
-      .update({
-        reproductive_status: isPregnant ? 'prenha' : 'vazia',
-        updated_at: todayIso,
-      })
-      .eq('id', item.animal_id);
-
-    // 3. Atualiza animal_managements
-    const { data: mgmts } = await supabase
-      .from('animal_managements')
-      .select('id')
-      .eq('animal_id', item.animal_id)
-      .eq('lot_id', params.lotId)
-      .order('created_at', { ascending: false })
-      .limit(1);
-
-    const mgmtId = mgmts?.[0]?.id;
+    const mgmtId = mgmtMap.get(item.animal_id);
     if (mgmtId) {
-      await supabase
-        .from('animal_managements')
-        .update({
+      mgmtsToUpdate.push({
+        mgmtId,
+        payload: {
           dg_executed_at: params.executionDate,
           pregnancy_status: item.pregnancy_status,
           ecc_dg: item.ecc_dg !== undefined && item.ecc_dg !== null ? Number(item.ecc_dg) : null,
@@ -8900,9 +8995,42 @@ export async function executeBatchLotManagementDG(params: {
           dg_notes: item.notes || params.notes || null,
           status: 'concluido',
           updated_at: todayIso,
-        })
-        .eq('id', mgmtId);
+        },
+      });
     }
+  }
+
+  // 2. Atualizar status dos animais em lote (1 chamada para prenhas e 1 para vazias)
+  if (pregnantAnimalIds.length > 0) {
+    await supabase
+      .from('animals')
+      .update({
+        reproductive_status: 'prenha',
+        updated_at: todayIso,
+      })
+      .in('id', pregnantAnimalIds);
+  }
+
+  if (emptyAnimalIds.length > 0) {
+    await supabase
+      .from('animals')
+      .update({
+        reproductive_status: 'vazia',
+        updated_at: todayIso,
+      })
+      .in('id', emptyAnimalIds);
+  }
+
+  // 3. Atualizar iatf_lot_animals em lotes paralelos (chunks de 15)
+  await runInParallelChunks(lotAnimalsToUpdate, 15, async (entry) => {
+    await supabase.from('iatf_lot_animals').update(entry.payload).eq('id', entry.id);
+  });
+
+  // 4. Atualizar animal_managements em lotes paralelos (chunks de 15)
+  if (mgmtsToUpdate.length > 0) {
+    await runInParallelChunks(mgmtsToUpdate, 15, async (entry) => {
+      await supabase.from('animal_managements').update(entry.payload).eq('id', entry.mgmtId);
+    });
   }
 
   // 4. Concluir evento de DG em management_events
