@@ -8447,10 +8447,11 @@ export async function executeBatchLotManagementIA(params: {
   if (isOffline) {
     try {
       for (const item of activeItems) {
-        const bullId = item.bull_id || params.defaultBullId || '';
-        const batchId = item.semen_batch_id || params.defaultSemenBatchId || '';
+        const bullId = item.bull_id || '';
+        const batchId = item.semen_batch_id || '';
         const inseminator = item.inseminator_name || params.defaultInseminatorName || null;
         const ecc = item.ecc_ia !== undefined && item.ecc_ia !== null ? item.ecc_ia : (params.defaultEccIa || null);
+        const isInseminated = Boolean(bullId && batchId);
 
         const bullObj = bullId ? await offlineDb.bulls.get(bullId) : undefined;
         const batchObj = batchId ? await offlineDb.semen_batches.get(batchId) : undefined;
@@ -8476,47 +8477,49 @@ export async function executeBatchLotManagementIA(params: {
           updated_at: todayIso,
         });
 
-        await offlineDb.animals.update(item.animal_id, {
-          reproductive_status: 'inseminada',
-          updated_at: todayIso,
-        });
-
-        const mgmts = await offlineDb.animal_managements.where('animal_id').equals(item.animal_id).toArray();
-        const activeMgmt = mgmts.find((m) => m.lot_id === params.lotId && m.status === 'em_andamento') || mgmts[0];
-
-        if (activeMgmt) {
-          await syncEngine.recordOfflineStepIA(activeMgmt.id, {
-            animal_id: item.animal_id,
-            executed_at: params.executionDate,
-            bull_id: bullId,
-            semen_batch_id: batchId,
-            inseminator_name: inseminator,
-            ecc_ia: ecc != null ? String(ecc) : null,
-            notes: item.notes || params.notes || null,
+        if (isInseminated) {
+          await offlineDb.animals.update(item.animal_id, {
+            reproductive_status: 'inseminada',
+            updated_at: todayIso,
           });
-        } else if (batchId) {
-          await syncEngine.decrementLocalSemenBatch(batchId, 1);
+
+          const mgmts = await offlineDb.animal_managements.where('animal_id').equals(item.animal_id).toArray();
+          const activeMgmt = mgmts.find((m) => m.lot_id === params.lotId && m.status === 'em_andamento') || mgmts[0];
+
+          if (activeMgmt) {
+            await syncEngine.recordOfflineStepIA(activeMgmt.id, {
+              animal_id: item.animal_id,
+              executed_at: params.executionDate,
+              bull_id: bullId,
+              semen_batch_id: batchId,
+              inseminator_name: inseminator,
+              ecc_ia: ecc != null ? String(ecc) : null,
+              notes: item.notes || params.notes || null,
+            });
+          } else if (batchId) {
+            await syncEngine.decrementLocalSemenBatch(batchId, 1);
+          }
         }
       }
 
       const workedCountInLot = await offlineDb.lot_animals
         .where('lot_id')
         .equals(params.lotId)
-        .filter((la) => Boolean(la.bull_id || la.inseminator_name || la.semen_batch_id))
+        .filter((la) => Boolean(la.bull_id && la.semen_batch_id))
         .count();
-      const iaCountToSave = Math.max(workedCountInLot, activeItems.length);
+      const iaCountToSave = workedCountInLot;
 
       const events = await offlineDb.management_events.where('lot_id').equals(params.lotId).toArray();
       const iaEvent = events.find((e) => e.step_code === 'IA');
       if (iaEvent) {
         await offlineDb.management_events.update(iaEvent.id, {
-          status: 'concluido',
+          status: iaCountToSave > 0 ? 'concluido' : 'pendente',
           execution_date: params.executionDate,
           animals_worked_count: iaCountToSave,
           updated_at: todayIso,
         });
         await syncEngine.enqueueMutation('update', 'management_events', iaEvent.id, iaEvent.farm_id, {
-          status: 'concluido',
+          status: iaCountToSave > 0 ? 'concluido' : 'pendente',
           execution_date: params.executionDate,
           animals_worked_count: iaCountToSave,
           updated_at: todayIso,
@@ -8564,14 +8567,15 @@ export async function executeBatchLotManagementIA(params: {
   });
 
   for (const item of activeItems) {
-    const bullId = item.bull_id || params.defaultBullId || null;
-    const batchId = item.semen_batch_id || params.defaultSemenBatchId || null;
+    const bullId = item.bull_id || null;
+    const batchId = item.semen_batch_id || null;
     const inseminator = item.inseminator_name || params.defaultInseminatorName || null;
     const ecc = item.ecc_ia !== undefined && item.ecc_ia !== null ? item.ecc_ia : (params.defaultEccIa || null);
+    const isInseminated = Boolean(bullId && batchId);
 
     const prevBatchId = existingBatchMap.get(item.lot_animal_id);
-    // Só contabiliza baixa de estoque se a matriz ainda não tinha esta mesma partida associada
-    if (batchId && prevBatchId !== batchId) {
+    // Só contabiliza baixa de estoque se a matriz for realmente inseminada e ainda não tinha esta mesma partida associada
+    if (isInseminated && batchId && prevBatchId !== batchId) {
       batchUsageCount[batchId] = (batchUsageCount[batchId] || 0) + 1;
     }
 
@@ -8606,54 +8610,56 @@ export async function executeBatchLotManagementIA(params: {
       // ignore
     }
 
-    // 2. Atualiza status do animal
-    await supabase
-      .from('animals')
-      .update({
-        reproductive_status: 'inseminada',
-        updated_at: todayIso,
-      })
-      .eq('id', item.animal_id);
-
-    // 3. Atualiza registro em animal_managements
-    const { data: mgmts } = await supabase
-      .from('animal_managements')
-      .select('id')
-      .eq('animal_id', item.animal_id)
-      .eq('lot_id', params.lotId)
-      .order('created_at', { ascending: false })
-      .limit(1);
-
-    const mgmtId = mgmts?.[0]?.id;
-    if (mgmtId) {
+    // 2. Atualiza status do animal APENAS se foi de fato inseminado
+    if (isInseminated) {
       await supabase
-        .from('animal_managements')
+        .from('animals')
         .update({
+          reproductive_status: 'inseminada',
+          updated_at: todayIso,
+        })
+        .eq('id', item.animal_id);
+
+      // 3. Atualiza registro em animal_managements
+      const { data: mgmts } = await supabase
+        .from('animal_managements')
+        .select('id')
+        .eq('animal_id', item.animal_id)
+        .eq('lot_id', params.lotId)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      const mgmtId = mgmts?.[0]?.id;
+      if (mgmtId) {
+        await supabase
+          .from('animal_managements')
+          .update({
+            ia_executed_at: params.executionDate,
+            bull_id: bullId,
+            semen_batch_id: batchId,
+            inseminator_name: inseminator,
+            ecc_ia: ecc != null ? Number(ecc) : null,
+            ia_notes: item.notes || params.notes || null,
+            updated_at: todayIso,
+          })
+          .eq('id', mgmtId);
+      } else {
+        await supabase.from('animal_managements').insert({
+          organization_id: orgId,
+          lot_id: params.lotId,
+          animal_id: item.animal_id,
           ia_executed_at: params.executionDate,
           bull_id: bullId,
           semen_batch_id: batchId,
           inseminator_name: inseminator,
           ecc_ia: ecc != null ? Number(ecc) : null,
           ia_notes: item.notes || params.notes || null,
+          status: 'em_andamento',
+          pregnancy_status: 'pendente',
+          created_at: todayIso,
           updated_at: todayIso,
-        })
-        .eq('id', mgmtId);
-    } else {
-      await supabase.from('animal_managements').insert({
-        organization_id: orgId,
-        lot_id: params.lotId,
-        animal_id: item.animal_id,
-        ia_executed_at: params.executionDate,
-        bull_id: bullId,
-        semen_batch_id: batchId,
-        inseminator_name: inseminator,
-        ecc_ia: ecc != null ? Number(ecc) : null,
-        ia_notes: item.notes || params.notes || null,
-        status: 'em_andamento',
-        pregnancy_status: 'pendente',
-        created_at: todayIso,
-        updated_at: todayIso,
-      });
+        });
+      }
     }
   }
 
@@ -8699,14 +8705,15 @@ export async function executeBatchLotManagementIA(params: {
     .from('iatf_lot_animals')
     .select('id', { count: 'exact', head: true })
     .eq('lot_id', params.lotId)
-    .not('bull_id', 'is', null);
+    .not('bull_id', 'is', null)
+    .not('semen_batch_id', 'is', null);
 
-  const iaCountToSave = Math.max(dbIaWorkedCount || 0, activeItems.length);
+  const iaCountToSave = dbIaWorkedCount || 0;
 
   await supabase
     .from('management_events')
     .update({
-      status: 'concluido',
+      status: iaCountToSave > 0 ? 'concluido' : 'pendente',
       execution_date: params.executionDate,
       animals_worked_count: iaCountToSave,
       responsible_name: params.defaultInseminatorName || null,

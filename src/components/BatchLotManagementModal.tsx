@@ -30,6 +30,8 @@ import {
   Search,
   Save,
   Loader2,
+  Clock,
+  BarChart3,
 } from 'lucide-react';
 
 interface BatchLotManagementModalProps {
@@ -116,6 +118,7 @@ export default function BatchLotManagementModal({
   const [iaDefaultEcc, setIaDefaultEcc] = useState('3.00');
   const [iaNotes, setIaNotes] = useState('');
   const [iaSearchQuery, setIaSearchQuery] = useState('');
+  const [iaFilterTab, setIaFilterTab] = useState<'all' | 'pending' | 'inseminated' | 'skipped'>('all');
 
   // Row by row overrides for IA
   const [iaRows, setIaRows] = useState<
@@ -181,9 +184,14 @@ export default function BatchLotManagementModal({
     setDgDate(lot.dg_planned_date || getTodayDateString());
     setDgResponsible(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
 
-    // Initialize IA rows
-    setIaRows(
-      lotAnimals.map((la) => ({
+    // Initialize IA rows & identify already inseminated matrices
+    const initialSaved: Record<string, boolean> = {};
+    const mappedIaRows = lotAnimals.map((la) => {
+      const hasIaRecorded = Boolean(la.bull_id && la.semen_batch_id);
+      if (hasIaRecorded) {
+        initialSaved[la.animal_id] = true;
+      }
+      return {
         animal_id: la.animal_id,
         lot_animal_id: la.id,
         tag_number: la.animals?.tag_number || 'S/N',
@@ -194,9 +202,12 @@ export default function BatchLotManagementModal({
         ecc_ia: la.ecc_ia ? la.ecc_ia.toFixed(2) : '3.00',
         skipped: false,
         notes: la.notes || '',
-      }))
-    );
+      };
+    });
+    setIaRows(mappedIaRows);
+    setSavedRowsMap(initialSaved);
     setIaSearchQuery('');
+    setIaFilterTab('all');
 
     // Initialize DG rows
     setDgRows(
@@ -294,11 +305,30 @@ export default function BatchLotManagementModal({
     });
   }, [lotAnimals, d9SearchQuery]);
 
-  // Linhas filtradas pela busca rápida de matrizes na IA
+  // Linhas filtradas pela aba de status (Todas / Pendentes / Inseminadas / Puladas) e busca rápida
   const filteredIaRows = useMemo(() => {
-    if (!iaSearchQuery.trim()) return iaRows;
+    let rows = iaRows;
+
+    if (iaFilterTab === 'pending') {
+      rows = rows.filter(
+        (r) =>
+          !r.skipped &&
+          !savedRowsMap[r.animal_id] &&
+          (!r.bull_id || !r.semen_batch_id)
+      );
+    } else if (iaFilterTab === 'inseminated') {
+      rows = rows.filter(
+        (r) =>
+          !r.skipped &&
+          (savedRowsMap[r.animal_id] || (Boolean(r.bull_id) && Boolean(r.semen_batch_id)))
+      );
+    } else if (iaFilterTab === 'skipped') {
+      rows = rows.filter((r) => r.skipped);
+    }
+
+    if (!iaSearchQuery.trim()) return rows;
     const q = iaSearchQuery.trim().toLowerCase();
-    return iaRows.filter((r) => {
+    return rows.filter((r) => {
       const bull = bulls.find((b) => b.id === r.bull_id);
       const batch = semenBatches.find((b) => b.id === r.semen_batch_id);
       return (
@@ -309,36 +339,40 @@ export default function BatchLotManagementModal({
         (r.notes && r.notes.toLowerCase().includes(q))
       );
     });
-  }, [iaRows, iaSearchQuery, bulls, semenBatches]);
+  }, [iaRows, iaFilterTab, iaSearchQuery, savedRowsMap, bulls, semenBatches]);
 
-  // Apply default bull and batch to IA rows (respeita busca ativa se houver)
-  const handleApplyDefaultsToAllIaRows = () => {
-    if (iaSearchQuery.trim()) {
-      const targetIds = new Set(filteredIaRows.map((r) => r.animal_id));
-      setIaRows((prev) =>
-        prev.map((row) =>
-          targetIds.has(row.animal_id)
-            ? {
-                ...row,
-                bull_id: iaDefaultBullId || row.bull_id,
-                semen_batch_id: iaDefaultBatchId || row.semen_batch_id,
-                inseminator_name: iaInseminator || row.inseminator_name,
-                ecc_ia: iaDefaultEcc || row.ecc_ia,
-              }
-            : row
-        )
-      );
-    } else {
-      setIaRows((prev) =>
-        prev.map((row) => ({
+  // Aplica touro e partida padrão do cabeçalho APENAS nas matrizes que estão pendentes (não salva automaticamente)
+  const handleApplyDefaultsToPendingIaRows = () => {
+    if (!iaDefaultBullId || !iaDefaultBatchId) {
+      setErrorMsg('Selecione um touro e partida padrão no cabeçalho primeiro.');
+      return;
+    }
+
+    setHasUnsavedChanges(true);
+    let countUpdated = 0;
+    setIaRows((prev) =>
+      prev.map((row) => {
+        const isAlreadyInseminated =
+          savedRowsMap[row.animal_id] || (Boolean(row.bull_id) && Boolean(row.semen_batch_id));
+        if (isAlreadyInseminated || row.skipped) {
+          return row;
+        }
+        countUpdated++;
+        return {
           ...row,
-          bull_id: iaDefaultBullId || row.bull_id,
-          semen_batch_id: iaDefaultBatchId || row.semen_batch_id,
+          bull_id: iaDefaultBullId,
+          semen_batch_id: iaDefaultBatchId,
           inseminator_name: iaInseminator || row.inseminator_name,
           ecc_ia: iaDefaultEcc || row.ecc_ia,
-        }))
-      );
-    }
+        };
+      })
+    );
+    setRowSuccessMsg(
+      countUpdated > 0
+        ? `Touro e partida preenchidos em ${countUpdated} matriz(es) pendente(s)!`
+        : 'Nenhuma matriz pendente para preencher.'
+    );
+    setTimeout(() => setRowSuccessMsg(null), 3500);
   };
 
   // Toggle Loss of device for an animal in D9
@@ -407,14 +441,30 @@ export default function BatchLotManagementModal({
       return;
     }
 
+    // Se o operador não escolheu touro/partida na linha, tenta utilizar o padrão do cabeçalho
+    const bullId = row.bull_id || iaDefaultBullId || null;
+    const batchId = row.semen_batch_id || iaDefaultBatchId || null;
+
+    if (!bullId || !batchId) {
+      setErrorMsg(`Selecione o touro e a partida de sêmen para a matriz ${row.tag_number} antes de salvar.`);
+      return;
+    }
+
+    // Atualiza imediatamente o estado da linha com o touro e partida utilizados
+    updateIaRow(animalId, {
+      bull_id: bullId,
+      semen_batch_id: batchId,
+      inseminator_name: row.inseminator_name || iaInseminator || '',
+    });
+
     setSavingRowId(animalId);
     setErrorMsg(null);
     try {
       const item = {
         animal_id: row.animal_id,
         lot_animal_id: row.lot_animal_id,
-        bull_id: row.bull_id || iaDefaultBullId || null,
-        semen_batch_id: row.semen_batch_id || iaDefaultBatchId || null,
+        bull_id: bullId,
+        semen_batch_id: batchId,
         inseminator_name: row.inseminator_name || iaInseminator || null,
         ecc_ia: row.ecc_ia ? parseFloat(row.ecc_ia) : null,
         skipped: row.skipped,
@@ -424,8 +474,8 @@ export default function BatchLotManagementModal({
       const res = await executeBatchLotManagementIA({
         lotId: lot.id,
         executionDate: iaDate,
-        defaultBullId: iaDefaultBullId || null,
-        defaultSemenBatchId: iaDefaultBatchId || null,
+        defaultBullId: null,
+        defaultSemenBatchId: null,
         defaultInseminatorName: iaInseminator || null,
         defaultEccIa: iaDefaultEcc ? parseFloat(iaDefaultEcc) : null,
         notes: iaNotes,
@@ -436,7 +486,7 @@ export default function BatchLotManagementModal({
         setErrorMsg(res.error || `Erro ao salvar matriz ${row.tag_number}.`);
       } else {
         setSavedRowsMap((prev) => ({ ...prev, [animalId]: true }));
-        setRowSuccessMsg(`Matriz ${row.tag_number} salva com sucesso!`);
+        setRowSuccessMsg(`Matriz ${row.tag_number} inseminada e salva com sucesso!`);
         setTimeout(() => setRowSuccessMsg(null), 3500);
         onSuccess();
       }
@@ -550,11 +600,13 @@ export default function BatchLotManagementModal({
           return;
         }
 
+        // IMPORTANTE: Só processa e altera para inseminada as matrizes que realmente tiveram touro/partida confirmados!
+        // As matrizes pendentes permanecem no lote aguardando IA no curral.
         const items = iaRows.map((r) => ({
           animal_id: r.animal_id,
           lot_animal_id: r.lot_animal_id,
-          bull_id: r.bull_id || iaDefaultBullId || null,
-          semen_batch_id: r.semen_batch_id || iaDefaultBatchId || null,
+          bull_id: r.bull_id || null, // NÃO força iaDefaultBullId em quem estiver em branco
+          semen_batch_id: r.semen_batch_id || null, // NÃO força iaDefaultBatchId em quem estiver em branco
           inseminator_name: r.inseminator_name || iaInseminator || null,
           ecc_ia: r.ecc_ia ? parseFloat(r.ecc_ia) : null,
           skipped: r.skipped,
@@ -564,8 +616,8 @@ export default function BatchLotManagementModal({
         const res = await executeBatchLotManagementIA({
           lotId: lot.id,
           executionDate: iaDate,
-          defaultBullId: iaDefaultBullId || null,
-          defaultSemenBatchId: iaDefaultBatchId || null,
+          defaultBullId: null,
+          defaultSemenBatchId: null,
           defaultInseminatorName: iaInseminator || null,
           defaultEccIa: iaDefaultEcc ? parseFloat(iaDefaultEcc) : null,
           notes: iaNotes,
@@ -619,14 +671,29 @@ export default function BatchLotManagementModal({
     }
   };
 
-  // IA Live Counters
+  // IA Live Counters (Inseminadas vs Pendentes vs Puladas)
   const iaStats = useMemo(() => {
     const total = iaRows.length;
-    const toInseminate = iaRows.filter((r) => !r.skipped).length;
-    const skipped = total - toInseminate;
-    const rate = total > 0 ? ((toInseminate / total) * 100).toFixed(1) : '0.0';
-    return { total, toInseminate, skipped, rate };
-  }, [iaRows]);
+    let inseminated = 0;
+    let pending = 0;
+    let skipped = 0;
+
+    iaRows.forEach((r) => {
+      if (r.skipped) {
+        skipped++;
+      } else if (
+        savedRowsMap[r.animal_id] ||
+        (Boolean(r.bull_id) && Boolean(r.semen_batch_id))
+      ) {
+        inseminated++;
+      } else {
+        pending++;
+      }
+    });
+
+    const progressRate = total > 0 ? ((inseminated / total) * 100).toFixed(1) : '0.0';
+    return { total, inseminated, pending, skipped, progressRate };
+  }, [iaRows, savedRowsMap]);
 
   // DG Live Counters
   const dgStats = useMemo(() => {
@@ -1150,33 +1217,35 @@ export default function BatchLotManagementModal({
           )}
 
           {/* ============================================================== */}
-          {/* TAB: IA (Inseminação Coletiva / em Massa) */}
+          {/* TAB: IA (Inseminação Coletiva / Tronco a Tronco) */}
           {/* ============================================================== */}
           {activeTab === 'IA' && (
             <div className="space-y-5 animate-in fade-in">
               <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 text-xs flex items-start gap-3">
                 <Award className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
                 <div className="space-y-1">
-                  <span className="font-bold text-sm text-emerald-300 block">Etapa IA - Inseminação Artificial em Massa</span>
+                  <span className="font-bold text-sm text-emerald-300 block">Etapa IA - Manejo de Inseminação Artificial</span>
                   <p className="text-slate-300">
-                    Defina o Touro, a Partida de Sêmen e o Inseminador no cabeçalho para aplicar a todas as matrizes, ou personalize animal por animal na tabela abaixo.
+                    Trabalhe matriz por matriz no tronco ou aplique o touro padrão nas pendentes. <strong>Apenas matrizes com touro e partida confirmados serão registradas como inseminadas</strong> — as demais continuam pendentes com segurança.
                   </p>
                 </div>
               </div>
 
-              {/* Controles Padrão (Batch Defaults) */}
+              {/* Controles Padrão (Batch Defaults / Template) */}
               <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5" /> Padrão para Todas as Matrizes do Lote
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Configuração Padrão do Lote (Modelo)
                     {loadingAux && <RefreshCw className="w-3 h-3 animate-spin text-emerald-400 ml-1" />}
                   </span>
                   <button
                     type="button"
-                    onClick={handleApplyDefaultsToAllIaRows}
-                    className="text-xs font-bold px-3 py-1 bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 rounded-lg hover:bg-emerald-600/30 transition-all cursor-pointer flex items-center gap-1"
+                    onClick={handleApplyDefaultsToPendingIaRows}
+                    disabled={!iaDefaultBullId || !iaDefaultBatchId}
+                    className="text-xs font-bold px-3 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-40"
+                    title="Preenche o touro e a partida padrão apenas nas matrizes pendentes (não salva automaticamente)"
                   >
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Replicar em Todas as Linhas
+                    <Sparkles className="w-3.5 h-3.5" /> Preencher Touro Padrão nas Pendentes
                   </button>
                 </div>
 
@@ -1259,17 +1328,88 @@ export default function BatchLotManagementModal({
                 </div>
               </div>
 
-              {/* Placar de IA */}
-              <div className="flex items-center gap-3 bg-slate-950 p-3 rounded-2xl border border-slate-800 text-xs font-bold flex-wrap">
-                <span className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                  A INSEMINAR: {iaStats.toInseminate}
-                </span>
-                <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 border border-slate-700">
-                  PULADAS: {iaStats.skipped}
-                </span>
-                <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
-                  APROVEITAMENTO: {iaStats.rate}%
-                </span>
+              {/* Placar de Progresso da IA (Inseminadas vs Pendentes) */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 bg-slate-950 p-3 rounded-2xl border border-slate-800 text-xs font-bold">
+                <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 flex flex-col gap-0.5">
+                  <span className="text-[10px] uppercase tracking-wider text-slate-400">Total no Lote</span>
+                  <span className="text-lg font-black text-white font-mono">{iaStats.total}</span>
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex flex-col gap-0.5">
+                  <span className="text-[10px] uppercase tracking-wider text-emerald-400 flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" /> Já Inseminadas
+                  </span>
+                  <span className="text-lg font-black text-emerald-300 font-mono">{iaStats.inseminated} doses</span>
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex flex-col gap-0.5">
+                  <span className="text-[10px] uppercase tracking-wider text-amber-400 flex items-center gap-1">
+                    <Clock className="w-3 h-3" /> Pendentes no Tronco
+                  </span>
+                  <span className="text-lg font-black text-amber-300 font-mono">{iaStats.pending} a fazer</span>
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/30 flex flex-col gap-0.5">
+                  <span className="text-[10px] uppercase tracking-wider text-purple-400 flex items-center gap-1">
+                    <BarChart3 className="w-3 h-3" /> Progresso da IA
+                  </span>
+                  <span className="text-lg font-black text-purple-300 font-mono">{iaStats.progressRate}%</span>
+                </div>
+              </div>
+
+              {/* Abas de Visualização (Filtros Rápidos) */}
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setIaFilterTab('all')}
+                  className={`px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer ${
+                    iaFilterTab === 'all'
+                      ? 'bg-slate-700 text-white shadow-sm'
+                      : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  Todas ({iaStats.total})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIaFilterTab('pending')}
+                  className={`px-3 py-1.5 rounded-xl font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    iaFilterTab === 'pending'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20 font-black'
+                      : 'bg-slate-900 text-amber-400/90 hover:text-amber-300 border border-amber-500/30'
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Pendentes ({iaStats.pending})</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIaFilterTab('inseminated')}
+                  className={`px-3 py-1.5 rounded-xl font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    iaFilterTab === 'inseminated'
+                      ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20 font-black'
+                      : 'bg-slate-900 text-emerald-400/90 hover:text-emerald-300 border border-emerald-500/30'
+                  }`}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Inseminadas ({iaStats.inseminated})</span>
+                </button>
+
+                {iaStats.skipped > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setIaFilterTab('skipped')}
+                    className={`px-3 py-1.5 rounded-xl font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                      iaFilterTab === 'skipped'
+                        ? 'bg-slate-600 text-white font-black'
+                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    <span>Puladas ({iaStats.skipped})</span>
+                  </button>
+                )}
               </div>
 
               {/* Barra de Busca da Matriz na IA */}
@@ -1301,15 +1441,18 @@ export default function BatchLotManagementModal({
                       <span>Total: <strong className="text-white">{iaRows.length}</strong> matrizes</span>
                     ) : (
                       <span>
-                        Mostrando <strong className="text-emerald-300">{filteredIaRows.length}</strong> de{' '}
+                        Exibindo <strong className="text-emerald-300">{filteredIaRows.length}</strong> de{' '}
                         <strong className="text-white">{iaRows.length}</strong> matrizes
                       </span>
                     )}
                   </span>
-                  {iaSearchQuery && (
+                  {(iaSearchQuery || iaFilterTab !== 'all') && (
                     <button
                       type="button"
-                      onClick={() => setIaSearchQuery('')}
+                      onClick={() => {
+                        setIaSearchQuery('');
+                        setIaFilterTab('all');
+                      }}
                       className="text-[11px] text-emerald-400 hover:text-emerald-300 font-bold underline cursor-pointer ml-1"
                     >
                       Ver todas
@@ -1332,167 +1475,218 @@ export default function BatchLotManagementModal({
                   <table className="w-full text-left text-xs text-slate-300">
                     <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0 z-10">
                       <tr>
-                        <th className="p-2.5 w-10 text-center text-slate-500 text-[10px]">#</th>
+                        <th className="p-2.5 text-center w-28">Status IA</th>
                         <th className="p-2.5">Brinco</th>
                         <th className="p-2.5">Categoria</th>
                         <th className="p-2.5">Touro Utilizado</th>
                         <th className="p-2.5">Partida Sêmen</th>
                         <th className="p-2.5">Observação</th>
                         <th className="p-2.5 text-center">ECC IA</th>
-                        <th className="p-2.5 text-center">Inseminar?</th>
-                        <th className="p-2.5 text-center">Ação</th>
+                        <th className="p-2.5 text-center">Pular?</th>
+                        <th className="p-2.5 text-center w-28">Ação Tronco</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/80 font-sans">
                       {filteredIaRows.length === 0 ? (
                         <tr>
                           <td colSpan={9} className="p-6 text-center text-slate-400 font-sans">
-                            Nenhuma matriz encontrada com o termo &quot;{iaSearchQuery}&quot;.
+                            {iaFilterTab === 'pending'
+                              ? 'Nenhuma matriz pendente neste lote! Todas já foram trabalhadas.'
+                              : iaFilterTab === 'inseminated'
+                              ? 'Nenhuma matriz inseminada ainda neste lote.'
+                              : `Nenhuma matriz encontrada com o filtro atual.`}
                           </td>
                         </tr>
                       ) : (
-                        filteredIaRows.map((row) => (
-                          <tr
-                            key={row.animal_id}
-                            className={`hover:bg-slate-900 transition-colors ${row.skipped ? 'opacity-40 bg-slate-950/80' : ''}`}
-                          >
-                            <td className="p-2.5 text-center">
-                              <input
-                                type="checkbox"
-                                checked={!row.skipped}
-                                onChange={(e) => updateIaRow(row.animal_id, { skipped: !e.target.checked })}
-                                className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-emerald-500 focus:ring-emerald-500 cursor-pointer accent-emerald-500"
-                                title={row.skipped ? 'Dar check para inseminar esta matriz' : 'Desmarcar matriz'}
-                              />
-                            </td>
-                            <td className="p-2.5 font-bold text-white font-mono whitespace-nowrap">{row.tag_number}</td>
-                            <td className="p-2.5 text-slate-400 text-xs whitespace-nowrap">{row.category_name}</td>
-                            <td className="p-2.5 whitespace-nowrap">
-                              <select
-                                value={row.bull_id || iaDefaultBullId}
-                                disabled={row.skipped}
-                                onChange={(e) => {
-                                  const newBullId = e.target.value;
-                                  const matchBatches = semenBatches.filter(
-                                    (b) =>
-                                      (b as unknown as { bull_id?: string }).bull_id === newBullId ||
-                                      (b.bulls as Record<string, unknown> | null)?.id === newBullId
-                                  );
-                                  const firstBatchId = matchBatches.length > 0 ? matchBatches[0].id : '';
-                                  updateIaRow(row.animal_id, {
-                                    bull_id: newBullId,
-                                    semen_batch_id: firstBatchId,
-                                  });
-                                }}
-                                className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-emerald-300 font-medium focus:outline-none"
-                              >
-                                <option value="">Selecione...</option>
-                                {bulls.map((b) => (
-                                  <option key={b.id} value={b.id}>
-                                    {b.name}
-                                  </option>
-                                ))}
-                              </select>
-                            </td>
-                            <td className="p-2.5 whitespace-nowrap">
-                              {(() => {
-                                const currentBullId = row.bull_id || iaDefaultBullId;
-                                const rowBatches = currentBullId
-                                  ? semenBatches.filter(
-                                      (b) =>
-                                        (b as unknown as { bull_id?: string }).bull_id === currentBullId ||
-                                        (b.bulls as Record<string, unknown> | null)?.id === currentBullId ||
-                                        b.id === row.semen_batch_id
-                                    )
-                                  : semenBatches;
+                        filteredIaRows.map((row) => {
+                          const isRowInseminated =
+                            savedRowsMap[row.animal_id] ||
+                            (Boolean(row.bull_id) && Boolean(row.semen_batch_id));
 
-                                return (
-                                  <select
-                                    value={row.semen_batch_id || (currentBullId === iaDefaultBullId ? iaDefaultBatchId : '')}
-                                    disabled={row.skipped}
-                                    onChange={(e) => updateIaRow(row.animal_id, { semen_batch_id: e.target.value })}
-                                    className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200 font-mono focus:outline-none"
-                                  >
-                                    <option value="">
-                                      {rowBatches.length === 0 ? 'Sem partidas' : 'Selecione...'}
-                                    </option>
-                                    {rowBatches.map((b) => (
-                                      <option key={b.id} value={b.id}>
-                                        {b.batch_number}
-                                      </option>
-                                    ))}
-                                  </select>
-                                );
-                              })()}
-                            </td>
-                            <td className="p-2.5 min-w-[180px]">
-                              <input
-                                type="text"
-                                placeholder="Ex: Muco límpido, cérvix fácil..."
-                                value={row.notes || ''}
-                                disabled={row.skipped}
-                                onChange={(e) => updateIaRow(row.animal_id, { notes: e.target.value })}
-                                className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-sans"
-                              />
-                            </td>
-                            <td className="p-2.5 text-center whitespace-nowrap">
-                              <input
-                                type="number"
-                                step="0.25"
-                                min="1"
-                                max="5"
-                                value={row.ecc_ia}
-                                disabled={row.skipped}
-                                onChange={(e) => updateIaRow(row.animal_id, { ecc_ia: e.target.value })}
-                                className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono text-center focus:outline-none focus:border-emerald-500"
-                              />
-                            </td>
-                            <td className="p-2.5 text-center whitespace-nowrap">
-                              <button
-                                type="button"
-                                onClick={() => updateIaRow(row.animal_id, { skipped: !row.skipped })}
-                                className={`p-1.5 rounded-lg text-xs transition-colors cursor-pointer ${
-                                  row.skipped
-                                    ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30'
-                                    : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
-                                }`}
-                                title={row.skipped ? 'Marcar para inseminar' : 'Pular esta matriz'}
-                              >
-                                {row.skipped ? <X className="w-4 h-4" /> : <Check className="w-4 h-4" />}
-                              </button>
-                            </td>
-                            <td className="p-2.5 text-center whitespace-nowrap">
-                              <button
-                                type="button"
-                                disabled={savingRowId === row.animal_id}
-                                onClick={() => handleSaveSingleIaRow(row.animal_id)}
-                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm ${
-                                  savedRowsMap[row.animal_id]
-                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
-                                    : 'bg-emerald-600 hover:bg-emerald-500 text-white hover:shadow-emerald-900/30'
-                                } disabled:opacity-50`}
-                                title="Salvar imediatamente as alterações desta matriz"
-                              >
-                                {savingRowId === row.animal_id ? (
-                                  <>
-                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                    <span>Salvando...</span>
-                                  </>
-                                ) : savedRowsMap[row.animal_id] ? (
-                                  <>
-                                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                                    <span>Salvo!</span>
-                                  </>
+                          const currentBullId = row.bull_id;
+                          const rowBatches = currentBullId
+                            ? semenBatches.filter(
+                                (b) =>
+                                  (b as unknown as { bull_id?: string }).bull_id === currentBullId ||
+                                  (b.bulls as Record<string, unknown> | null)?.id === currentBullId ||
+                                  b.id === row.semen_batch_id
+                              )
+                            : [];
+
+                          return (
+                            <tr
+                              key={row.animal_id}
+                              className={`transition-colors ${
+                                row.skipped
+                                  ? 'opacity-40 bg-slate-950/80'
+                                  : isRowInseminated
+                                  ? 'bg-emerald-950/15 hover:bg-emerald-950/25 border-l-2 border-emerald-500'
+                                  : 'hover:bg-slate-900 border-l-2 border-amber-500/40'
+                              }`}
+                            >
+                              {/* Coluna 1: Status Visual */}
+                              <td className="p-2.5 text-center whitespace-nowrap">
+                                {row.skipped ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-400 border border-slate-700">
+                                    <X className="w-3 h-3 text-slate-400" /> Pulada
+                                  </span>
+                                ) : isRowInseminated ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm">
+                                    <Check className="w-3 h-3 stroke-3 text-emerald-400" /> Inseminada
+                                  </span>
                                 ) : (
-                                  <>
-                                    <Save className="w-3.5 h-3.5" />
-                                    <span>Salvar</span>
-                                  </>
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                    <Clock className="w-3 h-3 text-amber-400" /> Pendente
+                                  </span>
                                 )}
-                              </button>
-                            </td>
-                          </tr>
-                        ))
+                              </td>
+
+                              {/* Coluna 2: Brinco */}
+                              <td className="p-2.5 font-bold text-white font-mono whitespace-nowrap">
+                                {row.tag_number}
+                              </td>
+
+                              {/* Coluna 3: Categoria */}
+                              <td className="p-2.5 text-slate-400 text-xs whitespace-nowrap">
+                                {row.category_name}
+                              </td>
+
+                              {/* Coluna 4: Touro Utilizado */}
+                              <td className="p-2.5 whitespace-nowrap">
+                                <select
+                                  value={row.bull_id}
+                                  disabled={row.skipped}
+                                  onChange={(e) => {
+                                    const newBullId = e.target.value;
+                                    const matchBatches = semenBatches.filter(
+                                      (b) =>
+                                        (b as unknown as { bull_id?: string }).bull_id === newBullId ||
+                                        (b.bulls as Record<string, unknown> | null)?.id === newBullId
+                                    );
+                                    const firstBatchId = matchBatches.length > 0 ? matchBatches[0].id : '';
+                                    updateIaRow(row.animal_id, {
+                                      bull_id: newBullId,
+                                      semen_batch_id: firstBatchId,
+                                    });
+                                  }}
+                                  className={`bg-slate-900 border rounded-lg px-2 py-1 text-xs font-medium focus:outline-none ${
+                                    row.bull_id
+                                      ? 'border-emerald-500/50 text-emerald-300 font-bold'
+                                      : 'border-slate-700 text-slate-400'
+                                  }`}
+                                >
+                                  <option value="">-- Selecionar Touro --</option>
+                                  {bulls.map((b) => (
+                                    <option key={b.id} value={b.id}>
+                                      {b.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+
+                              {/* Coluna 5: Partida de Sêmen */}
+                              <td className="p-2.5 whitespace-nowrap">
+                                <select
+                                  value={row.semen_batch_id}
+                                  disabled={row.skipped || !row.bull_id}
+                                  onChange={(e) => updateIaRow(row.animal_id, { semen_batch_id: e.target.value })}
+                                  className={`bg-slate-900 border rounded-lg px-2 py-1 text-xs font-mono focus:outline-none ${
+                                    row.semen_batch_id
+                                      ? 'border-emerald-500/50 text-emerald-300 font-bold'
+                                      : 'border-slate-700 text-slate-500'
+                                  }`}
+                                >
+                                  <option value="">
+                                    {!row.bull_id
+                                      ? '-- Escolha o Touro --'
+                                      : rowBatches.length === 0
+                                      ? 'Sem estoque'
+                                      : '-- Selecionar Partida --'}
+                                  </option>
+                                  {rowBatches.map((b) => (
+                                    <option key={b.id} value={b.id}>
+                                      {b.batch_number} (Saldo: {b.initial_quantity - b.used_quantity - (b.lost_quantity || 0)})
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+
+                              {/* Coluna 6: Observação */}
+                              <td className="p-2.5 min-w-[180px]">
+                                <input
+                                  type="text"
+                                  placeholder="Ex: Muco límpido, cérvix fácil..."
+                                  value={row.notes || ''}
+                                  disabled={row.skipped}
+                                  onChange={(e) => updateIaRow(row.animal_id, { notes: e.target.value })}
+                                  className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-sans"
+                                />
+                              </td>
+
+                              {/* Coluna 7: ECC IA */}
+                              <td className="p-2.5 text-center whitespace-nowrap">
+                                <input
+                                  type="number"
+                                  step="0.25"
+                                  min="1"
+                                  max="5"
+                                  value={row.ecc_ia}
+                                  disabled={row.skipped}
+                                  onChange={(e) => updateIaRow(row.animal_id, { ecc_ia: e.target.value })}
+                                  className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono text-center focus:outline-none focus:border-emerald-500"
+                                />
+                              </td>
+
+                              {/* Coluna 8: Pular Matriz */}
+                              <td className="p-2.5 text-center whitespace-nowrap">
+                                <button
+                                  type="button"
+                                  onClick={() => updateIaRow(row.animal_id, { skipped: !row.skipped })}
+                                  className={`p-1.5 rounded-lg text-xs transition-colors cursor-pointer ${
+                                    row.skipped
+                                      ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30'
+                                      : 'bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700'
+                                  }`}
+                                  title={row.skipped ? 'Voltar matriz para a lista de IA' : 'Pular esta matriz (não inseminar)'}
+                                >
+                                  {row.skipped ? <X className="w-4 h-4" /> : <Check className="w-4 h-4" />}
+                                </button>
+                              </td>
+
+                              {/* Coluna 9: Ação Tronco */}
+                              <td className="p-2.5 text-center whitespace-nowrap">
+                                <button
+                                  type="button"
+                                  disabled={savingRowId === row.animal_id || row.skipped}
+                                  onClick={() => handleSaveSingleIaRow(row.animal_id)}
+                                  className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm ${
+                                    isRowInseminated
+                                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
+                                      : 'bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-black shadow-md glow-emerald'
+                                  } disabled:opacity-50`}
+                                  title={isRowInseminated ? 'Atualizar dados salvos desta matriz' : 'Inseminar e salvar esta matriz no tronco agora'}
+                                >
+                                  {savingRowId === row.animal_id ? (
+                                    <>
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                      <span>Salvando...</span>
+                                    </>
+                                  ) : isRowInseminated ? (
+                                    <>
+                                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                      <span>Salva</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Syringe className="w-3.5 h-3.5" />
+                                      <span>Inseminar</span>
+                                    </>
+                                  )}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
