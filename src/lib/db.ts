@@ -8756,6 +8756,9 @@ export async function executeBatchLotManagementIA(params: {
   }
 
   // 4. Baixa de estoque de sêmen para as partidas utilizadas
+  // A trigger de banco de dados 'trg_handle_semen_batch_usage' já atualiza 'used_quantity'
+  // na tabela 'semen_batches' automaticamente e de forma atômica sempre que 'iatf_lot_animals'
+  // é atualizado. Não fazemos o update manual de semen_batches aqui para evitar dupla contagem.
   const { data: lotData } = await supabase
     .from('iatf_lots')
     .select('farm_id')
@@ -8763,33 +8766,16 @@ export async function executeBatchLotManagementIA(params: {
     .maybeSingle();
 
   for (const [bId, count] of Object.entries(batchUsageCount)) {
-    const { data: batch } = await supabase
-      .from('semen_batches')
-      .select('id, batch_number, used_quantity')
-      .eq('id', bId)
-      .maybeSingle();
-
-    if (batch) {
-      // 4.1 Atualização legada
-      await supabase
-        .from('semen_batches')
-        .update({
-          used_quantity: (batch.used_quantity || 0) + count,
-          updated_at: todayIso,
-        })
-        .eq('id', bId);
-
-      // 4.2 Baixa integrada no novo módulo criogênico
-      await deductGeneticInventoryForSemenBatch({
-        semenBatchId: bId,
-        quantity: count,
-        referenceType: 'iatf_lots',
-        referenceId: params.lotId,
-        inseminatorName: params.defaultInseminatorName,
-        notes: `Baixa em lote de IA (${count} doses) no lote IATF`,
-        preferredFarmId: lotData?.farm_id || null,
-      });
-    }
+    // Baixa integrada no novo módulo de Estoque Genético Criogênico (Botijões e Canisters)
+    await deductGeneticInventoryForSemenBatch({
+      semenBatchId: bId,
+      quantity: count,
+      referenceType: 'iatf_lots',
+      referenceId: params.lotId,
+      inseminatorName: params.defaultInseminatorName,
+      notes: `Baixa em lote de IA (${count} doses) no lote IATF`,
+      preferredFarmId: lotData?.farm_id || null,
+    });
   }
 
   // 5. Concluir evento de IA em management_events
