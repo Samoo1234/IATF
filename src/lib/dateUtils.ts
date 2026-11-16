@@ -119,3 +119,32 @@ export function getDaysDifference(dateStrA: string, dateStrB: string): number {
   return Math.round((utcB - utcA) / (1000 * 60 * 60 * 24));
 }
 
+/**
+ * Compara dois códigos de lote priorizando o número do lote em ordem numérica crescente (1, 2, 3... 10).
+ * Extrai o primeiro número do código do lote (ex: "Lote 1", "Lote 2", "lote 2 novilhas", "lote 3 - 2ª IA", "Lote-04", "Lote 10").
+ */
+export function compareLotCodes(
+  a: string | null | undefined,
+  b: string | null | undefined,
+  order: 'asc' | 'desc' = 'asc'
+): number {
+  const codeA = (a || '').trim();
+  const codeB = (b || '').trim();
+
+  const matchA = codeA.match(/\d+/);
+  const matchB = codeB.match(/\d+/);
+
+  const numA = matchA ? parseInt(matchA[0], 10) : Infinity;
+  const numB = matchB ? parseInt(matchB[0], 10) : Infinity;
+
+  let result = 0;
+  if (numA !== numB) {
+    result = numA - numB;
+  } else {
+    result = codeA.localeCompare(codeB, 'pt-BR', { numeric: true, sensitivity: 'base' });
+  }
+
+  return order === 'asc' ? result : -result;
+}
+
+

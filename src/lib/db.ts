@@ -1,7 +1,7 @@
 import { createClient } from './supabase/client';
 import { offlineDb, type OfflineLotAnimal } from './offline/offlineDb';
 import { syncEngine } from './offline/syncEngine';
-import { getTodayDateString, addDaysToDateString, getDaysDifference } from './dateUtils';
+import { getTodayDateString, addDaysToDateString, getDaysDifference, compareLotCodes } from './dateUtils';
 
 export const DEFAULT_BREEDS = [
   { id: 'breed-nelore', name: 'Nelore' },
@@ -353,7 +353,7 @@ export async function getLots(forceRefresh = false, farmId?: string): Promise<Lo
         pregnancy_rate: (l.pregnancy_rate as number) || 0,
         pending_dg: (l.pending_dg as number) || 0,
         notes: (l.notes as string) || null,
-      }));
+      })).sort((a, b) => compareLotCodes(a.code, b.code));
     } catch (e) {
       console.warn('Falha ao carregar lotes offline:', e);
       return [];
@@ -388,7 +388,7 @@ export async function getLots(forceRefresh = false, farmId?: string): Promise<Lo
         pregnancy_rate: (l.pregnancy_rate as number) || 0,
         pending_dg: (l.pending_dg as number) || 0,
         notes: (l.notes as string) || null,
-      }));
+      })).sort((a, b) => compareLotCodes(a.code, b.code));
     } catch {
       // ignore
     }
@@ -441,13 +441,13 @@ export async function getLots(forceRefresh = false, farmId?: string): Promise<Lo
         pregnancy_rate: (l.pregnancy_rate as number) || 0,
         pending_dg: (l.pending_dg as number) || 0,
         notes: (l.notes as string) || null,
-      }));
+      })).sort((a, b) => compareLotCodes(a.code, b.code));
     } catch {
       // ignore
     }
     return getCached<LotStat[]>(cacheKey) ?? [];
   }
-  const result = (data ?? []) as LotStat[];
+  const result = ((data ?? []) as LotStat[]).sort((a, b) => compareLotCodes(a.code, b.code));
   setCached(cacheKey, result);
 
   if (result.length > 0) {

@@ -39,7 +39,7 @@ import {
   type ManagementEvent,
   type Veterinarian,
 } from '@/lib/db';
-import { getTodayDateString, addDaysToDateString, formatDateBR } from '@/lib/dateUtils';
+import { getTodayDateString, addDaysToDateString, formatDateBR, compareLotCodes } from '@/lib/dateUtils';
 import {
   Layers,
   Plus,
@@ -58,6 +58,8 @@ import {
   Calendar,
   Pencil,
   FileText,
+  ArrowDownAZ,
+  ArrowUpAZ,
 } from 'lucide-react';
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
@@ -219,6 +221,7 @@ export default function LotsPage() {
   const [lotAnimalSearch, setLotAnimalSearch] = useState('');
   const [loadingAnimals, setLoadingAnimals] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [showNewLot, setShowNewLot] = useState(false);
   const [protocols, setProtocols] = useState<Protocol[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
@@ -896,15 +899,19 @@ export default function LotsPage() {
     }
   };
 
-  const filteredLots = lots.filter((l) => {
-    // Isolamento estrito por fazenda
-    if (activeFarmId && l.farm_id && l.farm_id !== activeFarmId) return false;
-    return (
-      l.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (l.property_name ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (l.protocol_name ?? '').toLowerCase().includes(searchTerm.toLowerCase())
-    );
-  });
+  const filteredLots = useMemo(() => {
+    return lots
+      .filter((l) => {
+        // Isolamento estrito por fazenda
+        if (activeFarmId && l.farm_id && l.farm_id !== activeFarmId) return false;
+        return (
+          l.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (l.property_name ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (l.protocol_name ?? '').toLowerCase().includes(searchTerm.toLowerCase())
+        );
+      })
+      .sort((a, b) => compareLotCodes(a.code, b.code, sortOrder));
+  }, [lots, activeFarmId, searchTerm, sortOrder]);
 
   const selectedLot = lots.find((l) => l.id === selectedLotId);
 
@@ -1079,9 +1086,31 @@ export default function LotsPage() {
               placeholder="Buscar lote, retiro..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="bg-slate-950 border border-slate-800 text-slate-200 text-xs sm:text-sm pl-9 pr-4 py-2 rounded-xl focus:outline-none focus:border-emerald-500 transition-all w-48 sm:w-64"
+              className="bg-slate-950 border border-slate-800 text-slate-200 text-xs sm:text-sm pl-9 pr-4 py-2 rounded-xl focus:outline-none focus:border-emerald-500 transition-all w-40 sm:w-56"
             />
           </div>
+          <button
+            type="button"
+            onClick={() => setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+            title={
+              sortOrder === 'asc'
+                ? 'Lotes alinhados por número em ordem crescente (Lote 1, Lote 2, Lote 3...). Clique para alternar para decrescente.'
+                : 'Lotes alinhados por número em ordem decrescente. Clique para alternar para crescente.'
+            }
+            className="bg-slate-950 border border-slate-800 hover:border-emerald-500/50 text-slate-200 px-3 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 cursor-pointer shadow-sm shrink-0"
+          >
+            {sortOrder === 'asc' ? (
+              <>
+                <ArrowDownAZ className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="font-semibold text-xs text-emerald-400">Nº Crescente</span>
+              </>
+            ) : (
+              <>
+                <ArrowUpAZ className="w-4 h-4 text-amber-400 shrink-0" />
+                <span className="font-semibold text-xs text-amber-400">Nº Decrescente</span>
+              </>
+            )}
+          </button>
           <button
             onClick={handleOpenNewLotModal}
             className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md glow-emerald cursor-pointer"
