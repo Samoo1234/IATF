@@ -2029,7 +2029,7 @@ export default function LotsPage() {
                                 </span>
                               </td>
                               <td className="p-3 text-emerald-400 font-mono">{formatDateBR(la.expected_parturition_date)}</td>
-                              <td className="p-3 font-sans max-w-[180px]">
+                              <td className="p-3 font-sans max-w-45">
                                 {la.notes ? (
                                   <span
                                     className="px-2 py-0.5 rounded bg-slate-800/80 text-slate-300 text-[11px] border border-slate-700/80 block truncate font-sans"
