@@ -31,6 +31,9 @@ export interface OfflineLot {
   females_count?: number;
   inseminated_count?: number;
   pregnant_count?: number;
+  start_date?: string | null;
+  ia_planned_date?: string | null;
+  dg_planned_date?: string | null;
   updated_at?: string;
   [key: string]: unknown;
 }
@@ -128,6 +131,16 @@ export interface OfflineManagementRecord {
   doses_used?: number;
   diagnosis_result?: 'prenhe' | 'prenha' | 'vazia' | 'duvidosa' | 'inconclusivo' | null;
   notes?: string;
+  start_date?: string | null;
+  d7_date?: string | null;
+  d9_date?: string | null;
+  ia_date?: string | null;
+  dg_date?: string | null;
+  d0_executed_at?: string | null;
+  d7_executed_at?: string | null;
+  d9_executed_at?: string | null;
+  ia_executed_at?: string | null;
+  dg_executed_at?: string | null;
   created_at: string;
   updated_at?: string;
   [key: string]: unknown;

@@ -1709,8 +1709,8 @@ export async function rescheduleManagementEvent(params: {
               updated_at: todayIso,
             };
             if (params.shiftSubsequentSteps && dayDelta !== 0) {
-              if (lot.ia_planned_date) lotUpdate.ia_planned_date = addDaysToDateString(lot.ia_planned_date as string, dayDelta);
-              if (lot.dg_planned_date) lotUpdate.dg_planned_date = addDaysToDateString(lot.dg_planned_date as string, dayDelta);
+              if (lot.ia_planned_date) lotUpdate.ia_planned_date = addDaysToDateString(lot.ia_planned_date, dayDelta);
+              if (lot.dg_planned_date) lotUpdate.dg_planned_date = addDaysToDateString(lot.dg_planned_date, dayDelta);
             }
             await offlineDb.lots.update(lotId, lotUpdate);
             await syncEngine.enqueueMutation('update', 'iatf_lots', lotId, lot.farm_id, {
@@ -1747,13 +1747,13 @@ export async function rescheduleManagementEvent(params: {
               updated_at: todayIso,
             };
             if (params.shiftSubsequentSteps && dayDelta !== 0) {
-              if (m.d7_date) mgmtUpdate.d7_date = addDaysToDateString(m.d7_date as string, dayDelta);
-              if (m.d9_date) mgmtUpdate.d9_date = addDaysToDateString(m.d9_date as string, dayDelta);
-              if (m.ia_date) mgmtUpdate.ia_date = addDaysToDateString(m.ia_date as string, dayDelta);
-              if (m.dg_date) mgmtUpdate.dg_date = addDaysToDateString(m.dg_date as string, dayDelta);
-              if (m.d9_executed_at) mgmtUpdate.d9_executed_at = addDaysToDateString(m.d9_executed_at as string, dayDelta);
-              if (m.ia_executed_at) mgmtUpdate.ia_executed_at = addDaysToDateString(m.ia_executed_at as string, dayDelta);
-              if (m.dg_executed_at) mgmtUpdate.dg_executed_at = addDaysToDateString(m.dg_executed_at as string, dayDelta);
+              if (m.d7_date) mgmtUpdate.d7_date = addDaysToDateString(m.d7_date, dayDelta);
+              if (m.d9_date) mgmtUpdate.d9_date = addDaysToDateString(m.d9_date, dayDelta);
+              if (m.ia_date) mgmtUpdate.ia_date = addDaysToDateString(m.ia_date, dayDelta);
+              if (m.dg_date) mgmtUpdate.dg_date = addDaysToDateString(m.dg_date, dayDelta);
+              if (m.d9_executed_at) mgmtUpdate.d9_executed_at = addDaysToDateString(m.d9_executed_at, dayDelta);
+              if (m.ia_executed_at) mgmtUpdate.ia_executed_at = addDaysToDateString(m.ia_executed_at, dayDelta);
+              if (m.dg_executed_at) mgmtUpdate.dg_executed_at = addDaysToDateString(m.dg_executed_at, dayDelta);
             }
             await offlineDb.animal_managements.update(m.id, mgmtUpdate);
           }
