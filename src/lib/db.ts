@@ -1,7 +1,7 @@
 import { createClient } from './supabase/client';
 import { offlineDb, type OfflineLotAnimal } from './offline/offlineDb';
 import { syncEngine } from './offline/syncEngine';
-import { getTodayDateString, addDaysToDateString } from './dateUtils';
+import { getTodayDateString, addDaysToDateString, getDaysDifference } from './dateUtils';
 
 export const DEFAULT_BREEDS = [
   { id: 'breed-nelore', name: 'Nelore' },
@@ -1601,6 +1601,418 @@ export async function updateManagementEventDate(
   invalidateCache('events');
   return true;
 }
+
+/**
+ * Reagenda um evento de manejo na agenda com propagação em cascata.
+ * Atualiza management_events, iatf_lots, animal_managements e iatf_lot_animals.
+ * Se for D0 e shiftSubsequentSteps for true, desloca proporcionalmente todas as etapas seguintes.
+ */
+export async function rescheduleManagementEvent(params: {
+  eventId: string;
+  newDate: string;
+  shiftSubsequentSteps?: boolean;
+}): Promise<{ success: boolean; error?: string }> {
+  if (!params.eventId || !params.newDate) {
+    return { success: false, error: 'Evento ou data inválidos.' };
+  }
+
+  const isOffline = isSystemOffline();
+  const todayIso = new Date().toISOString();
+  const newDate = params.newDate;
+
+  try {
+    if (isOffline) {
+      const ev = await offlineDb.management_events.get(params.eventId);
+      if (!ev) return { success: false, error: 'Evento não encontrado offline.' };
+
+      const oldDate = ev.planned_date;
+      if (oldDate === newDate) return { success: true };
+
+      const isConcluded = ev.status === 'concluido';
+      const stepCode = (ev.step_code || '').toUpperCase();
+      const lotId = ev.lot_id;
+      const dayDelta = getDaysDifference(oldDate, newDate);
+
+      // 1. Atualizar evento local
+      await offlineDb.management_events.update(params.eventId, {
+        planned_date: newDate,
+        execution_date: isConcluded ? newDate : ev.execution_date,
+        updated_at: todayIso,
+      });
+
+      await syncEngine.enqueueMutation('update', 'management_events', params.eventId, ev.farm_id, {
+        id: params.eventId,
+        planned_date: newDate,
+        execution_date: isConcluded ? newDate : ev.execution_date,
+        updated_at: todayIso,
+      });
+
+      // 2. Se for evento vinculado a lote
+      if (lotId) {
+        const lot = await offlineDb.lots.get(lotId);
+
+        if (stepCode === 'IA') {
+          if (lot) {
+            await offlineDb.lots.update(lotId, { ia_planned_date: newDate, updated_at: todayIso });
+            await syncEngine.enqueueMutation('update', 'iatf_lots', lotId, lot.farm_id, {
+              id: lotId,
+              ia_planned_date: newDate,
+              updated_at: todayIso,
+            });
+          }
+          const mgmts = await offlineDb.animal_managements.where('lot_id').equals(lotId).toArray();
+          for (const m of mgmts) {
+            await offlineDb.animal_managements.update(m.id, {
+              ia_date: newDate,
+              ia_executed_at: m.ia_executed_at ? newDate : null,
+              updated_at: todayIso,
+            });
+          }
+        } else if (stepCode === 'DG' || stepCode === 'DG1' || stepCode === 'DG2') {
+          if (lot) {
+            await offlineDb.lots.update(lotId, { dg_planned_date: newDate, updated_at: todayIso });
+            await syncEngine.enqueueMutation('update', 'iatf_lots', lotId, lot.farm_id, {
+              id: lotId,
+              dg_planned_date: newDate,
+              updated_at: todayIso,
+            });
+          }
+          const mgmts = await offlineDb.animal_managements.where('lot_id').equals(lotId).toArray();
+          for (const m of mgmts) {
+            await offlineDb.animal_managements.update(m.id, {
+              dg_date: newDate,
+              dg_executed_at: m.dg_executed_at ? newDate : null,
+              updated_at: todayIso,
+            });
+          }
+        } else if (stepCode === 'D9' || stepCode === 'D8') {
+          const mgmts = await offlineDb.animal_managements.where('lot_id').equals(lotId).toArray();
+          for (const m of mgmts) {
+            await offlineDb.animal_managements.update(m.id, {
+              d9_date: newDate,
+              d9_executed_at: m.d9_executed_at ? newDate : null,
+              updated_at: todayIso,
+            });
+          }
+        } else if (stepCode === 'D7') {
+          const mgmts = await offlineDb.animal_managements.where('lot_id').equals(lotId).toArray();
+          for (const m of mgmts) {
+            await offlineDb.animal_managements.update(m.id, {
+              d7_date: newDate,
+              updated_at: todayIso,
+            });
+          }
+        } else if (stepCode === 'D0') {
+          if (lot) {
+            const lotUpdate: Record<string, unknown> = {
+              start_date: newDate,
+              updated_at: todayIso,
+            };
+            if (params.shiftSubsequentSteps && dayDelta !== 0) {
+              if (lot.ia_planned_date) lotUpdate.ia_planned_date = addDaysToDateString(lot.ia_planned_date as string, dayDelta);
+              if (lot.dg_planned_date) lotUpdate.dg_planned_date = addDaysToDateString(lot.dg_planned_date as string, dayDelta);
+            }
+            await offlineDb.lots.update(lotId, lotUpdate);
+            await syncEngine.enqueueMutation('update', 'iatf_lots', lotId, lot.farm_id, {
+              id: lotId,
+              ...lotUpdate,
+            });
+          }
+
+          if (params.shiftSubsequentSteps && dayDelta !== 0) {
+            const allLotEvents = await offlineDb.management_events.where('lot_id').equals(lotId).toArray();
+            for (const otherEv of allLotEvents) {
+              if (otherEv.id === params.eventId) continue;
+              const shiftedDate = addDaysToDateString(otherEv.planned_date, dayDelta);
+              const shiftedExec = otherEv.execution_date ? addDaysToDateString(otherEv.execution_date, dayDelta) : null;
+              await offlineDb.management_events.update(otherEv.id, {
+                planned_date: shiftedDate,
+                execution_date: shiftedExec,
+                updated_at: todayIso,
+              });
+              await syncEngine.enqueueMutation('update', 'management_events', otherEv.id, otherEv.farm_id, {
+                id: otherEv.id,
+                planned_date: shiftedDate,
+                execution_date: shiftedExec,
+                updated_at: todayIso,
+              });
+            }
+          }
+
+          const mgmts = await offlineDb.animal_managements.where('lot_id').equals(lotId).toArray();
+          for (const m of mgmts) {
+            const mgmtUpdate: Record<string, unknown> = {
+              start_date: newDate,
+              d0_executed_at: m.d0_executed_at ? newDate : null,
+              updated_at: todayIso,
+            };
+            if (params.shiftSubsequentSteps && dayDelta !== 0) {
+              if (m.d7_date) mgmtUpdate.d7_date = addDaysToDateString(m.d7_date as string, dayDelta);
+              if (m.d9_date) mgmtUpdate.d9_date = addDaysToDateString(m.d9_date as string, dayDelta);
+              if (m.ia_date) mgmtUpdate.ia_date = addDaysToDateString(m.ia_date as string, dayDelta);
+              if (m.dg_date) mgmtUpdate.dg_date = addDaysToDateString(m.dg_date as string, dayDelta);
+              if (m.d9_executed_at) mgmtUpdate.d9_executed_at = addDaysToDateString(m.d9_executed_at as string, dayDelta);
+              if (m.ia_executed_at) mgmtUpdate.ia_executed_at = addDaysToDateString(m.ia_executed_at as string, dayDelta);
+              if (m.dg_executed_at) mgmtUpdate.dg_executed_at = addDaysToDateString(m.dg_executed_at as string, dayDelta);
+            }
+            await offlineDb.animal_managements.update(m.id, mgmtUpdate);
+          }
+        }
+      }
+
+      invalidateCache('events');
+      invalidateCache('lots');
+      invalidateCache('animal_managements');
+      invalidateCache('lot_animals');
+      return { success: true };
+    }
+
+    // ----------------------------------------------------
+    // ONLINE SUPABASE EXECUTION
+    // ----------------------------------------------------
+    const supabase = createClient();
+
+    const { data: ev, error: evErr } = await supabase
+      .from('management_events')
+      .select('*, iatf_lots(*)')
+      .eq('id', params.eventId)
+      .maybeSingle();
+
+    if (evErr || !ev) {
+      return { success: false, error: evErr?.message || 'Evento não encontrado.' };
+    }
+
+    const oldDate = ev.planned_date;
+    if (oldDate === newDate) return { success: true };
+
+    const isConcluded = ev.status === 'concluido';
+    const stepCode = (ev.step_code || '').toUpperCase();
+    const lotId = ev.lot_id;
+    const dayDelta = getDaysDifference(oldDate, newDate);
+
+    // 1. Atualizar o evento em management_events
+    const eventUpdateData: Record<string, unknown> = {
+      planned_date: newDate,
+      updated_at: todayIso,
+    };
+    if (isConcluded) {
+      eventUpdateData.execution_date = newDate;
+    }
+
+    const { error: updateEvErr } = await supabase
+      .from('management_events')
+      .update(eventUpdateData)
+      .eq('id', params.eventId);
+
+    if (updateEvErr) {
+      return { success: false, error: updateEvErr.message };
+    }
+
+    // Atualizar no IndexedDB local também
+    await offlineDb.management_events.update(params.eventId, {
+      planned_date: newDate,
+      execution_date: isConcluded ? newDate : ev.execution_date,
+      updated_at: todayIso,
+    }).catch(() => {});
+
+    // 2. Se for evento avulso (sem lote), encerra aqui com sucesso!
+    if (!lotId) {
+      invalidateCache('events');
+      return { success: true };
+    }
+
+    // 3. Atualizações em cascata para Manejo de Lote
+    if (stepCode === 'IA') {
+      // 3.1 Atualiza data planejada de IA no lote
+      await supabase
+        .from('iatf_lots')
+        .update({ ia_planned_date: newDate, updated_at: todayIso })
+        .eq('id', lotId);
+
+      await offlineDb.lots.update(lotId, { ia_planned_date: newDate, updated_at: todayIso }).catch(() => {});
+
+      // 3.2 Atualiza ia_date em animal_managements para todas as matrizes do lote
+      await supabase
+        .from('animal_managements')
+        .update({ ia_date: newDate, updated_at: todayIso })
+        .eq('lot_id', lotId);
+
+      // Se já estava executado, atualiza também a data de execução
+      await supabase
+        .from('animal_managements')
+        .update({ ia_executed_at: newDate })
+        .eq('lot_id', lotId)
+        .not('ia_executed_at', 'is', null);
+
+      // 3.3 Recalcular previsão de parto para matrizes diagnosticadas como prenhas
+      const newParturitionDate = addDaysToDateString(newDate, 295);
+      await supabase
+        .from('iatf_lot_animals')
+        .update({ expected_parturition_date: newParturitionDate, updated_at: todayIso })
+        .eq('lot_id', lotId)
+        .eq('pregnancy_status', 'prenha');
+
+      await supabase
+        .from('animal_managements')
+        .update({ expected_parturition_date: newParturitionDate, updated_at: todayIso })
+        .eq('lot_id', lotId)
+        .eq('pregnancy_status', 'prenha');
+
+    } else if (stepCode === 'DG' || stepCode === 'DG1' || stepCode === 'DG2') {
+      // Atualiza data planejada de DG no lote
+      await supabase
+        .from('iatf_lots')
+        .update({ dg_planned_date: newDate, updated_at: todayIso })
+        .eq('id', lotId);
+
+      await offlineDb.lots.update(lotId, { dg_planned_date: newDate, updated_at: todayIso }).catch(() => {});
+
+      // Atualiza dg_date em animal_managements
+      await supabase
+        .from('animal_managements')
+        .update({ dg_date: newDate, updated_at: todayIso })
+        .eq('lot_id', lotId);
+
+      await supabase
+        .from('animal_managements')
+        .update({ dg_executed_at: newDate })
+        .eq('lot_id', lotId)
+        .not('dg_executed_at', 'is', null);
+
+    } else if (stepCode === 'D9' || stepCode === 'D8') {
+      // Atualiza d9_date em animal_managements
+      await supabase
+        .from('animal_managements')
+        .update({ d9_date: newDate, updated_at: todayIso })
+        .eq('lot_id', lotId);
+
+      await supabase
+        .from('animal_managements')
+        .update({ d9_executed_at: newDate })
+        .eq('lot_id', lotId)
+        .not('d9_executed_at', 'is', null);
+
+    } else if (stepCode === 'D7') {
+      // Atualiza d7_date em animal_managements
+      await supabase
+        .from('animal_managements')
+        .update({ d7_date: newDate, updated_at: todayIso })
+        .eq('lot_id', lotId);
+
+    } else if (stepCode === 'D0') {
+      // D0: Início do protocolo
+      const lotUpdate: Record<string, unknown> = {
+        start_date: newDate,
+        updated_at: todayIso,
+      };
+
+      if (params.shiftSubsequentSteps && dayDelta !== 0) {
+        const { data: lotRecord } = await supabase
+          .from('iatf_lots')
+          .select('ia_planned_date, dg_planned_date')
+          .eq('id', lotId)
+          .maybeSingle();
+
+        if (lotRecord?.ia_planned_date) {
+          lotUpdate.ia_planned_date = addDaysToDateString(lotRecord.ia_planned_date, dayDelta);
+        }
+        if (lotRecord?.dg_planned_date) {
+          lotUpdate.dg_planned_date = addDaysToDateString(lotRecord.dg_planned_date, dayDelta);
+        }
+      }
+
+      await supabase
+        .from('iatf_lots')
+        .update(lotUpdate)
+        .eq('id', lotId);
+
+      await offlineDb.lots.update(lotId, lotUpdate).catch(() => {});
+
+      // Se solicitado deslocamento proporcional de todas as etapas seguintes
+      if (params.shiftSubsequentSteps && dayDelta !== 0) {
+        // Desloca os outros eventos do mesmo lote em management_events
+        const { data: otherEvents } = await supabase
+          .from('management_events')
+          .select('id, planned_date, execution_date')
+          .eq('lot_id', lotId)
+          .neq('id', params.eventId);
+
+        if (otherEvents && otherEvents.length > 0) {
+          for (const oev of otherEvents) {
+            const shiftedPlanned = addDaysToDateString(oev.planned_date, dayDelta);
+            const shiftedExec = oev.execution_date ? addDaysToDateString(oev.execution_date, dayDelta) : null;
+            await supabase
+              .from('management_events')
+              .update({
+                planned_date: shiftedPlanned,
+                execution_date: shiftedExec,
+                updated_at: todayIso,
+              })
+              .eq('id', oev.id);
+
+            await offlineDb.management_events.update(oev.id, {
+              planned_date: shiftedPlanned,
+              execution_date: shiftedExec,
+              updated_at: todayIso,
+            }).catch(() => {});
+          }
+        }
+
+        // Desloca datas em animal_managements
+        const { data: mgmts } = await supabase
+          .from('animal_managements')
+          .select('id, start_date, d7_date, d9_date, ia_date, dg_date, d0_executed_at, d9_executed_at, ia_executed_at, dg_executed_at')
+          .eq('lot_id', lotId);
+
+        if (mgmts && mgmts.length > 0) {
+          for (const m of mgmts) {
+            const mUpdate: Record<string, unknown> = {
+              start_date: newDate,
+              d0_executed_at: m.d0_executed_at ? newDate : null,
+              d7_date: m.d7_date ? addDaysToDateString(m.d7_date, dayDelta) : null,
+              d9_date: m.d9_date ? addDaysToDateString(m.d9_date, dayDelta) : null,
+              ia_date: m.ia_date ? addDaysToDateString(m.ia_date, dayDelta) : null,
+              dg_date: m.dg_date ? addDaysToDateString(m.dg_date, dayDelta) : null,
+              d9_executed_at: m.d9_executed_at ? addDaysToDateString(m.d9_executed_at, dayDelta) : null,
+              ia_executed_at: m.ia_executed_at ? addDaysToDateString(m.ia_executed_at, dayDelta) : null,
+              dg_executed_at: m.dg_executed_at ? addDaysToDateString(m.dg_executed_at, dayDelta) : null,
+              updated_at: todayIso,
+            };
+            await supabase.from('animal_managements').update(mUpdate).eq('id', m.id);
+            await offlineDb.animal_managements.update(m.id, mUpdate).catch(() => {});
+          }
+        }
+      } else {
+        // Desloca apenas o D0 em animal_managements
+        await supabase
+          .from('animal_managements')
+          .update({
+            start_date: newDate,
+            updated_at: todayIso,
+          })
+          .eq('lot_id', lotId);
+
+        await supabase
+          .from('animal_managements')
+          .update({ d0_executed_at: newDate })
+          .eq('lot_id', lotId)
+          .not('d0_executed_at', 'is', null);
+      }
+    }
+
+    // Invalidar caches
+    invalidateCache('events');
+    invalidateCache('lots');
+    invalidateCache('animal_managements');
+    invalidateCache('lot_animals');
+
+    return { success: true };
+  } catch (err: unknown) {
+    console.error('rescheduleManagementEvent error:', err);
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 
 // ============================================================
 // SEMEN BATCHES

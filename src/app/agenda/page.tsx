@@ -7,11 +7,12 @@ import {
   completeManagementEvent, 
   insertManagementEvent, 
   deleteManagementEvent, 
+  rescheduleManagementEvent,
   getLots, 
   type ManagementEvent, 
   type LotStat 
 } from '@/lib/db';
-import { getTodayDateString } from '@/lib/dateUtils';
+import { getTodayDateString, formatDateBR, getDaysDifference } from '@/lib/dateUtils';
 import { useActiveFarm } from '@/context/FarmContext';
 import { 
   CheckCircle2, 
@@ -23,6 +24,7 @@ import {
   Trash2, 
   Search,
   Calendar,
+  CalendarDays,
   Layers,
   Clock,
   User,
@@ -31,7 +33,8 @@ import {
   Microscope,
   Check,
   Stethoscope,
-  ArrowRight
+  ArrowRight,
+  AlertCircle
 } from 'lucide-react';
 
 const STEP_COLORS: Record<string, { bg: string; text: string; border: string; label: string; badge: string }> = {
@@ -103,6 +106,27 @@ export default function AgendaPage() {
   const [completing, setCompleting] = useState(false);
   const [animalsWorked, setAnimalsWorked] = useState('');
   const [lossesCount, setLossesCount] = useState('0');
+
+  // Drag and Drop & Reagendamento de Manejos
+  const [draggingEvent, setDraggingEvent] = useState<ManagementEvent | null>(null);
+  const [dragOverDate, setDragOverDate] = useState<string | null>(null);
+  const [rescheduleTarget, setRescheduleTarget] = useState<{
+    event: ManagementEvent;
+    newDate: string;
+    oldDate: string;
+    dayDelta: number;
+  } | null>(null);
+  const [shiftSubsequent, setShiftSubsequent] = useState(true);
+  const [rescheduling, setRescheduling] = useState(false);
+
+  // Reagendamento manual no modal de detalhes
+  const [editDetailDate, setEditDetailDate] = useState<string>('');
+
+  useEffect(() => {
+    if (selectedEvent) {
+      setEditDetailDate(selectedEvent.planned_date);
+    }
+  }, [selectedEvent]);
   
   // Toast feedback
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -313,6 +337,50 @@ export default function AgendaPage() {
     } else {
       showToast('Erro ao remover manejo.');
     }
+  };
+
+  // Confirmar e Executar Reagendamento (Drag & Drop ou Manual)
+  const handleExecuteReschedule = async () => {
+    if (!rescheduleTarget) return;
+    setRescheduling(true);
+    try {
+      const res = await rescheduleManagementEvent({
+        eventId: rescheduleTarget.event.id,
+        newDate: rescheduleTarget.newDate,
+        shiftSubsequentSteps: rescheduleTarget.event.step_code === 'D0' ? shiftSubsequent : false,
+      });
+
+      if (res.success) {
+        showToast(
+          `Manejo [${rescheduleTarget.event.step_code}] reagendado com sucesso para ${formatDateBR(rescheduleTarget.newDate)}!`
+        );
+        setRescheduleTarget(null);
+        if (selectedEvent?.id === rescheduleTarget.event.id) {
+          setSelectedEvent(null);
+        }
+        await loadData(true);
+      } else {
+        showToast(res.error || 'Erro ao reagendar manejo.');
+      }
+    } catch (e: unknown) {
+      console.error('Erro ao reagendar evento:', e);
+      showToast('Erro inesperado ao reagendar.');
+    } finally {
+      setRescheduling(false);
+    }
+  };
+
+  // Abrir confirmação de reagendamento a partir do modal de detalhes
+  const handleSaveDetailDateChange = () => {
+    if (!selectedEvent || !editDetailDate || editDetailDate === selectedEvent.planned_date) return;
+    const delta = getDaysDifference(selectedEvent.planned_date, editDetailDate);
+    setRescheduleTarget({
+      event: selectedEvent,
+      oldDate: selectedEvent.planned_date,
+      newDate: editDetailDate,
+      dayDelta: delta,
+    });
+    setShiftSubsequent(true);
   };
 
   // Cálculo dos dias do mês
@@ -687,13 +755,45 @@ export default function AgendaPage() {
           {monthGridDays.map((dayItem) => {
             const isToday = dayItem.dateStr === todayStr;
             const dayEvents = eventsByDate.get(dayItem.dateStr) || [];
+            const isDragOverThisDay = dragOverDate === dayItem.dateStr;
 
             return (
               <div
                 key={dayItem.dateStr}
                 onClick={() => openCreateForDate(dayItem.dateStr)}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                  if (dragOverDate !== dayItem.dateStr) {
+                    setDragOverDate(dayItem.dateStr);
+                  }
+                }}
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                    if (dragOverDate === dayItem.dateStr) {
+                      setDragOverDate(null);
+                    }
+                  }
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setDragOverDate(null);
+                  if (draggingEvent && draggingEvent.planned_date !== dayItem.dateStr) {
+                    const delta = getDaysDifference(draggingEvent.planned_date, dayItem.dateStr);
+                    setRescheduleTarget({
+                      event: draggingEvent,
+                      oldDate: draggingEvent.planned_date,
+                      newDate: dayItem.dateStr,
+                      dayDelta: delta,
+                    });
+                    setShiftSubsequent(true);
+                  }
+                }}
                 className={`min-h-27.5 sm:min-h-32.5 p-1.5 sm:p-2 flex flex-col justify-between transition-colors relative group cursor-pointer ${
-                  dayItem.isCurrentMonth
+                  isDragOverThisDay
+                    ? 'ring-2 ring-emerald-400 bg-emerald-500/20 border-emerald-500 scale-[1.01] z-10'
+                    : dayItem.isCurrentMonth
                     ? isToday
                       ? 'bg-emerald-500/4 ring-1 ring-inset ring-emerald-500/40'
                       : 'hover:bg-slate-850/50'
@@ -742,15 +842,30 @@ export default function AgendaPage() {
                       bg: 'bg-emerald-500/15',
                       border: 'border-emerald-500/30'
                     };
+                    const isThisDragging = draggingEvent?.id === ev.id;
 
                     return (
                       <div
                         key={ev.id}
+                        draggable={true}
+                        onDragStart={(e) => {
+                          e.stopPropagation();
+                          setDraggingEvent(ev);
+                          e.dataTransfer.setData('text/plain', ev.id);
+                          e.dataTransfer.effectAllowed = 'move';
+                        }}
+                        onDragEnd={() => {
+                          setDraggingEvent(null);
+                          setDragOverDate(null);
+                        }}
                         onClick={(e) => {
                           e.stopPropagation();
                           setSelectedEvent(ev);
                         }}
-                        className={`text-[11px] p-1.5 rounded-lg border transition-all cursor-pointer shadow-sm hover:scale-[1.02] ${stepConf.bg} ${stepConf.border} flex flex-col gap-0.5`}
+                        title="Clique para detalhes ou arraste para outro dia para reagendar"
+                        className={`text-[11px] p-1.5 rounded-lg border transition-all cursor-grab active:cursor-grabbing shadow-sm hover:scale-[1.02] ${stepConf.bg} ${stepConf.border} flex flex-col gap-0.5 ${
+                          isThisDragging ? 'opacity-40 scale-95 border-dashed border-emerald-400' : ''
+                        }`}
                       >
                         {/* Linha 1: Tag da Fazenda + Etapa/Tipo */}
                         <div className="flex items-center justify-between gap-1">
@@ -890,6 +1005,40 @@ export default function AgendaPage() {
                       <User className="w-3.5 h-3.5 text-slate-400" />
                       {selectedEvent.responsible_name || 'Equipe de Campo'}
                     </p>
+                  </div>
+                </div>
+
+                {/* Alterar / Reagendar Data Diretamente */}
+                <div className="p-3.5 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+                      <CalendarDays className="w-3.5 h-3.5 text-emerald-400" />
+                      Alterar / Reagendar Data
+                    </span>
+                    {selectedEvent.planned_date !== editDetailDate && editDetailDate && (
+                      <span className="text-[10px] font-mono text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                        {getDaysDifference(selectedEvent.planned_date, editDetailDate) > 0 ? '+' : ''}
+                        {getDaysDifference(selectedEvent.planned_date, editDetailDate)} dias
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="date"
+                      value={editDetailDate}
+                      onChange={(e) => setEditDetailDate(e.target.value)}
+                      className="flex-1 bg-slate-900 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500 font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSaveDetailDateChange}
+                      disabled={!editDetailDate || editDetailDate === selectedEvent.planned_date}
+                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-slate-950 font-bold text-xs rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                      title="Salvar nova data do procedimento"
+                    >
+                      <Check className="w-3.5 h-3.5 stroke-3" />
+                      <span>Salvar Data</span>
+                    </button>
                   </div>
                 </div>
 
@@ -1455,6 +1604,157 @@ export default function AgendaPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* MODAL: CONFIRMAR REAGENDAMENTO (DRAG & DROP / MANUAL)   */}
+      {/* ======================================================== */}
+      {rescheduleTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+          <div className="glass-card w-full max-w-md rounded-3xl border border-slate-700 bg-slate-900 shadow-2xl overflow-hidden animate-in fade-in my-auto">
+            {/* Header */}
+            <div className="px-6 py-4 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <CalendarDays className="w-5 h-5 text-emerald-400" />
+                Confirmar Reagendamento
+              </h3>
+              <button
+                type="button"
+                onClick={() => setRescheduleTarget(null)}
+                disabled={rescheduling}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Conteúdo */}
+            <div className="p-6 space-y-4">
+              {/* Card do Procedimento */}
+              <div className="p-4 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className={`text-[10px] font-extrabold font-mono px-2 py-0.5 rounded ${
+                    STEP_COLORS[rescheduleTarget.event.step_code]?.badge || 'bg-slate-800 text-white'
+                  }`}>
+                    {rescheduleTarget.event.step_code}
+                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                    {rescheduleTarget.event.farms?.name || rescheduleTarget.event.iatf_lots?.farms?.name || 'Fazenda'}
+                  </span>
+                </div>
+
+                <div className="text-sm font-bold text-white flex items-center gap-1.5">
+                  {rescheduleTarget.event.lot_id ? (
+                    <>
+                      <Layers className="w-4 h-4 text-sky-400 shrink-0" />
+                      <span>Lote: <strong className="text-emerald-400 font-mono">{rescheduleTarget.event.iatf_lots?.code || 'Lote'}</strong></span>
+                    </>
+                  ) : (
+                    <>
+                      <Stethoscope className="w-4 h-4 text-violet-400 shrink-0" />
+                      <span>{rescheduleTarget.event.title || rescheduleTarget.event.step_name || 'Serviço Avulso'}</span>
+                    </>
+                  )}
+                </div>
+                <p className="text-xs text-slate-400">
+                  {rescheduleTarget.event.step_name || STEP_COLORS[rescheduleTarget.event.step_code]?.label || 'Procedimento'}
+                </p>
+              </div>
+
+              {/* Comparativo de Datas */}
+              <div className="p-4 rounded-2xl bg-emerald-500/5 border border-emerald-500/20 flex items-center justify-between">
+                <div>
+                  <span className="block text-[10px] uppercase font-bold text-slate-400 mb-0.5">Data Atual</span>
+                  <span className="text-sm font-mono text-slate-400 line-through">
+                    {formatDateBR(rescheduleTarget.oldDate)}
+                  </span>
+                </div>
+
+                <div className="flex flex-col items-center px-2">
+                  <ArrowRight className="w-4 h-4 text-emerald-400" />
+                  <span className={`text-[10px] font-mono font-bold mt-0.5 px-1.5 py-0.2 rounded ${
+                    rescheduleTarget.dayDelta > 0 
+                      ? 'text-emerald-400 bg-emerald-500/10' 
+                      : rescheduleTarget.dayDelta < 0 
+                      ? 'text-amber-400 bg-amber-500/10' 
+                      : 'text-slate-400'
+                  }`}>
+                    {rescheduleTarget.dayDelta > 0 ? `+${rescheduleTarget.dayDelta}` : rescheduleTarget.dayDelta} {Math.abs(rescheduleTarget.dayDelta) === 1 ? 'dia' : 'dias'}
+                  </span>
+                </div>
+
+                <div className="text-right">
+                  <span className="block text-[10px] uppercase font-bold text-emerald-400 mb-0.5">Nova Data</span>
+                  <span className="text-sm font-mono font-bold text-emerald-300">
+                    {formatDateBR(rescheduleTarget.newDate)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Opção especial para D0 (Deslocar protocolo completo) */}
+              {rescheduleTarget.event.step_code === 'D0' && (
+                <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2">
+                  <label className="flex items-start gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={shiftSubsequent}
+                      onChange={(e) => setShiftSubsequent(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 bg-slate-900 border-slate-700"
+                    />
+                    <div className="text-xs">
+                      <span className="font-bold text-slate-200 block">
+                        Deslocar também as etapas seguintes (D9, IA, DG)?
+                      </span>
+                      <span className="text-slate-400 text-[11px] leading-relaxed block mt-0.5">
+                        Mantém o intervalo planejado do protocolo ajustando proporcionalmente ({rescheduleTarget.dayDelta > 0 ? `+${rescheduleTarget.dayDelta}` : rescheduleTarget.dayDelta} dias) as datas das próximas etapas deste lote.
+                      </span>
+                    </div>
+                  </label>
+                </div>
+              )}
+
+              {/* Alerta de Impacto em Cascata */}
+              <div className="p-3 rounded-xl bg-slate-950/50 border border-slate-800/80 text-[11px] text-slate-400 space-y-1">
+                <p className="flex items-center gap-1.5 text-slate-300 font-semibold">
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  Sincronização em cascata:
+                </p>
+                <p className="leading-relaxed">
+                  {rescheduleTarget.event.step_code === 'IA' ? (
+                    'Esta mudança atualizará a data de IA no lote e em todas as matrizes inseminadas, recalculando a previsão de parto (295 dias) para animais prenhas.'
+                  ) : rescheduleTarget.event.step_code === 'DG' ? (
+                    'A data prevista do diagnóstico de gestação será atualizada na agenda e na ficha do lote.'
+                  ) : rescheduleTarget.event.step_code === 'D0' ? (
+                    'A data de início do lote será atualizada no cadastro do lote e na ficha de manejos.'
+                  ) : (
+                    'A alteração será propagada para a agenda, ficha do lote e banco de dados local e remoto.'
+                  )}
+                </p>
+              </div>
+
+              {/* Botões de Ação */}
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={handleExecuteReschedule}
+                  disabled={rescheduling}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md"
+                >
+                  {rescheduling ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                  {rescheduling ? 'Reagendando...' : 'Confirmar Reagendamento'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRescheduleTarget(null)}
+                  disabled={rescheduling}
+                  className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-xs cursor-pointer"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

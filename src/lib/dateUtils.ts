@@ -104,3 +104,18 @@ export function formatDateTimeBR(
 export function getNowISOString(): string {
   return new Date().toISOString();
 }
+
+/**
+ * Calcula a diferença em dias corridos entre duas datas no formato 'YYYY-MM-DD' (dateStrB - dateStrA).
+ * Positivo se dateStrB for posterior a dateStrA.
+ */
+export function getDaysDifference(dateStrA: string, dateStrB: string): number {
+  if (!dateStrA || !dateStrB) return 0;
+  const [yA, mA, dA] = dateStrA.slice(0, 10).split('-').map(Number);
+  const [yB, mB, dB] = dateStrB.slice(0, 10).split('-').map(Number);
+  if (!yA || !mA || !dA || !yB || !mB || !dB) return 0;
+  const utcA = Date.UTC(yA, mA - 1, dA);
+  const utcB = Date.UTC(yB, mB - 1, dB);
+  return Math.round((utcB - utcA) / (1000 * 60 * 60 * 24));
+}
+
