@@ -1299,7 +1299,7 @@ export default function LotsPage() {
                         <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Observação:</span>
                         <Pencil className="w-3 h-3 text-slate-500 opacity-0 group-hover/notes:opacity-100 group-hover/notes:text-emerald-400 transition-opacity shrink-0" />
                       </div>
-                      <p className="text-slate-200 text-xs mt-0.5 whitespace-pre-wrap break-words leading-relaxed">
+                      <p className="text-slate-200 text-xs mt-0.5 whitespace-pre-wrap wrap-break-word leading-relaxed">
                         {lot.notes}
                       </p>
                     </div>
@@ -1531,7 +1531,7 @@ export default function LotsPage() {
                 {selectedLot.notes && (
                   <p className="text-xs text-slate-300 mt-1 flex items-start gap-1.5 bg-slate-950/60 p-2 rounded-lg border border-slate-800">
                     <FileText className="w-3.5 h-3.5 text-amber-400/90 shrink-0 mt-0.5" />
-                    <span className="whitespace-pre-wrap break-words"><strong className="text-slate-400">Obs:</strong> {selectedLot.notes}</span>
+                    <span className="whitespace-pre-wrap wrap-break-word"><strong className="text-slate-400">Obs:</strong> {selectedLot.notes}</span>
                   </p>
                 )}
               </div>
