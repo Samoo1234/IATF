@@ -3602,6 +3602,7 @@ export async function updateProtocol(
   }
 
   // 2. Se etapas foram fornecidas, sincronizar as etapas
+  let syncedSteps: Record<string, unknown>[] | undefined;
   if (protocol.steps && protocol.steps.length > 0) {
     await supabase.from('protocol_steps').delete().eq('protocol_id', id);
 
@@ -3614,7 +3615,8 @@ export async function updateProtocol(
       dosage_instruction: step.dosage_instruction?.trim() || null,
     }));
 
-    await supabase.from('protocol_steps').insert(stepsToInsert);
+    const { data: insertedSteps } = await supabase.from('protocol_steps').insert(stepsToInsert).select('*');
+    syncedSteps = (insertedSteps as Record<string, unknown>[] | null) ?? stepsToInsert;
   }
 
   try {
@@ -3624,6 +3626,7 @@ export async function updateProtocol(
         name: protocol.name.trim(),
         description: protocol.description?.trim() || undefined,
         number_of_managements: protocol.number_of_managements,
+        ...(syncedSteps ? { protocol_steps: syncedSteps } : {}),
         updated_at: new Date().toISOString(),
       });
     }
@@ -4914,11 +4917,62 @@ export async function updateLotNotes(
 // UPDATE LOT PROTOCOL & RECALCULATE DATES / EVENTS
 // ============================================================
 
+const BLOCKING_PROTOCOL_STEPS = new Set(['IA', 'DG', 'DG1', 'DG2']);
+
+function isBlockingProtocolEvent(stepCode?: string | null): boolean {
+  return BLOCKING_PROTOCOL_STEPS.has((stepCode || '').toUpperCase());
+}
+
+function isStepAlreadyCompleted(stepCode: string, completedCodes: Set<string>): boolean {
+  const upper = (stepCode || '').toUpperCase();
+  if (completedCodes.has(upper)) return true;
+  if ((upper === 'D8' || upper === 'D9') && (completedCodes.has('D8') || completedCodes.has('D9'))) {
+    return true;
+  }
+  return false;
+}
+
+function computeLotProtocolSchedule(
+  rawSteps: { code: string; name?: string; day_offset: number }[],
+  startDate: string
+) {
+  const steps = (
+    rawSteps.length > 0
+      ? rawSteps
+      : [
+          { code: 'D0', name: 'D0 - Implante & Benzoato', day_offset: 0 },
+          { code: 'D9', name: 'D9 - Retirada & Indutores', day_offset: 9 },
+          { code: 'IA', name: 'IA - Inseminação Artificial', day_offset: 11 },
+          { code: 'DG', name: 'DG - Diagnóstico de Gestação', day_offset: 41 },
+        ]
+  )
+    .slice()
+    .sort((a, b) => a.day_offset - b.day_offset);
+
+  const addDays = (n: number) => addDaysToDateString(startDate, n);
+  const findByCode = (codes: string[]) =>
+    steps.find((s) => codes.includes((s.code || '').toUpperCase()));
+
+  const d7Step = findByCode(['D7']);
+  const d8OrD9Step = findByCode(['D8', 'D9']);
+  const iaStep = findByCode(['IA']);
+  const dgStep = findByCode(['DG', 'DG1', 'DG2']);
+
+  return {
+    steps,
+    d7Date: d7Step ? addDays(d7Step.day_offset) : null,
+    d9Date: d8OrD9Step ? addDays(d8OrD9Step.day_offset) : addDays(9),
+    iaDate: iaStep ? addDays(iaStep.day_offset) : addDays(11),
+    dgDate: dgStep ? addDays(dgStep.day_offset) : addDays(41),
+  };
+}
+
 export async function updateLotProtocol(params: {
   lotId: string;
   protocolId: string;
   startDate?: string;
   responsibleName?: string;
+  customSteps?: { code: string; name?: string; day_offset: number }[];
 }): Promise<{ success: boolean; error?: string }> {
   const { lotId, protocolId } = params;
   if (!lotId || !protocolId) {
@@ -4933,44 +4987,40 @@ export async function updateLotProtocol(params: {
     || (await offlineDb.lots.toCollection().first())?.organization_id
     || 'local-org';
   const orgId = String(resolvedOrg);
+  const nowIso = new Date().toISOString();
 
   if (isOffline) {
     try {
       const lot = await offlineDb.lots.get(lotId);
       if (!lot) return { success: false, error: 'Lote não encontrado no banco local.' };
 
-      // Verificar se há eventos concluídos
-      const completed = await offlineDb.management_events
-        .where('lot_id')
-        .equals(lotId)
-        .filter((e) => e.status === 'concluido')
-        .toArray();
+      const allLotEvents = await offlineDb.management_events.where('lot_id').equals(lotId).toArray();
+      const completedEvents = allLotEvents.filter(
+        (e) => e.status === 'concluido' || e.status === 'realizado'
+      );
 
-      if (completed.length > 0) {
+      if (completedEvents.some((e) => isBlockingProtocolEvent(e.step_code))) {
         return {
           success: false,
-          error: 'Este lote já possui manejos concluídos no curral. Por integridade do histórico sanitário e zootécnico, o protocolo não pode ser alterado.',
+          error: 'Este lote já possui IA ou DG concluídos no curral. Não é permitido alterar o protocolo após a inseminação.',
         };
       }
 
-      // Buscar protocolo e passos
       const proto = await offlineDb.protocols.get(protocolId);
       if (!proto) return { success: false, error: 'Protocolo não encontrado.' };
 
-      let steps: { code: string; name?: string; day_offset: number }[] = [];
-      if (Array.isArray((proto as Record<string, unknown>).protocol_steps)) {
-        steps = (proto as Record<string, unknown>).protocol_steps as { code: string; name?: string; day_offset: number }[];
+      let protoSteps: { code: string; name?: string; day_offset: number }[] = [];
+      if (params.customSteps && params.customSteps.length > 0) {
+        protoSteps = params.customSteps;
+      } else if (Array.isArray((proto as Record<string, unknown>).protocol_steps)) {
+        protoSteps = (proto as Record<string, unknown>).protocol_steps as { code: string; name?: string; day_offset: number }[];
       } else if (Array.isArray(proto.steps)) {
-        steps = proto.steps as { code: string; name?: string; day_offset: number }[];
+        protoSteps = proto.steps as { code: string; name?: string; day_offset: number }[];
       }
 
-      const startDate = params.startDate?.trim() || (lot.start_date as string) || getTodayDateString();
-      const addDays = (n: number) => addDaysToDateString(startDate, n);
-
-      const iaStep = steps.find((s) => s.code === 'IA');
-      const dgStep = steps.find((s) => s.code === 'DG');
-      const iaDate = iaStep ? addDays(iaStep.day_offset) : addDays(11);
-      const dgDate = dgStep ? addDays(dgStep.day_offset) : addDays(41);
+      const previousStartDate = (lot.start_date as string) || '';
+      const startDate = params.startDate?.trim() || previousStartDate || getTodayDateString();
+      const schedule = computeLotProtocolSchedule(protoSteps, startDate);
       const responsible = params.responsibleName?.trim() || (lot.responsible_name as string) || null;
 
       // 1. Atualizar registro do lote no IndexedDB
@@ -4978,37 +5028,46 @@ export async function updateLotProtocol(params: {
         protocol_id: protocolId,
         protocol_name: proto.name,
         start_date: startDate,
-        ia_planned_date: iaDate,
-        dg_planned_date: dgDate,
+        ia_planned_date: schedule.iaDate,
+        dg_planned_date: schedule.dgDate,
         responsible_name: responsible,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       });
 
-      // 2. Remover eventos pendentes antigos do IndexedDB e enfileirar deleção
-      const oldPending = await offlineDb.management_events
-        .where('lot_id')
-        .equals(lotId)
-        .filter((e) => e.status === 'pendente')
-        .toArray();
+      const completedCodes = new Set(completedEvents.map((e) => (e.step_code || '').toUpperCase()));
 
+      // Preservar D0 concluído, atualizando data apenas se D0 foi alterada
+      if (completedCodes.has('D0') && previousStartDate !== startDate) {
+        const d0Events = completedEvents.filter((e) => (e.step_code || '').toUpperCase() === 'D0');
+        for (const d0Ev of d0Events) {
+          await offlineDb.management_events.update(d0Ev.id, {
+            planned_date: startDate,
+            execution_date: startDate,
+            updated_at: nowIso,
+          });
+          await syncEngine.enqueueMutation('update', 'management_events', d0Ev.id, lot.farm_id, {
+            id: d0Ev.id,
+            planned_date: startDate,
+            execution_date: startDate,
+            updated_at: nowIso,
+          }, orgId);
+        }
+      }
+
+      // 2. Remover apenas eventos pendentes antigos e enfileirar deleção
+      const oldPending = allLotEvents.filter((e) => e.status === 'pendente');
       for (const ev of oldPending) {
         await offlineDb.management_events.delete(ev.id);
         await syncEngine.enqueueMutation('delete', 'management_events', ev.id, lot.farm_id, { id: ev.id }, orgId);
       }
 
-      // 3. Inserir novos eventos de manejo
-      const stepsToGenerate = steps.length > 0 ? steps : [
-        { code: 'D0', name: 'D0 - Implante & Benzoato', day_offset: 0 },
-        { code: 'D9', name: 'D9 - Retirada & Indutores', day_offset: 9 },
-        { code: 'IA', name: 'IA - Inseminação Artificial', day_offset: 11 },
-        { code: 'DG', name: 'DG - Diagnóstico de Gestação', day_offset: 41 },
-      ];
+      // 3. Inserir novos eventos pendentes apenas para etapas ainda não concluídas
+      for (const step of schedule.steps) {
+        if (isStepAlreadyCompleted(step.code, completedCodes)) continue;
 
-      for (const step of stepsToGenerate) {
         const eventId = crypto.randomUUID();
-        const plannedDate = addDays(step.day_offset);
-
-        await offlineDb.management_events.put({
+        const plannedDate = addDaysToDateString(startDate, step.day_offset);
+        const eventPayload = {
           id: eventId,
           organization_id: orgId,
           farm_id: lot.farm_id,
@@ -5017,40 +5076,49 @@ export async function updateLotProtocol(params: {
           step_name: step.name ?? step.code,
           planned_date: plannedDate,
           responsible_name: responsible,
-          status: 'pendente',
-          event_type: 'lote',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
+          status: 'pendente' as const,
+          event_type: 'lote' as const,
+          created_at: nowIso,
+          updated_at: nowIso,
+        };
 
-        await syncEngine.enqueueMutation('insert', 'management_events', eventId, lot.farm_id, {
-          id: eventId,
-          organization_id: orgId,
-          farm_id: lot.farm_id,
-          lot_id: lotId,
-          step_code: step.code,
-          step_name: step.name ?? step.code,
-          planned_date: plannedDate,
-          responsible_name: responsible,
-          status: 'pendente',
-          event_type: 'lote',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+        await offlineDb.management_events.put(eventPayload);
+        await syncEngine.enqueueMutation('insert', 'management_events', eventId, lot.farm_id, eventPayload, orgId);
+      }
+
+      // 4. Atualizar datas planejadas nas fichas das matrizes do lote
+      const lotMgmts = await offlineDb.animal_managements.where('lot_id').equals(lotId).toArray();
+      for (const m of lotMgmts) {
+        const mgmtUpdate: Record<string, unknown> = {
+          protocol_id: protocolId,
+          start_date: startDate,
+          d7_date: schedule.d7Date,
+          d9_date: schedule.d9Date,
+          ia_date: schedule.iaDate,
+          dg_date: schedule.dgDate,
+          updated_at: nowIso,
+        };
+        await offlineDb.animal_managements.update(m.id, mgmtUpdate);
+        await syncEngine.enqueueMutation('update', 'animal_managements', m.id, lot.farm_id, {
+          id: m.id,
+          ...mgmtUpdate,
         }, orgId);
       }
 
-      // Enfileirar mutação de atualização do lote
+      // 5. Enfileirar mutação de atualização do lote
       await syncEngine.enqueueMutation('update', 'iatf_lots', lotId, lot.farm_id, {
         protocol_id: protocolId,
         start_date: startDate,
-        ia_planned_date: iaDate,
-        dg_planned_date: dgDate,
+        ia_planned_date: schedule.iaDate,
+        dg_planned_date: schedule.dgDate,
         responsible_name: responsible,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       }, orgId);
 
       invalidateCache('lots');
       invalidateCache('events');
+      invalidateCache('animal_managements');
+      invalidateCache('lot_animals');
       invalidateCache('metrics');
       return { success: true };
     } catch (e: unknown) {
@@ -5063,17 +5131,17 @@ export async function updateLotProtocol(params: {
   try {
     const supabase = createClient();
 
-    // 1. Verificar se há eventos concluídos para este lote
+    // 1. Verificar se há eventos concluídos que bloqueiam troca (apenas IA / DG)
     const { data: completedEvents, error: compErr } = await supabase
       .from('management_events')
-      .select('id, step_code')
+      .select('id, step_code, status')
       .eq('lot_id', lotId)
-      .eq('status', 'concluido');
+      .in('status', ['concluido', 'realizado']);
 
-    if (!compErr && completedEvents && completedEvents.length > 0) {
+    if (!compErr && completedEvents && completedEvents.some((e: { step_code?: string | null }) => isBlockingProtocolEvent(e.step_code))) {
       return {
         success: false,
-        error: 'Este lote já possui manejos concluídos no curral. Não é permitido alterar o protocolo para não corromper o histórico sanitário.',
+        error: 'Este lote já possui IA ou DG concluídos no curral. Não é permitido alterar o protocolo após a inseminação.',
       };
     }
 
@@ -5099,14 +5167,13 @@ export async function updateLotProtocol(params: {
       return { success: false, error: 'Protocolo hormonal não encontrado.' };
     }
 
-    const steps = proto.protocol_steps ?? [];
-    const startDate = params.startDate?.trim() || currentLot.start_date || getTodayDateString();
-    const addDays = (n: number) => addDaysToDateString(startDate, n);
-
-    const iaStep = steps.find((s) => s.code === 'IA');
-    const dgStep = steps.find((s) => s.code === 'DG');
-    const iaDate = iaStep ? addDays(iaStep.day_offset) : addDays(11);
-    const dgDate = dgStep ? addDays(dgStep.day_offset) : addDays(41);
+    const rawSteps =
+      params.customSteps && params.customSteps.length > 0
+        ? params.customSteps
+        : (proto.protocol_steps ?? []);
+    const previousStartDate = currentLot.start_date || '';
+    const startDate = params.startDate?.trim() || previousStartDate || getTodayDateString();
+    const schedule = computeLotProtocolSchedule(rawSteps, startDate);
     const responsible = params.responsibleName?.trim() || currentLot.responsible_name;
 
     // 4. Atualizar iatf_lots
@@ -5115,10 +5182,10 @@ export async function updateLotProtocol(params: {
       .update({
         protocol_id: protocolId,
         start_date: startDate,
-        ia_planned_date: iaDate,
-        dg_planned_date: dgDate,
+        ia_planned_date: schedule.iaDate,
+        dg_planned_date: schedule.dgDate,
         responsible_name: responsible,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       })
       .eq('id', lotId);
 
@@ -5127,46 +5194,100 @@ export async function updateLotProtocol(params: {
       return { success: false, error: updateLotErr.message };
     }
 
-    // 5. Deletar eventos pendentes antigos da agenda
+    const completedCodes = new Set(
+      (completedEvents || []).map((e: { step_code?: string | null }) => (e.step_code || '').toUpperCase())
+    );
+
+    // Preservar D0 já concluído; atualizar data apenas se D0 tiver mudado
+    if (completedCodes.has('D0') && previousStartDate !== startDate) {
+      await supabase
+        .from('management_events')
+        .update({
+          planned_date: startDate,
+          execution_date: startDate,
+          updated_at: nowIso,
+        })
+        .eq('lot_id', lotId)
+        .eq('step_code', 'D0')
+        .in('status', ['concluido', 'realizado']);
+    }
+
+    // 5. Deletar apenas eventos pendentes antigos da agenda
     await supabase
       .from('management_events')
       .delete()
       .eq('lot_id', lotId)
       .eq('status', 'pendente');
 
-    // 6. Inserir novos eventos de manejo para cada etapa do protocolo
-    const stepsToGenerate = steps.length > 0 ? steps : [
-      { code: 'D0', name: 'D0 - Implante & Benzoato', day_offset: 0 },
-      { code: 'D9', name: 'D9 - Retirada & Indutores', day_offset: 9 },
-      { code: 'IA', name: 'IA - Inseminação Artificial', day_offset: 11 },
-      { code: 'DG', name: 'DG - Diagnóstico de Gestação', day_offset: 41 },
-    ];
-
-    for (const step of stepsToGenerate) {
-      await supabase.from('management_events').insert({
+    // 6. Inserir novos eventos pendentes apenas para etapas ainda não concluídas
+    const eventsToInsert = schedule.steps
+      .filter((step) => !isStepAlreadyCompleted(step.code, completedCodes))
+      .map((step) => ({
         organization_id: orgId,
         farm_id: currentLot.farm_id,
         lot_id: lotId,
         step_code: step.code,
         step_name: step.name || step.code,
-        planned_date: addDays(step.day_offset),
+        planned_date: addDaysToDateString(startDate, step.day_offset),
         responsible_name: responsible,
-        status: 'pendente',
-        event_type: 'lote',
-      });
+        status: 'pendente' as const,
+        event_type: 'lote' as const,
+      }));
+
+    let insertedEvents: { id: string; step_code: string; step_name?: string; planned_date: string }[] = [];
+    if (eventsToInsert.length > 0) {
+      const { data: createdEvs, error: insertEvErr } = await supabase
+        .from('management_events')
+        .insert(eventsToInsert)
+        .select('id, step_code, step_name, planned_date');
+
+      if (insertEvErr) {
+        console.error('updateLotProtocol error inserting management_events:', insertEvErr);
+        return { success: false, error: insertEvErr.message };
+      }
+      insertedEvents = createdEvs || [];
     }
 
-    // 7. Sincronizar com base local Dexie/IndexedDB imediatamente
+    // 7. Atualizar animal_managements vinculadas ao lote
+    await supabase
+      .from('animal_managements')
+      .update({
+        protocol_id: protocolId,
+        start_date: startDate,
+        d7_date: schedule.d7Date,
+        d9_date: schedule.d9Date,
+        ia_date: schedule.iaDate,
+        dg_date: schedule.dgDate,
+        updated_at: nowIso,
+      })
+      .eq('lot_id', lotId);
+
+    // 8. Sincronizar com base local Dexie/IndexedDB imediatamente
     try {
       await offlineDb.lots.update(lotId, {
         protocol_id: protocolId,
         protocol_name: proto.name,
         start_date: startDate,
-        ia_planned_date: iaDate,
-        dg_planned_date: dgDate,
+        ia_planned_date: schedule.iaDate,
+        dg_planned_date: schedule.dgDate,
         responsible_name: responsible,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       });
+
+      if (completedCodes.has('D0') && previousStartDate !== startDate) {
+        const localD0s = await offlineDb.management_events
+          .where('lot_id')
+          .equals(lotId)
+          .filter((e) => (e.step_code || '').toUpperCase() === 'D0' && (e.status === 'concluido' || e.status === 'realizado'))
+          .toArray();
+        for (const d0Ev of localD0s) {
+          await offlineDb.management_events.update(d0Ev.id, {
+            planned_date: startDate,
+            execution_date: startDate,
+            updated_at: nowIso,
+          });
+        }
+      }
 
       const oldPending = await offlineDb.management_events
         .where('lot_id')
@@ -5177,20 +5298,33 @@ export async function updateLotProtocol(params: {
         await offlineDb.management_events.delete(ev.id);
       }
 
-      for (const step of stepsToGenerate) {
+      for (const ev of insertedEvents) {
         await offlineDb.management_events.put({
-          id: crypto.randomUUID(),
+          id: ev.id,
           organization_id: orgId,
           farm_id: currentLot.farm_id,
           lot_id: lotId,
-          step_code: step.code,
-          step_name: step.name || step.code,
-          planned_date: addDays(step.day_offset),
+          step_code: ev.step_code,
+          step_name: ev.step_name || ev.step_code,
+          planned_date: ev.planned_date,
           responsible_name: responsible,
           status: 'pendente',
           event_type: 'lote',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          created_at: nowIso,
+          updated_at: nowIso,
+        });
+      }
+
+      const localMgmts = await offlineDb.animal_managements.where('lot_id').equals(lotId).toArray();
+      for (const m of localMgmts) {
+        await offlineDb.animal_managements.update(m.id, {
+          protocol_id: protocolId,
+          start_date: startDate,
+          d7_date: schedule.d7Date,
+          d9_date: schedule.d9Date,
+          ia_date: schedule.iaDate,
+          dg_date: schedule.dgDate,
+          updated_at: nowIso,
         });
       }
     } catch (e) {
@@ -5199,6 +5333,8 @@ export async function updateLotProtocol(params: {
 
     invalidateCache('lots');
     invalidateCache('events');
+    invalidateCache('animal_managements');
+    invalidateCache('lot_animals');
     invalidateCache('metrics');
     return { success: true };
   } catch (err: unknown) {

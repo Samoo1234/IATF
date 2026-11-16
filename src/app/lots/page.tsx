@@ -39,7 +39,7 @@ import {
   type ManagementEvent,
   type Veterinarian,
 } from '@/lib/db';
-import { getTodayDateString, addDaysToDateString, formatDateBR, compareLotCodes } from '@/lib/dateUtils';
+import { getTodayDateString, addDaysToDateString, formatDateBR, getDaysDifference, compareLotCodes } from '@/lib/dateUtils';
 import {
   Layers,
   Plus,
@@ -263,16 +263,121 @@ export default function LotsPage() {
   const [selectedNewProtocolId, setSelectedNewProtocolId] = useState('');
   const [editStartDate, setEditStartDate] = useState('');
   const [editResponsibleName, setEditResponsibleName] = useState('');
+  const [customEditSteps, setCustomEditSteps] = useState<{ code: string; name: string; day_offset: number }[]>([]);
   const [savingProtocol, setSavingProtocol] = useState(false);
+
+  const buildStepsFromProtocol = (proto?: Protocol) => {
+    const raw = proto?.protocol_steps || [];
+    if (raw.length > 0) {
+      return raw
+        .slice()
+        .sort((a, b) => a.day_offset - b.day_offset)
+        .map((s) => ({
+          code: s.code,
+          name: s.name || s.code,
+          day_offset: Number(s.day_offset) || 0,
+        }));
+    }
+    return [
+      { code: 'D0', name: 'D0 - Implante & Benzoato', day_offset: 0 },
+      { code: 'D9', name: 'D9 - Retirada & Indutores', day_offset: 9 },
+      { code: 'IA', name: 'IA - Inseminação Artificial', day_offset: 11 },
+      { code: 'DG', name: 'DG - Diagnóstico de Gestação', day_offset: 41 },
+    ];
+  };
 
   const handleOpenEditProtocol = (lot: LotStat) => {
     setEditingProtocolLot(lot);
     const currentProto = protocols.find(
       (p) => p.id === lot.protocol_id || p.name.trim().toLowerCase() === (lot.protocol_name || '').trim().toLowerCase()
     );
+    const initialStartDate = lot.start_date || getTodayDateString();
     setSelectedNewProtocolId(currentProto?.id || (protocols[0]?.id || ''));
-    setEditStartDate(lot.start_date || getTodayDateString());
+    setEditStartDate(initialStartDate);
     setEditResponsibleName(lot.responsible_name || '');
+
+    const existingLotEvents = managementEvents
+      .filter((e) => e.lot_id === lot.id && Boolean(e.planned_date))
+      .sort((a, b) => a.planned_date.localeCompare(b.planned_date));
+
+    if (existingLotEvents.length > 0) {
+      setCustomEditSteps(
+        existingLotEvents.map((e) => ({
+          code: e.step_code,
+          name: e.step_name || e.step_code,
+          day_offset: Math.max(0, getDaysDifference(initialStartDate, e.planned_date)),
+        }))
+      );
+    } else {
+      setCustomEditSteps(buildStepsFromProtocol(currentProto || protocols[0]));
+    }
+  };
+
+  const handleSelectProtocolInModal = (protocolId: string) => {
+    setSelectedNewProtocolId(protocolId);
+    const matched = protocols.find((p) => p.id === protocolId);
+    setCustomEditSteps(buildStepsFromProtocol(matched));
+  };
+
+  const handleApplyQuickDuration = (days: 10 | 11) => {
+    const withdrawalOffset = days === 10 ? 8 : 9;
+    const withdrawalCode = days === 10 ? 'D8' : 'D9';
+    const withdrawalName = `${withdrawalCode} - Retirada & Indutores`;
+    const iaOffset = days === 10 ? 10 : 11;
+    const dgOffset = days === 10 ? 40 : 41;
+    const withdrawalCompleted = editingProtocolLot
+      ? managementEvents.some(
+          (e) =>
+            e.lot_id === editingProtocolLot.id &&
+            (e.status === 'concluido' || e.status === 'realizado') &&
+            ['D8', 'D9'].includes((e.step_code || '').toUpperCase())
+        )
+      : false;
+
+    setCustomEditSteps((prev) =>
+      prev.map((step) => {
+        const upper = (step.code || '').toUpperCase();
+        if ((upper === 'D8' || upper === 'D9') && !withdrawalCompleted) {
+          return { ...step, code: withdrawalCode, name: withdrawalName, day_offset: withdrawalOffset };
+        }
+        if (upper === 'IA') {
+          return { ...step, day_offset: iaOffset };
+        }
+        if (upper === 'DG' || upper === 'DG1') {
+          return { ...step, day_offset: dgOffset };
+        }
+        return step;
+      })
+    );
+  };
+
+  const handleChangeCustomStepOffset = (index: number, rawValue: number) => {
+    const safeOffset = Math.max(0, Number.isNaN(rawValue) ? 0 : rawValue);
+    setCustomEditSteps((prev) =>
+      prev.map((step, idx) => {
+        if (idx !== index) return step;
+        const upper = (step.code || '').toUpperCase();
+        if (upper === 'D8' || upper === 'D9') {
+          if (safeOffset === 8) {
+            return {
+              ...step,
+              code: 'D8',
+              name: step.name.replace(/^D9\b/i, 'D8') || 'D8 - Retirada & Indutores',
+              day_offset: safeOffset,
+            };
+          }
+          if (safeOffset === 9) {
+            return {
+              ...step,
+              code: 'D9',
+              name: step.name.replace(/^D8\b/i, 'D9') || 'D9 - Retirada & Indutores',
+              day_offset: safeOffset,
+            };
+          }
+        }
+        return { ...step, day_offset: safeOffset };
+      })
+    );
   };
 
   const handleSaveProtocol = async (e: React.FormEvent) => {
@@ -285,11 +390,12 @@ export default function LotsPage() {
       protocolId: selectedNewProtocolId,
       startDate: editStartDate,
       responsibleName: editResponsibleName,
+      customSteps: customEditSteps,
     });
     setSavingProtocol(false);
 
     if (res.success) {
-      showToast(`Protocolo do lote "${editingProtocolLot.code}" atualizado com sucesso! Agenda recalculada.`);
+      showToast(`Protocolo e cronograma do lote "${editingProtocolLot.code}" atualizados com sucesso!`);
       setEditingProtocolLot(null);
       await loadLots();
       if (selectedLotId === editingProtocolLot.id) {
@@ -1027,24 +1133,45 @@ export default function LotsPage() {
   }, [lotAnimals, lotAnimalSearch]);
 
   // Prévia de etapas e validação de segurança para o modal de alteração de protocolo
-  const previewProtocol = protocols.find((p) => p.id === selectedNewProtocolId);
-  const previewSteps = useMemo(() => {
-    if (!previewProtocol || !editStartDate) return [];
-    const steps = [...(previewProtocol.protocol_steps || [])].sort((a, b) => a.day_offset - b.day_offset);
-    return steps.map((s) => ({
-      code: s.code,
-      name: s.name,
-      day_offset: s.day_offset,
-      date: addDaysToDateString(editStartDate, s.day_offset),
-    }));
-  }, [previewProtocol, editStartDate]);
-
-  const hasCompletedManagements = useMemo(() => {
-    if (!editingProtocolLot) return false;
-    return managementEvents.some(
-      (e) => e.lot_id === editingProtocolLot.id && (e.status === 'concluido' || e.status === 'realizado')
+  const completedStepCodesForEditingLot = useMemo(() => {
+    if (!editingProtocolLot) return new Set<string>();
+    return new Set(
+      managementEvents
+        .filter(
+          (e) =>
+            e.lot_id === editingProtocolLot.id &&
+            (e.status === 'concluido' || e.status === 'realizado')
+        )
+        .map((e) => (e.step_code || '').toUpperCase())
     );
   }, [editingProtocolLot, managementEvents]);
+
+  const hasCompletedD0 = completedStepCodesForEditingLot.has('D0');
+
+  const hasCompletedManagements = useMemo(() => {
+    return ['IA', 'DG', 'DG1', 'DG2'].some((code) =>
+      completedStepCodesForEditingLot.has(code)
+    );
+  }, [completedStepCodesForEditingLot]);
+
+  const previewSteps = useMemo(() => {
+    if (!editStartDate || customEditSteps.length === 0) return [];
+    return customEditSteps.map((s, idx) => {
+      const upper = (s.code || '').toUpperCase();
+      const isCompleted =
+        completedStepCodesForEditingLot.has(upper) ||
+        ((upper === 'D8' || upper === 'D9') &&
+          (completedStepCodesForEditingLot.has('D8') || completedStepCodesForEditingLot.has('D9')));
+      return {
+        index: idx,
+        code: s.code,
+        name: s.name,
+        day_offset: s.day_offset,
+        date: addDaysToDateString(editStartDate, s.day_offset),
+        isCompleted,
+      };
+    });
+  }, [customEditSteps, editStartDate, completedStepCodesForEditingLot]);
 
   return (
     <div className="space-y-6">
@@ -2691,8 +2818,8 @@ export default function LotsPage() {
                   <div className="space-y-1">
                     <p className="font-bold text-sm text-amber-200">Alteração Não Permitida</p>
                     <p className="leading-relaxed">
-                      Este lote já possui manejos operacionais executados e concluídos no curral.
-                      Por normas de integridade do histórico reprodutivo, sanitário e rastreabilidade zootécnica das matrizes, não é permitido trocar o protocolo hormonal após o início da execução dos manejos.
+                      Este lote já possui IA ou Diagnóstico de Gestação (DG) executados e concluídos no curral.
+                      Por normas de integridade do histórico reprodutivo, sanitário e rastreabilidade zootécnica das matrizes, não é permitido trocar o protocolo hormonal após a inseminação.
                     </p>
                   </div>
                 </div>
@@ -2724,21 +2851,30 @@ export default function LotsPage() {
               </div>
             ) : (
               <form onSubmit={handleSaveProtocol} className="space-y-4">
-                <div className="bg-sky-500/10 border border-sky-500/20 rounded-xl p-3 text-xs text-sky-300 flex items-start gap-2.5">
-                  <Sparkles className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
-                  <p className="leading-relaxed">
-                    Lote em fase de planejamento. Ao alterar o protocolo ou a data D0, todas as datas de manejos de campo (D0, IA, DG) e a agenda operacional serão recalculadas automaticamente.
-                  </p>
-                </div>
+                {hasCompletedD0 ? (
+                  <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-3 text-xs text-emerald-200 flex items-start gap-2.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                    <p className="leading-relaxed">
+                      <strong>Manejo D0 preservado:</strong> O D0 já foi registrado no curral e será mantido intacto. Ao trocar o protocolo ou ajustar a duração (ex: de <strong>11 para 10 dias</strong>), apenas as etapas futuras pendentes (Retirada, IA e DG) serão recalculadas na agenda e nas matrizes.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="bg-sky-500/10 border border-sky-500/20 rounded-xl p-3 text-xs text-sky-300 flex items-start gap-2.5">
+                    <Sparkles className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
+                    <p className="leading-relaxed">
+                      Lote em fase de planejamento. Ao alterar o protocolo ou a duração das etapas, todas as datas de manejos de campo (D0, D8/D9, IA, DG) e a agenda operacional serão recalculadas automaticamente.
+                    </p>
+                  </div>
+                )}
 
                 <div className="space-y-3">
                   <div>
                     <label className="block text-xs font-semibold text-slate-300 mb-1">
-                      Novo Protocolo Hormonal <span className="text-emerald-400">*</span>
+                      Protocolo Hormonal <span className="text-emerald-400">*</span>
                     </label>
                     <select
                       value={selectedNewProtocolId}
-                      onChange={(e) => setSelectedNewProtocolId(e.target.value)}
+                      onChange={(e) => handleSelectProtocolInModal(e.target.value)}
                       required
                       className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
                     >
@@ -2748,6 +2884,48 @@ export default function LotsPage() {
                         </option>
                       ))}
                     </select>
+                  </div>
+
+                  {/* Atalhos Rápidos de Duração (10 dias vs 11 dias) */}
+                  <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3 space-y-2">
+                    <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                      Ajuste Rápido de Duração do Protocolo
+                    </span>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(() => {
+                        const currentIaOffset = customEditSteps.find((s) => s.code.toUpperCase() === 'IA')?.day_offset;
+                        const is10Days = currentIaOffset === 10;
+                        const is11Days = currentIaOffset === 11;
+                        return (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleApplyQuickDuration(10)}
+                              className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                                is10Days
+                                  ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 shadow-sm'
+                                  : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-emerald-500/50 hover:text-emerald-300'
+                              }`}
+                            >
+                              <Clock className="w-3.5 h-3.5" />
+                              <span>10 Dias (D0 → D8 → IA D10)</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleApplyQuickDuration(11)}
+                              className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                                is11Days
+                                  ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 shadow-sm'
+                                  : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-emerald-500/50 hover:text-emerald-300'
+                              }`}
+                            >
+                              <Clock className="w-3.5 h-3.5" />
+                              <span>11 Dias (D0 → D9 → IA D11)</span>
+                            </button>
+                          </>
+                        );
+                      })()}
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2777,27 +2955,56 @@ export default function LotsPage() {
                     </div>
                   </div>
 
-                  {/* Prévia do Novo Cronograma */}
+                  {/* Prévia e Ajuste Fino do Cronograma */}
                   {previewSteps.length > 0 && (
                     <div className="bg-slate-950/80 rounded-xl p-3.5 border border-slate-800 space-y-2">
                       <div className="flex items-center justify-between text-xs">
                         <span className="text-slate-400 font-semibold flex items-center gap-1.5">
                           <Calendar className="w-3.5 h-3.5 text-emerald-400" />
-                          Prévia do Novo Cronograma
+                          Cronograma do Lote (edite os dias se necessário)
                         </span>
                         <span className="text-[11px] text-emerald-400 font-medium">
-                          {previewSteps.length} etapas calculadas
+                          {previewSteps.length} etapas
                         </span>
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
-                        {previewSteps.map((st) => (
-                          <div key={st.code} className="bg-slate-900/90 p-2 rounded-lg border border-slate-800 text-center space-y-0.5">
-                            <span className="text-[10px] font-bold text-slate-400 block">{st.code} (+{st.day_offset}d)</span>
-                            <span className="text-xs font-bold text-emerald-400 block font-mono">
-                              {formatDateBR(st.date)}
-                            </span>
-                          </div>
-                        ))}
+                        {previewSteps.map((st) => {
+                          const isLocked = st.code.toUpperCase() === 'D0' || st.isCompleted;
+                          return (
+                            <div
+                              key={`${st.code}-${st.index}`}
+                              className={`p-2 rounded-lg border text-center space-y-1 ${
+                                st.isCompleted
+                                  ? 'bg-emerald-950/30 border-emerald-500/40'
+                                  : 'bg-slate-900/90 border-slate-800'
+                              }`}
+                            >
+                              <div className="flex items-center justify-center gap-1">
+                                <span className="text-[11px] font-extrabold text-slate-200">{st.code}</span>
+                                {st.isCompleted && (
+                                  <span className="text-[9px] font-bold px-1 rounded bg-emerald-500/20 text-emerald-300">
+                                    Feito
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center justify-center gap-1 text-[10px] text-slate-400">
+                                <span>D+</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={120}
+                                  disabled={isLocked}
+                                  value={st.day_offset}
+                                  onChange={(e) => handleChangeCustomStepOffset(st.index, parseInt(e.target.value, 10))}
+                                  className="w-11 bg-slate-950 border border-slate-700 disabled:opacity-60 rounded px-1 py-0.5 text-center text-white font-mono text-[11px] focus:outline-none focus:border-emerald-500"
+                                />
+                              </div>
+                              <span className="text-xs font-bold text-emerald-400 block font-mono">
+                                {formatDateBR(st.date)}
+                              </span>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
