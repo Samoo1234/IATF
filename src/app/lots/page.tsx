@@ -1851,52 +1851,24 @@ export default function LotsPage() {
                                   {step.formattedDate}
                                 </span>
                                 {/* Botão Rápido na Etapa: abre o manejo coletivo sem marcar matrizes automaticamente */}
-                                {step.code !== 'IA' && step.code !== 'DG' ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setFocusedStepCode(step.code.toUpperCase());
-                                      handleOpenBatchManagement(step.code);
-                                    }}
-                                    className={`text-[9px] font-black px-1.5 py-0.5 rounded-md border transition-all cursor-pointer inline-flex items-center gap-0.5 ${
-                                      isCurrentToday
-                                        ? 'bg-amber-400/20 text-amber-300 border-amber-400/40 hover:bg-amber-400/30'
-                                        : isCompleted
-                                        ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20 hover:bg-emerald-500/25'
-                                        : 'bg-slate-800/80 text-slate-400 border-slate-700 hover:text-slate-200 hover:bg-slate-800'
-                                    }`}
-                                    title={`Abrir manejo coletivo de ${step.code}`}
-                                  >
-                                    <Sparkles className="w-2.5 h-2.5 text-amber-400" />
-                                    Manejar
-                                  </button>
-                                ) : (
-                                  (() => {
-                                    const upperCode = step.code.toUpperCase();
-                                    const allChecked =
-                                      lotAnimals.length > 0 &&
-                                      lotAnimals.every((la) => Boolean(stepChecks[la.animal_id]?.[upperCode]));
-                                    return (
-                                      <label
-                                        onClick={(e) => e.stopPropagation()}
-                                        className={`text-[9px] font-black px-1.5 py-0.5 rounded-md border transition-all cursor-pointer inline-flex items-center gap-1 select-none ${
-                                          allChecked
-                                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                                            : 'bg-slate-800/80 text-slate-300 border-slate-700 hover:border-emerald-500/40 hover:text-white'
-                                        }`}
-                                        title={`Dar check em todas as matrizes na etapa ${upperCode}`}
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          checked={allChecked}
-                                          onChange={(e) => handleToggleAllStepCheck(upperCode, e.target.checked)}
-                                          className="w-3 h-3 rounded border-slate-600 bg-slate-900 text-emerald-500 focus:ring-0 cursor-pointer accent-emerald-500"
-                                        />
-                                        Check {upperCode}
-                                      </label>
-                                    );
-                                  })()
-                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setFocusedStepCode(step.code.toUpperCase());
+                                    handleOpenBatchManagement(step.code);
+                                  }}
+                                  className={`text-[9px] font-black px-1.5 py-0.5 rounded-md border transition-all cursor-pointer inline-flex items-center gap-0.5 ${
+                                    isCurrentToday
+                                      ? 'bg-amber-400/20 text-amber-300 border-amber-400/40 hover:bg-amber-400/30'
+                                      : isCompleted
+                                      ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20 hover:bg-emerald-500/25'
+                                      : 'bg-slate-800/80 text-slate-400 border-slate-700 hover:text-slate-200 hover:bg-slate-800'
+                                  }`}
+                                  title={`Abrir manejo coletivo de ${step.code}`}
+                                >
+                                  <Sparkles className="w-2.5 h-2.5 text-amber-400" />
+                                  Manejar
+                                </button>
                               </div>
                             </div>
 
@@ -2096,17 +2068,25 @@ export default function LotsPage() {
                         </button>
                       </div>
 
-                      <label className="flex items-center gap-2 text-xs text-slate-300 font-medium cursor-pointer select-none px-1">
-                        <input
-                          type="checkbox"
-                          checked={quickAutoD0}
-                          onChange={(e) => setQuickAutoD0(e.target.checked)}
-                          className="w-4 h-4 rounded border-slate-600 bg-slate-950 text-emerald-500 focus:ring-emerald-500 cursor-pointer accent-emerald-500"
-                        />
+                      <button
+                        type="button"
+                        onClick={() => setQuickAutoD0((prev) => !prev)}
+                        className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer inline-flex items-center gap-1.5 select-none ${
+                          quickAutoD0
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                            : 'bg-slate-950 border-slate-700 text-slate-400 hover:text-slate-200'
+                        }`}
+                        title="Alternar marcação automática ao inserir uma matriz nova pelo tronco"
+                      >
+                        {quickAutoD0 ? (
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        ) : (
+                          <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                        )}
                         <span>
                           Ao inserir nova, marcar <strong className="text-emerald-400">{activePhaseCode}</strong> auto
                         </span>
-                      </label>
+                      </button>
                     </form>
                   </div>
                 );
@@ -2263,36 +2243,43 @@ export default function LotsPage() {
                                 lotAnimals.length > 0 &&
                                 lotAnimals.every((la) => Boolean(stepChecks[la.animal_id]?.[stepCode]));
                               const isActiveCol = stepCode === activePhaseCode;
-                              const accentClass =
+                              const textAccent =
                                 stepCode === 'D0'
-                                  ? 'accent-sky-500 text-sky-400'
+                                  ? 'text-sky-400'
                                   : stepCode === 'IA'
-                                  ? 'accent-emerald-500 text-emerald-400'
+                                  ? 'text-emerald-400'
                                   : stepCode === 'DG' || stepCode === 'DG1'
-                                  ? 'accent-purple-500 text-purple-400'
-                                  : 'accent-amber-500 text-amber-400';
+                                  ? 'text-purple-400'
+                                  : 'text-amber-400';
 
                               return (
                                 <th
                                   key={stepCode}
-                                  className={`p-2.5 text-center border-x border-slate-800/70 ${
+                                  className={`p-2 text-center border-x border-slate-800/70 ${
                                     isActiveCol ? 'bg-emerald-950/40 border-t-2 border-t-emerald-400' : 'bg-slate-900/70'
                                   }`}
                                 >
-                                  <label
-                                    className="inline-flex flex-col items-center gap-1 cursor-pointer select-none"
-                                    title={`Marcar/desmarcar etapa ${stepCode} para todas as matrizes`}
-                                  >
-                                    <span className={`font-black text-[10px] ${accentClass.split(' ')[1]}`}>
+                                  <div className="inline-flex flex-col items-center gap-1 select-none">
+                                    <span className={`font-black text-[10px] ${textAccent}`}>
                                       {stepCode}
                                     </span>
-                                    <input
-                                      type="checkbox"
-                                      checked={allStepChecked}
-                                      onChange={(e) => handleToggleAllStepCheck(stepCode, e.target.checked)}
-                                      className={`w-4 h-4 rounded border-slate-600 bg-slate-900 cursor-pointer ${accentClass.split(' ')[0]}`}
-                                    />
-                                  </label>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleAllStepCheck(stepCode, !allStepChecked)}
+                                      title={
+                                        allStepChecked
+                                          ? `Desmarcar todas na etapa ${stepCode}`
+                                          : `Marcar todas as matrizes na etapa ${stepCode}`
+                                      }
+                                      className={`px-2 py-0.5 rounded-md text-[9px] font-bold transition-all cursor-pointer border ${
+                                        allStepChecked
+                                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-rose-500/20 hover:text-rose-200'
+                                          : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white hover:border-slate-500'
+                                      }`}
+                                    >
+                                      {allStepChecked ? '✓ Todos' : 'Todos'}
+                                    </button>
+                                  </div>
                                 </th>
                               );
                             })}

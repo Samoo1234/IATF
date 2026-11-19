@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   type LotStat,
   type LotAnimal,
@@ -12,6 +12,7 @@ import {
   executeBatchLotManagementD9,
   executeBatchLotManagementIA,
   executeBatchLotManagementDG,
+  toggleLotAnimalStepCheck,
 } from '@/lib/db';
 import { getTodayDateString, addDaysToDateString } from '@/lib/dateUtils';
 import {
@@ -163,24 +164,39 @@ export default function BatchLotManagementModal({
     }[]
   >([]);
 
+  // Mantém referência atualizada de stepChecks para ler somente na abertura sem reinicializar o modal após salvamentos parciais
+  const latestStepChecksRef = useRef(stepChecks);
+  useEffect(() => {
+    latestStepChecksRef.current = stepChecks;
+  }, [stepChecks]);
+
   // Load aux data and initialize forms
   useEffect(() => {
     if (!isOpen) return;
 
+    const initialStepChecks = latestStepChecksRef.current;
     setActiveTab(getNormalizedTab(initialStepCode));
     setErrorMsg(null);
     setHasUnsavedChanges(false);
 
-    // Initial dates
+    // Initial dates & apenas matrizes realmente já manejadas vêm marcadas
     setD0Date(lot.start_date || getTodayDateString());
     setD0Responsible(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
-    setD0SelectedIds(lotAnimals.map((la) => la.animal_id));
+    const initialD0Done = lotAnimals
+      .filter((la) => Boolean(initialStepChecks?.[la.animal_id]?.['D0']))
+      .map((la) => la.animal_id);
+    setD0SelectedIds(initialD0Done);
     setD0SearchQuery('');
     setD0FilterTab('all');
 
     setD9Date(getTodayDateString());
     setD9Responsible(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
-    setD9SelectedIds(lotAnimals.map((la) => la.animal_id));
+    const initialD9Done = lotAnimals
+      .filter((la) =>
+        Boolean(initialStepChecks?.[la.animal_id]?.['D9'] || initialStepChecks?.[la.animal_id]?.['D8'])
+      )
+      .map((la) => la.animal_id);
+    setD9SelectedIds(initialD9Done);
     setD9DeviceLossIds([]);
     setD9SearchQuery('');
     setD9FilterTab('all');
@@ -294,10 +310,8 @@ export default function BatchLotManagementModal({
   };
 
   const checkAnimalDoneInPhase = (animalId: string, phase: 'D0' | 'D9'): boolean => {
-    const checks = stepChecks?.[animalId];
-    if (!checks) return false;
-    if (phase === 'D0') return Boolean(checks['D0']);
-    return Boolean(checks['D9'] || checks['D8']);
+    if (phase === 'D0') return d0SelectedIds.includes(animalId);
+    return d9SelectedIds.includes(animalId);
   };
 
   const computePhaseFilterStats = (phase: 'D0' | 'D9') => {
@@ -634,18 +648,37 @@ export default function BatchLotManagementModal({
           return;
         }
 
-        const res = await executeBatchLotManagementD0({
-          lotId: lot.id,
-          executionDate: d0Date,
-          responsibleName: d0Responsible,
-          notes: d0Notes,
-          animalIds: d0SelectedIds,
-        });
+        const unselectedD0Ids = lotAnimals
+          .map((la) => la.animal_id)
+          .filter((id) => !d0SelectedIds.includes(id));
 
-        if (!res.success) {
-          setErrorMsg(res.error || 'Erro ao registrar D0 em lote.');
-          setSubmitting(false);
-          return;
+        if (d0SelectedIds.length > 0) {
+          const res = await executeBatchLotManagementD0({
+            lotId: lot.id,
+            executionDate: d0Date,
+            responsibleName: d0Responsible,
+            notes: d0Notes,
+            animalIds: d0SelectedIds,
+          });
+
+          if (!res.success) {
+            setErrorMsg(res.error || 'Erro ao registrar D0 em lote.');
+            setSubmitting(false);
+            return;
+          }
+        }
+
+        if (unselectedD0Ids.length > 0) {
+          await toggleLotAnimalStepCheck({
+            lotId: lot.id,
+            stepCode: 'D0',
+            animalIds: unselectedD0Ids,
+            checked: false,
+            totalAnimalsInLot: lotAnimals.length,
+            checkedCountInStep: d0SelectedIds.length,
+            executionDate: d0Date,
+            responsibleName: d0Responsible,
+          });
         }
       } else if (activeTab === 'D9') {
         if (!d9Date) {
@@ -654,20 +687,43 @@ export default function BatchLotManagementModal({
           return;
         }
 
-        const res = await executeBatchLotManagementD9({
-          lotId: lot.id,
-          stepCode: 'D9',
-          executionDate: d9Date,
-          responsibleName: d9Responsible,
-          notes: d9Notes,
-          deviceLossAnimalIds: d9DeviceLossIds,
-          animalIds: d9SelectedIds,
-        });
+        const unselectedD9Ids = lotAnimals
+          .map((la) => la.animal_id)
+          .filter((id) => !d9SelectedIds.includes(id));
+        const workedD9Count = Math.max(
+          0,
+          d9SelectedIds.filter((id) => !d9DeviceLossIds.includes(id)).length
+        );
 
-        if (!res.success) {
-          setErrorMsg(res.error || 'Erro ao registrar D9 em lote.');
-          setSubmitting(false);
-          return;
+        if (d9SelectedIds.length > 0) {
+          const res = await executeBatchLotManagementD9({
+            lotId: lot.id,
+            stepCode: 'D9',
+            executionDate: d9Date,
+            responsibleName: d9Responsible,
+            notes: d9Notes,
+            deviceLossAnimalIds: d9DeviceLossIds,
+            animalIds: d9SelectedIds,
+          });
+
+          if (!res.success) {
+            setErrorMsg(res.error || 'Erro ao registrar D9 em lote.');
+            setSubmitting(false);
+            return;
+          }
+        }
+
+        if (unselectedD9Ids.length > 0) {
+          await toggleLotAnimalStepCheck({
+            lotId: lot.id,
+            stepCode: 'D9',
+            animalIds: unselectedD9Ids,
+            checked: false,
+            totalAnimalsInLot: lotAnimals.length,
+            checkedCountInStep: workedD9Count,
+            executionDate: d9Date,
+            responsibleName: d9Responsible,
+          });
         }
       } else if (activeTab === 'IA') {
         if (!iaDate) {
@@ -940,11 +996,11 @@ export default function BatchLotManagementModal({
                 />
               </div>
 
-              {/* Matrizes com Checkbox em D0 */}
+              {/* Lista de Matrizes em D0 (Sem Checkboxes Confusos) */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs flex-wrap gap-2">
                   <span className="font-bold text-slate-300 flex items-center gap-1.5">
-                    <Layers className="w-4 h-4 text-sky-400" /> Matrizes do Lote que Receberão D0 ({d0SelectedIds.length}/{lotAnimals.length})
+                    <Layers className="w-4 h-4 text-sky-400" /> Matrizes no D0 ({d0SelectedIds.length} manejadas de {lotAnimals.length})
                   </span>
                   <div className="flex items-center gap-2">
                     <button
@@ -961,8 +1017,8 @@ export default function BatchLotManagementModal({
                       className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-sky-300 font-bold text-[11px] transition-all cursor-pointer"
                     >
                       {filteredD0Animals.length > 0 && filteredD0Animals.every((la) => d0SelectedIds.includes(la.animal_id))
-                        ? 'Desmarcar Todas'
-                        : 'Marcar Todas'}
+                        ? 'Desmarcar Visíveis'
+                        : 'Marcar Todas Visíveis'}
                     </button>
                     <span className="text-slate-400 font-mono text-[11px]">Protocolo: {lot.protocol_name || 'IATF'}</span>
                   </div>
@@ -993,32 +1049,14 @@ export default function BatchLotManagementModal({
                   )}
                 </div>
 
-                <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-56 overflow-y-auto">
+                <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-60 overflow-y-auto">
                   <table className="w-full text-left text-xs text-slate-300">
                     <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0 z-10">
                       <tr>
-                        <th className="p-3 w-12 text-center">
-                          <input
-                            type="checkbox"
-                            checked={
-                              filteredD0Animals.length > 0 &&
-                              filteredD0Animals.every((la) => d0SelectedIds.includes(la.animal_id))
-                            }
-                            onChange={(e) => {
-                              const targetIds = filteredD0Animals.map((la) => la.animal_id);
-                              if (e.target.checked) {
-                                setD0SelectedIds((prev) => Array.from(new Set([...prev, ...targetIds])));
-                              } else {
-                                setD0SelectedIds((prev) => prev.filter((id) => !targetIds.includes(id)));
-                              }
-                            }}
-                            className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-sky-500 focus:ring-sky-500 cursor-pointer accent-sky-500"
-                            title="Marcar ou desmarcar todas as matrizes no D0"
-                          />
-                        </th>
+                        <th className="p-3 w-36 text-center">Status D0</th>
                         <th className="p-3">Brinco</th>
                         <th className="p-3">Categoria</th>
-                        <th className="p-3 text-center">Status D0</th>
+                        <th className="p-3 text-center">Ação no Tronco</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/80 font-mono">
@@ -1032,68 +1070,63 @@ export default function BatchLotManagementModal({
                         </tr>
                       ) : (
                         filteredD0Animals.map((la) => {
-                          const isChecked = d0SelectedIds.includes(la.animal_id);
-                          const alreadyDone = checkAnimalDoneInPhase(la.animal_id, 'D0');
+                          const isDone = d0SelectedIds.includes(la.animal_id);
+                          const toggleAnimal = () =>
+                            setD0SelectedIds((prev) =>
+                              prev.includes(la.animal_id)
+                                ? prev.filter((id) => id !== la.animal_id)
+                                : [...prev, la.animal_id]
+                            );
+
                           return (
                             <tr
                               key={la.id}
-                              onClick={() =>
-                                setD0SelectedIds((prev) =>
-                                  prev.includes(la.animal_id)
-                                    ? prev.filter((id) => id !== la.animal_id)
-                                    : [...prev, la.animal_id]
-                                )
-                              }
-                              className={`hover:bg-slate-900 transition-colors cursor-pointer border-l-4 ${
-                                alreadyDone
-                                  ? 'border-l-emerald-400 bg-emerald-950/25'
-                                  : 'border-l-amber-500/60'
-                              } ${!isChecked ? 'opacity-45 bg-slate-950/80' : ''}`}
+                              onClick={toggleAnimal}
+                              className={`transition-colors cursor-pointer border-l-4 ${
+                                isDone
+                                  ? 'border-l-emerald-400 bg-emerald-950/35 hover:bg-emerald-900/40'
+                                  : 'border-l-amber-500/70 bg-slate-900/75 hover:bg-slate-800/60'
+                              }`}
                             >
-                              <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
-                                <input
-                                  type="checkbox"
-                                  checked={isChecked}
-                                  onChange={(e) => {
-                                    const checked = e.target.checked;
-                                    setD0SelectedIds((prev) =>
-                                      checked
-                                        ? prev.includes(la.animal_id)
-                                          ? prev
-                                          : [...prev, la.animal_id]
-                                        : prev.filter((id) => id !== la.animal_id)
-                                    );
-                                  }}
-                                  className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-sky-500 focus:ring-sky-500 cursor-pointer accent-sky-500"
-                                />
-                              </td>
-                              <td className="p-3">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="font-bold text-white font-mono">{la.animals?.tag_number || 'S/N'}</span>
-                                  {alreadyDone ? (
-                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold font-sans">
-                                      <CheckCircle2 className="w-3 h-3" />
-                                      Já concluída no D0
-                                    </span>
-                                  ) : (
-                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/35 text-[10px] font-bold font-sans">
-                                      <Clock className="w-3 h-3" />
-                                      Pendente no D0
-                                    </span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="p-3 font-sans text-slate-400">{la.animals?.animal_categories?.name || 'Matriz'}</td>
-                              <td className="p-3 text-center font-sans">
-                                {isChecked ? (
-                                  <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px] font-bold">
-                                    Selecionada p/ D0
+                              <td className="p-3 text-center font-sans whitespace-nowrap">
+                                {isDone ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-black">
+                                    <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                                    Manejada no D0
                                   </span>
                                 ) : (
-                                  <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-bold">
-                                    Não selecionada
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/35 text-[10px] font-black">
+                                    <Clock className="w-3 h-3 text-amber-400" />
+                                    Pendente no D0
                                   </span>
                                 )}
+                              </td>
+                              <td className="p-3 font-bold text-white font-mono text-sm">
+                                {la.animals?.tag_number || 'S/N'}
+                              </td>
+                              <td className="p-3 font-sans text-slate-400">{la.animals?.animal_categories?.name || 'Matriz'}</td>
+                              <td className="p-3 text-center font-sans" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  onClick={toggleAnimal}
+                                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                                    isDone
+                                      ? 'bg-emerald-500/20 hover:bg-rose-500/20 text-emerald-300 hover:text-rose-200 border border-emerald-500/40 hover:border-rose-500/40'
+                                      : 'bg-sky-500 hover:bg-sky-400 text-slate-950 font-black shadow-sm'
+                                  }`}
+                                >
+                                  {isDone ? (
+                                    <>
+                                      <Check className="w-3.5 h-3.5 stroke-3" />
+                                      <span>Manejada (Desfazer)</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Syringe className="w-3.5 h-3.5" />
+                                      <span>Marcar D0</span>
+                                    </>
+                                  )}
+                                </button>
                               </td>
                             </tr>
                           );
@@ -1116,7 +1149,7 @@ export default function BatchLotManagementModal({
                 <div className="space-y-1">
                   <span className="font-bold text-sm text-amber-300 block">Etapa D9 - Retirada de Implante & Indução</span>
                   <p className="text-slate-300">
-                    Registro coletivo de retirada do dispositivo e aplicação hormonal (PGF2a + eCG + Cipionato). Se alguma matriz perdeu o implante, marque a caixa correspondente abaixo.
+                    Marque cada matriz conforme passa no tronco para retirada do dispositivo e aplicação hormonal (PGF2a + eCG + Cipionato). Caso alguma matriz tenha perdido o implante, sinalize na coluna correspondente.
                   </p>
                 </div>
               </div>
@@ -1149,11 +1182,11 @@ export default function BatchLotManagementModal({
                 </div>
               </div>
 
-              {/* Tabela de Matrizes com Checkbox e Marcação de Perda de Dispositivo */}
+              {/* Tabela de Matrizes D9 sem Checkboxes Confusos */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs flex-wrap gap-2">
                   <span className="font-bold text-slate-300">
-                    Conferência de Dispositivo das Matrizes ({d9SelectedIds.length}/{lotAnimals.length})
+                    Conferência de Dispositivo das Matrizes ({d9SelectedIds.length} manejadas de {lotAnimals.length})
                   </span>
                   <div className="flex items-center gap-2">
                     <button
@@ -1170,8 +1203,8 @@ export default function BatchLotManagementModal({
                       className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-bold text-[11px] transition-all cursor-pointer"
                     >
                       {filteredD9Animals.length > 0 && filteredD9Animals.every((la) => d9SelectedIds.includes(la.animal_id))
-                        ? 'Desmarcar Todas'
-                        : 'Marcar Todas'}
+                        ? 'Desmarcar Visíveis'
+                        : 'Marcar Todas Visíveis'}
                     </button>
                     <span className="text-[11px] text-amber-400">
                       {d9DeviceLossIds.length > 0 ? `${d9DeviceLossIds.length} perda(s) registrada(s)` : 'Nenhuma perda (100% retido)'}
@@ -1204,33 +1237,15 @@ export default function BatchLotManagementModal({
                   )}
                 </div>
 
-                <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-56 overflow-y-auto">
+                <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/60 max-h-60 overflow-y-auto">
                   <table className="w-full text-left text-xs text-slate-300">
                     <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0 z-10">
                       <tr>
-                        <th className="p-3 w-12 text-center">
-                          <input
-                            type="checkbox"
-                            checked={
-                              filteredD9Animals.length > 0 &&
-                              filteredD9Animals.every((la) => d9SelectedIds.includes(la.animal_id))
-                            }
-                            onChange={(e) => {
-                              const targetIds = filteredD9Animals.map((la) => la.animal_id);
-                              if (e.target.checked) {
-                                setD9SelectedIds((prev) => Array.from(new Set([...prev, ...targetIds])));
-                              } else {
-                                setD9SelectedIds((prev) => prev.filter((id) => !targetIds.includes(id)));
-                              }
-                            }}
-                            className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-amber-500 focus:ring-amber-500 cursor-pointer accent-amber-500"
-                            title="Marcar ou desmarcar todas as matrizes no D9"
-                          />
-                        </th>
+                        <th className="p-3 w-40 text-center">Status Retirada</th>
                         <th className="p-3">Brinco</th>
                         <th className="p-3">Categoria</th>
-                        <th className="p-3 text-center">Status Retirada</th>
                         <th className="p-3 text-center">Perda de Implante?</th>
+                        <th className="p-3 text-center">Ação no Tronco</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/80 font-mono">
@@ -1244,73 +1259,59 @@ export default function BatchLotManagementModal({
                         </tr>
                       ) : (
                         filteredD9Animals.map((la) => {
-                          const isChecked = d9SelectedIds.includes(la.animal_id);
+                          const isDone = d9SelectedIds.includes(la.animal_id);
                           const hasLoss = d9DeviceLossIds.includes(la.animal_id);
-                          const alreadyDone = checkAnimalDoneInPhase(la.animal_id, 'D9');
+                          const toggleAnimal = () =>
+                            setD9SelectedIds((prev) =>
+                              prev.includes(la.animal_id)
+                                ? prev.filter((id) => id !== la.animal_id)
+                                : [...prev, la.animal_id]
+                            );
+
                           return (
                             <tr
                               key={la.id}
-                              className={`hover:bg-slate-900 transition-colors border-l-4 ${
-                                alreadyDone
-                                  ? 'border-l-emerald-400 bg-emerald-950/25'
-                                  : 'border-l-amber-500/60'
-                              } ${!isChecked ? 'opacity-45 bg-slate-950/80' : ''}`}
+                              onClick={toggleAnimal}
+                              className={`transition-colors cursor-pointer border-l-4 ${
+                                isDone
+                                  ? hasLoss
+                                    ? 'border-l-rose-400 bg-rose-950/25 hover:bg-rose-900/30'
+                                    : 'border-l-emerald-400 bg-emerald-950/35 hover:bg-emerald-900/40'
+                                  : 'border-l-amber-500/70 bg-slate-900/75 hover:bg-slate-800/60'
+                              }`}
                             >
-                              <td className="p-3 text-center">
-                                <input
-                                  type="checkbox"
-                                  checked={isChecked}
-                                  onChange={(e) => {
-                                    const checked = e.target.checked;
-                                    setD9SelectedIds((prev) =>
-                                      checked
-                                        ? prev.includes(la.animal_id)
-                                          ? prev
-                                          : [...prev, la.animal_id]
-                                        : prev.filter((id) => id !== la.animal_id)
-                                    );
-                                  }}
-                                  className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-amber-500 focus:ring-amber-500 cursor-pointer accent-amber-500"
-                                />
-                              </td>
-                              <td className="p-3">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="font-bold text-white font-mono">{la.animals?.tag_number || 'S/N'}</span>
-                                  {alreadyDone ? (
-                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold font-sans">
-                                      <CheckCircle2 className="w-3 h-3" />
-                                      Já concluída na Retirada
-                                    </span>
-                                  ) : (
-                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/35 text-[10px] font-bold font-sans">
-                                      <Clock className="w-3 h-3" />
-                                      Pendente
-                                    </span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="p-3 font-sans text-slate-400">{la.animals?.animal_categories?.name || 'Matriz'}</td>
-                              <td className="p-3 text-center font-sans">
-                                {!isChecked ? (
-                                  <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-bold">
-                                    Não selecionada
+                              <td className="p-3 text-center font-sans whitespace-nowrap">
+                                {!isDone ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/35 text-[10px] font-black">
+                                    <Clock className="w-3 h-3 text-amber-400" />
+                                    Pendente
                                   </span>
                                 ) : hasLoss ? (
-                                  <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-bold">
-                                    Interrompido (Perda)
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[10px] font-black">
+                                    <AlertTriangle className="w-3 h-3 text-rose-400" />
+                                    Perda de Implante
                                   </span>
                                 ) : (
-                                  <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-black">
+                                    <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                                     Retirado & Hormonizado
                                   </span>
                                 )}
                               </td>
-                              <td className="p-3 text-center">
+                              <td className="p-3 font-bold text-white font-mono text-sm">
+                                {la.animals?.tag_number || 'S/N'}
+                              </td>
+                              <td className="p-3 font-sans text-slate-400">{la.animals?.animal_categories?.name || 'Matriz'}</td>
+                              <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
                                 <button
                                   type="button"
-                                  disabled={!isChecked}
-                                  onClick={() => handleToggleDeviceLoss(la.animal_id)}
-                                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 disabled:opacity-40 ${
+                                  onClick={() => {
+                                    if (!d9SelectedIds.includes(la.animal_id)) {
+                                      setD9SelectedIds((prev) => [...prev, la.animal_id]);
+                                    }
+                                    handleToggleDeviceLoss(la.animal_id);
+                                  }}
+                                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
                                     hasLoss
                                       ? 'bg-rose-500 text-white font-extrabold shadow-sm shadow-rose-500/40'
                                       : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'
@@ -1323,6 +1324,29 @@ export default function BatchLotManagementModal({
                                   ) : (
                                     <>
                                       <Check className="w-3.5 h-3.5" /> Não (Normal)
+                                    </>
+                                  )}
+                                </button>
+                              </td>
+                              <td className="p-3 text-center font-sans" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  onClick={toggleAnimal}
+                                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                                    isDone
+                                      ? 'bg-emerald-500/20 hover:bg-rose-500/20 text-emerald-300 hover:text-rose-200 border border-emerald-500/40 hover:border-rose-500/40'
+                                      : 'bg-amber-400 hover:bg-amber-300 text-slate-950 font-black shadow-sm'
+                                  }`}
+                                >
+                                  {isDone ? (
+                                    <>
+                                      <Check className="w-3.5 h-3.5 stroke-3" />
+                                      <span>Manejada (Desfazer)</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <CheckCircle2 className="w-3.5 h-3.5" />
+                                      <span>Marcar Retirada</span>
                                     </>
                                   )}
                                 </button>
