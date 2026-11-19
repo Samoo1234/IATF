@@ -147,6 +147,8 @@ export default function BatchLotManagementModal({
   const [dgResponsible, setDgResponsible] = useState(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
   const [dgNotes, setDgNotes] = useState('');
   const [dgSearchQuery, setDgSearchQuery] = useState('');
+  const [dgFilterTab, setDgFilterTab] = useState<'all' | 'pending' | 'diagnosed'>('all');
+  const [savedDgRowsMap, setSavedDgRowsMap] = useState<Record<string, boolean>>({});
 
   // Row by row DG
   const [dgRows, setDgRows] = useState<
@@ -155,10 +157,9 @@ export default function BatchLotManagementModal({
       lot_animal_id: string;
       tag_number: string;
       category_name: string;
-      pregnancy_status: 'prenha' | 'vazia' | 'inconclusivo';
+      pregnancy_status: 'prenha' | 'vazia' | 'pendente';
       ecc_dg: string;
       notes: string;
-      checked: boolean;
     }[]
   >([]);
 
@@ -215,23 +216,28 @@ export default function BatchLotManagementModal({
     setIaSearchQuery('');
     setIaFilterTab('all');
 
-    // Initialize DG rows
+    // Initialize DG rows: quem já tem diagnóstico no banco entra com status salvo; demais iniciam como 'pendente'
+    const initialSavedDg: Record<string, boolean> = {};
     setDgRows(
-      lotAnimals.map((la) => ({
-        animal_id: la.animal_id,
-        lot_animal_id: la.id,
-        tag_number: la.animals?.tag_number || 'S/N',
-        category_name: la.animals?.animal_categories?.name || 'Matriz',
-        pregnancy_status:
-          la.pregnancy_status === 'prenha' || la.pregnancy_status === 'vazia'
-            ? la.pregnancy_status
-            : 'prenha', // Default suggestion
-        ecc_dg: la.ecc_dg ? la.ecc_dg.toFixed(2) : '3.00',
-        notes: la.notes || '',
-        checked: true,
-      }))
+      lotAnimals.map((la) => {
+        const hasDgRecorded = la.pregnancy_status === 'prenha' || la.pregnancy_status === 'vazia';
+        if (hasDgRecorded) {
+          initialSavedDg[la.animal_id] = true;
+        }
+        return {
+          animal_id: la.animal_id,
+          lot_animal_id: la.id,
+          tag_number: la.animals?.tag_number || 'S/N',
+          category_name: la.animals?.animal_categories?.name || 'Matriz',
+          pregnancy_status: hasDgRecorded ? (la.pregnancy_status as 'prenha' | 'vazia') : 'pendente',
+          ecc_dg: la.ecc_dg ? la.ecc_dg.toFixed(2) : '3.00',
+          notes: la.notes || '',
+        };
+      })
     );
+    setSavedDgRowsMap(initialSavedDg);
     setDgSearchQuery('');
+    setDgFilterTab('all');
 
     // Load Bulls & Semen Batches
     async function loadAux() {
@@ -451,40 +457,39 @@ export default function BatchLotManagementModal({
   // Atualizar linha de DG pelo ID único do animal (blindado contra filtros e buscas)
   const updateDgRow = (animalId: string, updates: Partial<(typeof dgRows)[number]>) => {
     setHasUnsavedChanges(true);
-    setSavedRowsMap((prev) => ({ ...prev, [animalId]: false }));
+    setSavedDgRowsMap((prev) => ({ ...prev, [animalId]: false }));
     setDgRows((prev) =>
       prev.map((row) => (row.animal_id === animalId ? { ...row, ...updates } : row))
     );
   };
 
-  // Linhas filtradas pela busca rápida de matrizes
+  // Linhas filtradas pela aba de status (Todas / Pendentes / Diagnosticadas) e busca rápida
   const filteredDgRows = useMemo(() => {
-    if (!dgSearchQuery.trim()) return dgRows;
+    let rows = dgRows;
+    if (dgFilterTab === 'pending') {
+      rows = rows.filter((r) => r.pregnancy_status === 'pendente');
+    } else if (dgFilterTab === 'diagnosed') {
+      rows = rows.filter((r) => r.pregnancy_status === 'prenha' || r.pregnancy_status === 'vazia');
+    }
+
+    if (!dgSearchQuery.trim()) return rows;
     const q = dgSearchQuery.trim().toLowerCase();
-    return dgRows.filter(
+    return rows.filter(
       (r) =>
         r.tag_number.toLowerCase().includes(q) ||
         r.category_name.toLowerCase().includes(q) ||
         (r.notes && r.notes.toLowerCase().includes(q))
     );
-  }, [dgRows, dgSearchQuery]);
+  }, [dgRows, dgFilterTab, dgSearchQuery]);
 
   // DG Bulk Actions
-  const handleSetAllDgStatus = (status: 'prenha' | 'vazia') => {
-    if (dgSearchQuery.trim()) {
-      // Se houver busca ativa, altera apenas as matrizes visíveis filtradas
-      const targetIds = new Set(filteredDgRows.map((r) => r.animal_id));
-      setDgRows((prev) =>
-        prev.map((r) => (targetIds.has(r.animal_id) ? { ...r, pregnancy_status: status } : r))
-      );
-    } else {
-      setDgRows((prev) =>
-        prev.map((r) => ({
-          ...r,
-          pregnancy_status: status,
-        }))
-      );
-    }
+  const handleSetAllDgStatus = (status: 'prenha' | 'vazia' | 'pendente') => {
+    setHasUnsavedChanges(true);
+    const targetIds = new Set(filteredDgRows.map((r) => r.animal_id));
+    const hasFilter = Boolean(dgSearchQuery.trim() || dgFilterTab !== 'all');
+    setDgRows((prev) =>
+      prev.map((r) => (!hasFilter || targetIds.has(r.animal_id) ? { ...r, pregnancy_status: status } : r))
+    );
   };
 
   // Expected parturition preview for DG
@@ -574,13 +579,18 @@ export default function BatchLotManagementModal({
       return;
     }
 
+    if (row.pregnancy_status !== 'prenha' && row.pregnancy_status !== 'vazia') {
+      setErrorMsg(`Selecione "Prenha" ou "Vazia" para a matriz ${row.tag_number} antes de salvar.`);
+      return;
+    }
+
     setSavingRowId(animalId);
     setErrorMsg(null);
     try {
       const item = {
         animal_id: row.animal_id,
         lot_animal_id: row.lot_animal_id,
-        pregnancy_status: row.pregnancy_status,
+        pregnancy_status: row.pregnancy_status as 'prenha' | 'vazia',
         ecc_dg: row.ecc_dg ? parseFloat(row.ecc_dg) : null,
         notes: row.notes?.trim() || null,
       };
@@ -596,7 +606,7 @@ export default function BatchLotManagementModal({
       if (!res.success) {
         setErrorMsg(res.error || `Erro ao salvar DG da matriz ${row.tag_number}.`);
       } else {
-        setSavedRowsMap((prev) => ({ ...prev, [animalId]: true }));
+        setSavedDgRowsMap((prev) => ({ ...prev, [animalId]: true }));
         const statusLabel = row.pregnancy_status === 'prenha' ? 'Prenha' : 'Vazia';
         setRowSuccessMsg(`DG da matriz ${row.tag_number} (${statusLabel}) salvo com sucesso!`);
         setTimeout(() => setRowSuccessMsg(null), 3500);
@@ -702,15 +712,23 @@ export default function BatchLotManagementModal({
           return;
         }
 
-        const items = dgRows
-          .filter((r) => r.checked)
-          .map((r) => ({
-            animal_id: r.animal_id,
-            lot_animal_id: r.lot_animal_id,
-            pregnancy_status: r.pregnancy_status,
-            ecc_dg: r.ecc_dg ? parseFloat(r.ecc_dg) : null,
-            notes: r.notes?.trim() || null,
-          }));
+        const diagnosedRows = dgRows.filter(
+          (r) => r.pregnancy_status === 'prenha' || r.pregnancy_status === 'vazia'
+        );
+
+        if (diagnosedRows.length === 0) {
+          setErrorMsg('Marque "Prenha" ou "Vazia" em pelo menos uma matriz examinada antes de salvar.');
+          setSubmitting(false);
+          return;
+        }
+
+        const items = diagnosedRows.map((r) => ({
+          animal_id: r.animal_id,
+          lot_animal_id: r.lot_animal_id,
+          pregnancy_status: r.pregnancy_status as 'prenha' | 'vazia',
+          ecc_dg: r.ecc_dg ? parseFloat(r.ecc_dg) : null,
+          notes: r.notes?.trim() || null,
+        }));
 
         const res = await executeBatchLotManagementDG({
           lotId: lot.id,
@@ -766,9 +784,10 @@ export default function BatchLotManagementModal({
     const total = dgRows.length;
     const pregnant = dgRows.filter((r) => r.pregnancy_status === 'prenha').length;
     const empty = dgRows.filter((r) => r.pregnancy_status === 'vazia').length;
-    const pending = total - pregnant - empty;
-    const rate = total > 0 ? ((pregnant / total) * 100).toFixed(1) : '0.0';
-    return { total, pregnant, empty, pending, rate };
+    const diagnosed = pregnant + empty;
+    const pending = total - diagnosed;
+    const rate = diagnosed > 0 ? ((pregnant / diagnosed) * 100).toFixed(1) : '0.0';
+    return { total, pregnant, empty, diagnosed, pending, rate };
   }, [dgRows]);
 
   if (!isOpen) return null;
@@ -1869,19 +1888,22 @@ export default function BatchLotManagementModal({
 
               {/* Placar de Diagnóstico & Ações Rápidas em Massa */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 p-3 rounded-2xl border border-slate-800">
-                <div className="flex items-center gap-3 text-xs font-bold">
+                <div className="flex items-center gap-2 sm:gap-3 text-xs font-bold flex-wrap">
                   <span className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
                     PRENHAS: {dgStats.pregnant}
                   </span>
-                  <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 border border-slate-700">
+                  <span className="px-2.5 py-1 rounded-lg bg-rose-500/15 text-rose-300 border border-rose-500/30">
                     VAZIAS: {dgStats.empty}
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                    PENDENTES: {dgStats.pending}
                   </span>
                   <span className="px-2.5 py-1 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/30">
                     TAXA PRENHEZ: {dgStats.rate}%
                   </span>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
                     onClick={() => handleSetAllDgStatus('prenha')}
@@ -1896,6 +1918,16 @@ export default function BatchLotManagementModal({
                   >
                     Marcar Todas Vazias
                   </button>
+                  {dgStats.diagnosed > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleSetAllDgStatus('pendente')}
+                      className="px-2.5 py-1 text-xs font-bold bg-slate-900 text-slate-400 hover:text-amber-300 hover:border-amber-500/40 border border-slate-800 rounded-lg transition-all cursor-pointer"
+                      title="Limpar seleção para Pendente"
+                    >
+                      Limpar p/ Pendente
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1910,6 +1942,45 @@ export default function BatchLotManagementModal({
                   </div>
                 </div>
               )}
+
+              {/* Abas de Filtro DG (Todas / Pendentes / Diagnosticadas) */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setDgFilterTab('all')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                    dgFilterTab === 'all'
+                      ? 'bg-slate-800 text-white border-slate-600'
+                      : 'bg-slate-900/70 text-slate-400 border-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  Todas ({dgStats.total})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDgFilterTab('pending')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border inline-flex items-center gap-1.5 ${
+                    dgFilterTab === 'pending'
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-400/60'
+                      : 'bg-slate-900/70 text-slate-400 border-slate-800 hover:text-amber-300'
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Pendentes ({dgStats.pending})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDgFilterTab('diagnosed')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border inline-flex items-center gap-1.5 ${
+                    dgFilterTab === 'diagnosed'
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/60'
+                      : 'bg-slate-900/70 text-slate-400 border-slate-800 hover:text-emerald-300'
+                  }`}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Diagnosticadas ({dgStats.diagnosed})</span>
+                </button>
+              </div>
 
               {/* Barra de Busca da Matriz */}
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-950 p-3 rounded-2xl border border-slate-800">
@@ -1945,10 +2016,13 @@ export default function BatchLotManagementModal({
                       </span>
                     )}
                   </span>
-                  {dgSearchQuery && (
+                  {(dgSearchQuery || dgFilterTab !== 'all') && (
                     <button
                       type="button"
-                      onClick={() => setDgSearchQuery('')}
+                      onClick={() => {
+                        setDgSearchQuery('');
+                        setDgFilterTab('all');
+                      }}
                       className="text-[11px] text-purple-400 hover:text-purple-300 font-bold underline cursor-pointer ml-1"
                     >
                       Ver todas
@@ -1970,21 +2044,7 @@ export default function BatchLotManagementModal({
                 <table className="w-full text-left text-xs text-slate-300">
                   <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0 z-10">
                     <tr>
-                      <th className="p-3 w-10 text-center">
-                        <input
-                          type="checkbox"
-                          checked={filteredDgRows.length > 0 && filteredDgRows.every((r) => r.checked)}
-                          onChange={(e) => {
-                            const checked = e.target.checked;
-                            const targetIds = new Set(filteredDgRows.map((r) => r.animal_id));
-                            setDgRows((prev) =>
-                              prev.map((r) => (targetIds.has(r.animal_id) ? { ...r, checked } : r))
-                            );
-                          }}
-                          className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-purple-500 focus:ring-purple-500 cursor-pointer accent-purple-500"
-                          title="Marcar ou desmarcar todas as matrizes no DG"
-                        />
-                      </th>
+                      <th className="p-3 text-center w-28">Status DG</th>
                       <th className="p-3">Brinco</th>
                       <th className="p-3">Categoria</th>
                       <th className="p-3 text-center">Diagnóstico</th>
@@ -1998,23 +2058,37 @@ export default function BatchLotManagementModal({
                     {filteredDgRows.length === 0 ? (
                       <tr>
                         <td colSpan={8} className="p-6 text-center text-slate-400 font-sans">
-                          Nenhuma matriz encontrada com o termo &quot;{dgSearchQuery}&quot;.
+                          {dgSearchQuery
+                            ? `Nenhuma matriz encontrada com o termo "${dgSearchQuery}".`
+                            : dgFilterTab === 'pending'
+                            ? 'Nenhuma matriz pendente de diagnóstico neste lote!'
+                            : 'Nenhuma matriz diagnosticada ainda neste lote.'}
                         </td>
                       </tr>
                     ) : (
-                      filteredDgRows.map((row) => (
+                      filteredDgRows.map((row) => {
+                        const isDiagnosed = row.pregnancy_status === 'prenha' || row.pregnancy_status === 'vazia';
+                        return (
                         <tr
                           key={row.animal_id}
-                          className={`hover:bg-slate-900 transition-colors ${!row.checked ? 'opacity-40 bg-slate-950/80' : ''}`}
+                          className={`transition-colors border-l-4 ${
+                            isDiagnosed
+                              ? 'bg-emerald-950/25 hover:bg-emerald-900/30 border-l-emerald-400'
+                              : 'hover:bg-slate-900 border-l-amber-500/60'
+                          }`}
                         >
-                          <td className="p-3 text-center">
-                            <input
-                              type="checkbox"
-                              checked={row.checked}
-                              onChange={(e) => updateDgRow(row.animal_id, { checked: e.target.checked })}
-                              className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-purple-500 focus:ring-purple-500 cursor-pointer accent-purple-500"
-                              title={row.checked ? 'Desmarcar esta matriz do DG' : 'Dar check para registrar DG nesta matriz'}
-                            />
+                          <td className="p-3 text-center font-sans whitespace-nowrap">
+                            {isDiagnosed ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                                Diagnosticada
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                <Clock className="w-3 h-3 text-amber-400" />
+                                Pendente
+                              </span>
+                            )}
                           </td>
                           <td className="p-3 font-bold text-white whitespace-nowrap">{row.tag_number}</td>
                           <td className="p-3 text-slate-400 font-sans whitespace-nowrap">{row.category_name}</td>
@@ -2022,24 +2096,40 @@ export default function BatchLotManagementModal({
                             <div className="inline-flex items-center p-0.5 rounded-lg bg-slate-900 border border-slate-800 gap-1 font-sans">
                               <button
                                 type="button"
-                                disabled={!row.checked}
-                                onClick={() => updateDgRow(row.animal_id, { pregnancy_status: 'prenha' })}
-                                className={`px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer disabled:opacity-40 ${
+                                onClick={() =>
+                                  updateDgRow(row.animal_id, {
+                                    pregnancy_status: row.pregnancy_status === 'prenha' ? 'pendente' : 'prenha',
+                                  })
+                                }
+                                title={
+                                  row.pregnancy_status === 'prenha'
+                                    ? 'Clique novamente para voltar para Pendente'
+                                    : 'Marcar como Prenha'
+                                }
+                                className={`px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
                                   row.pregnancy_status === 'prenha'
                                     ? 'bg-emerald-500 text-slate-950 font-black shadow-sm'
-                                    : 'text-slate-400 hover:text-white'
+                                    : 'text-slate-400 hover:text-emerald-300'
                                 }`}
                               >
                                 Prenha
                               </button>
                               <button
                                 type="button"
-                                disabled={!row.checked}
-                                onClick={() => updateDgRow(row.animal_id, { pregnancy_status: 'vazia' })}
-                                className={`px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer disabled:opacity-40 ${
+                                onClick={() =>
+                                  updateDgRow(row.animal_id, {
+                                    pregnancy_status: row.pregnancy_status === 'vazia' ? 'pendente' : 'vazia',
+                                  })
+                                }
+                                title={
+                                  row.pregnancy_status === 'vazia'
+                                    ? 'Clique novamente para voltar para Pendente'
+                                    : 'Marcar como Vazia'
+                                }
+                                className={`px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
                                   row.pregnancy_status === 'vazia'
                                     ? 'bg-rose-500 text-white font-black shadow-sm'
-                                    : 'text-slate-400 hover:text-white'
+                                    : 'text-slate-400 hover:text-rose-300'
                                 }`}
                               >
                                 Vazia
@@ -2049,11 +2139,10 @@ export default function BatchLotManagementModal({
                           <td className="p-3 min-w-[200px]">
                             <input
                               type="text"
-                              disabled={!row.checked}
                               placeholder="Ex: 35 dias, CL D, reavaliar..."
                               value={row.notes || ''}
                               onChange={(e) => updateDgRow(row.animal_id, { notes: e.target.value })}
-                              className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-purple-500 font-sans disabled:opacity-40"
+                              className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-purple-500 font-sans"
                             />
                           </td>
                           <td className="p-3 text-center whitespace-nowrap">
@@ -2062,33 +2151,36 @@ export default function BatchLotManagementModal({
                               step="0.25"
                               min="1"
                               max="5"
-                              disabled={!row.checked}
                               value={row.ecc_dg}
                               onChange={(e) => updateDgRow(row.animal_id, { ecc_dg: e.target.value })}
-                              className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono text-center focus:outline-none focus:border-purple-500 disabled:opacity-40"
+                              className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono text-center focus:outline-none focus:border-purple-500"
                             />
                           </td>
                           <td className="p-3 text-center text-emerald-400 font-mono font-bold text-xs whitespace-nowrap">
-                            {row.checked ? getExpectedParturitionDate(row.pregnancy_status) : '-'}
+                            {getExpectedParturitionDate(row.pregnancy_status)}
                           </td>
                           <td className="p-3 text-center whitespace-nowrap font-sans">
                             <button
                               type="button"
-                              disabled={!row.checked || savingRowId === row.animal_id}
+                              disabled={!isDiagnosed || savingRowId === row.animal_id}
                               onClick={() => handleSaveSingleDgRow(row.animal_id)}
                               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm ${
-                                savedRowsMap[row.animal_id]
+                                savedDgRowsMap[row.animal_id]
                                   ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40 hover:bg-purple-500/30'
                                   : 'bg-purple-600 hover:bg-purple-500 text-white hover:shadow-purple-900/30'
                               } disabled:opacity-40`}
-                              title="Salvar imediatamente o diagnóstico desta matriz"
+                              title={
+                                isDiagnosed
+                                  ? 'Salvar imediatamente o diagnóstico desta matriz'
+                                  : 'Selecione Prenha ou Vazia primeiro'
+                              }
                             >
                               {savingRowId === row.animal_id ? (
                                 <>
                                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                   <span>Salvando...</span>
                                 </>
-                              ) : savedRowsMap[row.animal_id] ? (
+                              ) : savedDgRowsMap[row.animal_id] ? (
                                 <>
                                   <Check className="w-3.5 h-3.5 text-purple-400" />
                                   <span>Salvo!</span>
@@ -2102,7 +2194,8 @@ export default function BatchLotManagementModal({
                             </button>
                           </td>
                         </tr>
-                      ))
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
