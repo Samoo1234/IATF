@@ -9618,7 +9618,7 @@ export async function executeBatchLotManagementDG(params: {
 // CHECKBOXES RÁPIDOS DE ETAPAS POR MATRIZ NO LOTE (D0, D7/D8/D9, IA, DG)
 // ============================================================
 
-const LOT_STEP_CHECKS_KEY_PREFIX = 'iatf_lot_step_checks_';
+const LOT_STEP_CHECKS_KEY_PREFIX = 'iatf_lot_step_checks_v2_';
 
 export function readLocalLotStepChecks(lotId: string): Record<string, Record<string, boolean>> {
   if (typeof window === 'undefined') return {};
@@ -9643,8 +9643,12 @@ export function saveLocalLotStepChecks(
     for (const animalId of animalIds) {
       if (!current[animalId]) current[animalId] = {};
       current[animalId][upperStep] = checked;
-      if (upperStep === 'D7' || upperStep === 'D8' || upperStep === 'D9') {
+      if (upperStep === 'D8' || upperStep === 'D9') {
+        current[animalId]['D8'] = checked;
         current[animalId]['D9'] = checked;
+      } else if (upperStep === 'DG' || upperStep === 'DG1') {
+        current[animalId]['DG'] = checked;
+        current[animalId]['DG1'] = checked;
       }
     }
     localStorage.setItem(`${LOT_STEP_CHECKS_KEY_PREFIX}${lotId}`, JSON.stringify(current));
@@ -9654,30 +9658,114 @@ export function saveLocalLotStepChecks(
   }
 }
 
+async function ensureLotAnimalManagementsOnline(
+  supabase: ReturnType<typeof createClient>,
+  lotId: string,
+  animalIds: string[],
+  fallbackExecDate: string
+) {
+  if (animalIds.length === 0) return;
+  const { data: existing } = await supabase
+    .from('animal_managements')
+    .select('animal_id')
+    .eq('lot_id', lotId)
+    .in('animal_id', animalIds);
+
+  const existingSet = new Set((existing || []).map((m: { animal_id: string }) => m.animal_id));
+  const missingIds = animalIds.filter((id) => !existingSet.has(id));
+  if (missingIds.length === 0) return;
+
+  const { data: lot } = await supabase
+    .from('iatf_lots')
+    .select('organization_id, farm_id, season_id, protocol_id, start_date, ia_planned_date, dg_planned_date')
+    .eq('id', lotId)
+    .maybeSingle();
+  if (!lot) return;
+
+  const todayIso = new Date().toISOString();
+  const baseStart = lot.start_date || fallbackExecDate;
+  const rows = missingIds.map((animalId) => ({
+    organization_id: lot.organization_id,
+    farm_id: lot.farm_id,
+    animal_id: animalId,
+    season_id: lot.season_id || null,
+    protocol_id: lot.protocol_id || null,
+    lot_id: lotId,
+    cycle_number: 1,
+    start_date: baseStart,
+    d9_date: addDaysToDateString(baseStart, 9),
+    ia_date: lot.ia_planned_date || addDaysToDateString(baseStart, 11),
+    dg_date: lot.dg_planned_date || addDaysToDateString(baseStart, 41),
+    status: 'em_andamento',
+    pregnancy_status: 'pendente',
+    created_at: todayIso,
+    updated_at: todayIso,
+  }));
+
+  await supabase.from('animal_managements').insert(rows);
+}
+
+async function upsertOfflineLotAnimalMgmtStep(
+  lotId: string,
+  lot: import('./offline/offlineDb').OfflineLot | undefined,
+  orgId: string,
+  animalId: string,
+  fields: Record<string, unknown>,
+  execDate: string
+) {
+  const todayIso = new Date().toISOString();
+  const mgmts = await offlineDb.animal_managements.where('animal_id').equals(animalId).toArray();
+  const existing = mgmts.find((m) => m.lot_id === lotId);
+  if (existing) {
+    await offlineDb.animal_managements.update(existing.id, {
+      ...fields,
+      updated_at: todayIso,
+    });
+    await syncEngine.enqueueMutation('update', 'animal_managements', existing.id, lot?.farm_id, {
+      id: existing.id,
+      ...fields,
+      updated_at: todayIso,
+    }, orgId);
+    return;
+  }
+
+  const newId = crypto.randomUUID();
+  const baseStart = (lot?.start_date as string) || execDate;
+  const record = {
+    id: newId,
+    organization_id: orgId,
+    lot_id: lotId,
+    animal_id: animalId,
+    farm_id: lot?.farm_id || '',
+    protocol_id: lot?.protocol_id || '',
+    season_id: lot?.season_id || null,
+    step_code: 'D0',
+    date: baseStart,
+    start_date: baseStart,
+    d9_date: addDaysToDateString(baseStart, 9),
+    ia_date: (lot?.ia_planned_date as string) || addDaysToDateString(baseStart, 11),
+    dg_date: (lot?.dg_planned_date as string) || addDaysToDateString(baseStart, 41),
+    status: 'em_andamento',
+    pregnancy_status: 'pendente',
+    created_at: todayIso,
+    updated_at: todayIso,
+    ...fields,
+  };
+  await offlineDb.animal_managements.put(record as unknown as import('./offline/offlineDb').OfflineManagementRecord);
+  await syncEngine.enqueueMutation('insert', 'animal_managements', newId, lot?.farm_id, record, orgId);
+}
+
 export async function getLotAnimalStepChecks(
   lotId: string,
-  lotAnimals?: LotAnimal[],
-  events?: ManagementEvent[]
+  lotAnimals?: LotAnimal[]
 ): Promise<Record<string, Record<string, boolean>>> {
   const localMap = readLocalLotStepChecks(lotId);
-  const result: Record<string, Record<string, boolean>> = { ...localMap };
-
-  const ensureAnimal = (animalId: string) => {
-    if (!result[animalId]) result[animalId] = {};
-    return result[animalId];
-  };
+  const result: Record<string, Record<string, boolean>> = {};
 
   try {
     const animalsList = lotAnimals || (await getLotAnimals(lotId));
-    const lotEvents = (events || (await getManagementEvents(false))).filter((e) => e.lot_id === lotId);
-
-    const completedStepCodes = new Set(
-      lotEvents
-        .filter((e) => e.status === 'concluido' || e.status === 'realizado')
-        .map((e) => (e.step_code || '').toUpperCase())
-    );
-
     const mgmtsByAnimal = new Map<string, Record<string, unknown>>();
+
     if (isSystemOffline()) {
       const allMgmts = await offlineDb.animal_managements.toArray();
       for (const m of allMgmts) {
@@ -9706,55 +9794,64 @@ export async function getLotAnimalStepChecks(
     }
 
     for (const la of animalsList) {
-      const animalChecks = ensureAnimal(la.animal_id);
+      const localAnimal = localMap[la.animal_id] || {};
       const mgmt = mgmtsByAnimal.get(la.animal_id);
       const rawLa = la as unknown as Record<string, unknown>;
 
-      // D0
-      if (animalChecks['D0'] === undefined) {
-        animalChecks['D0'] = Boolean(
-          mgmt?.d0_executed_at ||
-          completedStepCodes.has('D0')
-        );
-      }
+      // D0: avaliação estritamente individual (nunca inferida pelo status do evento coletivo)
+      const d0Checked =
+        mgmt && mgmt.d0_executed_at !== undefined
+          ? Boolean(mgmt.d0_executed_at)
+          : Boolean(localAnimal['D0']);
 
-      // D7 / D8 / D9
-      const d9Done = Boolean(
-        (mgmt?.d9_executed_at && !mgmt?.d9_device_loss) ||
-        completedStepCodes.has('D9') ||
-        completedStepCodes.has('D8') ||
-        completedStepCodes.has('D7')
+      // D7: mantido independente para protocolos de 4 manejos
+      const d7Checked =
+        mgmt && mgmt.d7_executed_at !== undefined
+          ? Boolean(mgmt.d7_executed_at)
+          : Boolean(localAnimal['D7']);
+
+      // D8 / D9: avaliação estritamente individual
+      const d9Checked =
+        mgmt && mgmt.d9_executed_at !== undefined
+          ? Boolean(mgmt.d9_executed_at && !mgmt.d9_device_loss)
+          : Boolean(localAnimal['D8'] ?? localAnimal['D9']);
+
+      // IA: verifica registro individual no banco (data de IA, touro, partida, inseminador ou status)
+      const hasDbIa = Boolean(
+        mgmt?.ia_executed_at ||
+        la.bulls?.name ||
+        rawLa.bull_id ||
+        la.semen_batches?.batch_number ||
+        rawLa.semen_batch_id
       );
-      for (const code of ['D7', 'D8', 'D9']) {
-        if (animalChecks[code] === undefined) {
-          animalChecks[code] = d9Done;
-        }
-      }
+      const iaChecked =
+        localAnimal['IA'] !== undefined
+          ? Boolean(localAnimal['IA'] || hasDbIa)
+          : hasDbIa;
 
-      // IA
-      if (animalChecks['IA'] === undefined) {
-        animalChecks['IA'] = Boolean(
-          mgmt?.ia_executed_at ||
-          la.bulls?.name ||
-          rawLa.bull_id ||
-          la.inseminator_name ||
-          la.ecc_ia != null ||
-          la.animals?.reproductive_status === 'inseminada' ||
-          la.animals?.reproductive_status === 'prenha' ||
-          completedStepCodes.has('IA')
-        );
-      }
+      // DG / DG1: avaliação estritamente individual
+      const hasDbDg = Boolean(
+        mgmt?.dg_executed_at ||
+        la.pregnancy_status === 'prenha' ||
+        la.pregnancy_status === 'vazia'
+      );
+      const dgChecked =
+        mgmt && mgmt.dg_executed_at !== undefined
+          ? hasDbDg
+          : localAnimal['DG'] !== undefined
+          ? Boolean(localAnimal['DG'])
+          : hasDbDg;
 
-      // DG
-      if (animalChecks['DG'] === undefined) {
-        animalChecks['DG'] = Boolean(
-          mgmt?.dg_executed_at ||
-          la.pregnancy_status === 'prenha' ||
-          la.pregnancy_status === 'vazia' ||
-          completedStepCodes.has('DG') ||
-          completedStepCodes.has('DG1')
-        );
-      }
+      result[la.animal_id] = {
+        ...localAnimal,
+        D0: d0Checked,
+        D7: d7Checked,
+        D8: d9Checked,
+        D9: d9Checked,
+        IA: iaChecked,
+        DG: dgChecked,
+        DG1: dgChecked,
+      };
     }
 
     if (typeof window !== 'undefined') {
@@ -9762,6 +9859,7 @@ export async function getLotAnimalStepChecks(
     }
   } catch (e) {
     console.warn('getLotAnimalStepChecks error:', e);
+    return { ...localMap };
   }
 
   return result;
@@ -9796,6 +9894,10 @@ export async function toggleLotAnimalStepCheck(params: {
     if (isOffline) {
       const lot = await offlineDb.lots.get(params.lotId);
       const baseIaDate = (lot?.ia_planned_date as string | undefined) || execDate;
+      const orgId =
+        lot?.organization_id ||
+        (typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null) ||
+        'local-org';
 
       for (const animalId of params.animalIds) {
         const la = await offlineDb.lot_animals
@@ -9805,11 +9907,55 @@ export async function toggleLotAnimalStepCheck(params: {
           .first();
 
         if (upperStep === 'D0') {
+          await upsertOfflineLotAnimalMgmtStep(
+            params.lotId,
+            lot,
+            String(orgId),
+            animalId,
+            {
+              d0_executed_at: params.checked ? execDate : null,
+              ...(params.checked && params.responsibleName ? { d0_responsible: params.responsibleName } : {}),
+            },
+            execDate
+          );
           await offlineDb.animals.update(animalId, {
             reproductive_status: params.checked ? 'em_protocolo' : 'vazia',
             updated_at: todayIso,
           });
+        } else if (upperStep === 'D7') {
+          await upsertOfflineLotAnimalMgmtStep(
+            params.lotId,
+            lot,
+            String(orgId),
+            animalId,
+            { d7_executed_at: params.checked ? execDate : null },
+            execDate
+          );
+        } else if (upperStep === 'D8' || upperStep === 'D9') {
+          await upsertOfflineLotAnimalMgmtStep(
+            params.lotId,
+            lot,
+            String(orgId),
+            animalId,
+            {
+              d9_executed_at: params.checked ? execDate : null,
+              d9_device_loss: false,
+              ...(params.checked && params.responsibleName ? { d9_responsible: params.responsibleName } : {}),
+            },
+            execDate
+          );
         } else if (upperStep === 'IA') {
+          await upsertOfflineLotAnimalMgmtStep(
+            params.lotId,
+            lot,
+            String(orgId),
+            animalId,
+            {
+              ia_executed_at: params.checked ? execDate : null,
+              ...(params.checked && params.responsibleName ? { inseminator_name: params.responsibleName } : {}),
+            },
+            execDate
+          );
           await offlineDb.animals.update(animalId, {
             reproductive_status: params.checked ? 'inseminada' : 'em_protocolo',
             updated_at: todayIso,
@@ -9823,6 +9969,19 @@ export async function toggleLotAnimalStepCheck(params: {
         } else if (upperStep === 'DG' || upperStep === 'DG1') {
           const newPregStatus = params.checked ? 'prenha' : 'pendente';
           const expectedParturition = params.checked ? addDaysToDateString(baseIaDate, 295) : null;
+          await upsertOfflineLotAnimalMgmtStep(
+            params.lotId,
+            lot,
+            String(orgId),
+            animalId,
+            {
+              dg_executed_at: params.checked ? execDate : null,
+              pregnancy_status: newPregStatus,
+              expected_parturition_date: expectedParturition,
+              status: params.checked ? 'concluido' : 'em_andamento',
+            },
+            execDate
+          );
           if (la) {
             await offlineDb.lot_animals.update(la.id, {
               pregnancy_status: newPregStatus,
@@ -9847,8 +10006,8 @@ export async function toggleLotAnimalStepCheck(params: {
       const events = await offlineDb.management_events.where('lot_id').equals(params.lotId).toArray();
       const targetEvent = events.find((e) => {
         const c = (e.step_code || '').toUpperCase();
-        if (upperStep === 'D9' || upperStep === 'D8' || upperStep === 'D7') {
-          return c === upperStep || c === 'D9' || c === 'D8' || c === 'D7';
+        if (upperStep === 'D9' || upperStep === 'D8') {
+          return c === upperStep || c === 'D9' || c === 'D8';
         }
         if (upperStep === 'DG' || upperStep === 'DG1') {
           return c === 'DG' || c === 'DG1';
@@ -9899,8 +10058,14 @@ export async function toggleLotAnimalStepCheck(params: {
           .eq('lot_id', params.lotId)
           .in('animal_id', params.animalIds);
       }
-    } else if (upperStep === 'D7' || upperStep === 'D8' || upperStep === 'D9') {
+    } else if (upperStep === 'D7') {
+      // D7 é persistido localmente no mapa v2 e na base local para não sobrescrever D9 em protocolos de 4 manejos
       if (params.checked) {
+        await ensureLotAnimalManagementsOnline(supabase, params.lotId, params.animalIds, execDate);
+      }
+    } else if (upperStep === 'D8' || upperStep === 'D9') {
+      if (params.checked) {
+        await ensureLotAnimalManagementsOnline(supabase, params.lotId, params.animalIds, execDate);
         await executeBatchLotManagementD9({
           lotId: params.lotId,
           stepCode: upperStep,
@@ -9911,11 +10076,14 @@ export async function toggleLotAnimalStepCheck(params: {
       } else {
         await supabase
           .from('animal_managements')
-          .update({ d9_executed_at: null, updated_at: todayIso })
+          .update({ d9_executed_at: null, d9_device_loss: false, updated_at: todayIso })
           .eq('lot_id', params.lotId)
           .in('animal_id', params.animalIds);
       }
     } else if (upperStep === 'IA') {
+      if (params.checked) {
+        await ensureLotAnimalManagementsOnline(supabase, params.lotId, params.animalIds, execDate);
+      }
       await supabase
         .from('animal_managements')
         .update({
@@ -9943,6 +10111,9 @@ export async function toggleLotAnimalStepCheck(params: {
           .is('inseminator_name', null);
       }
     } else if (upperStep === 'DG' || upperStep === 'DG1') {
+      if (params.checked) {
+        await ensureLotAnimalManagementsOnline(supabase, params.lotId, params.animalIds, execDate);
+      }
       const { data: lot } = await supabase
         .from('iatf_lots')
         .select('ia_planned_date')
@@ -9985,8 +10156,8 @@ export async function toggleLotAnimalStepCheck(params: {
 
     const newEventStatus = totalChecked > 0 ? 'concluido' : 'pendente';
     const stepCodesToMatch =
-      upperStep === 'D9' || upperStep === 'D8' || upperStep === 'D7'
-        ? [upperStep, 'D9', 'D8', 'D7']
+      upperStep === 'D9' || upperStep === 'D8'
+        ? ['D8', 'D9']
         : upperStep === 'DG' || upperStep === 'DG1'
         ? ['DG', 'DG1']
         : [upperStep];

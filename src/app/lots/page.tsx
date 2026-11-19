@@ -219,6 +219,9 @@ export default function LotsPage() {
   const [selectedLotId, setSelectedLotId] = useState<string | null>(null);
   const [lotAnimals, setLotAnimals] = useState<LotAnimal[]>([]);
   const [lotAnimalSearch, setLotAnimalSearch] = useState('');
+  const [focusedStepCode, setFocusedStepCode] = useState<string>('');
+  const [phaseStatusFilter, setPhaseStatusFilter] = useState<'all' | 'done' | 'pending'>('all');
+  const [pendingFirstSort, setPendingFirstSort] = useState<boolean>(false);
   const [loadingAnimals, setLoadingAnimals] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
@@ -616,14 +619,34 @@ export default function LotsPage() {
     loadAuxData();
   }, [loadLots, loadAuxData]);
 
+  const applyStepKeys = (
+    currentEntry: Record<string, boolean> | undefined,
+    upper: string,
+    checked: boolean
+  ): Record<string, boolean> => {
+    const updated: Record<string, boolean> = { ...(currentEntry || {}), [upper]: checked };
+    if (upper === 'D8' || upper === 'D9') {
+      updated['D8'] = checked;
+      updated['D9'] = checked;
+    } else if (upper === 'DG' || upper === 'DG1') {
+      updated['DG'] = checked;
+      updated['DG1'] = checked;
+    }
+    return updated;
+  };
+
   async function handleSelectLot(id: string) {
+    if (selectedLotId !== id) {
+      setFocusedStepCode('');
+      setPhaseStatusFilter('all');
+    }
     setSelectedLotId(id);
     setLotAnimalSearch('');
     setLoadingAnimals(true);
     try {
       const animals = await getLotAnimals(id);
       setLotAnimals(animals);
-      const checks = await getLotAnimalStepChecks(id, animals, managementEvents);
+      const checks = await getLotAnimalStepChecks(id, animals);
       setStepChecks(checks);
     } finally {
       setLoadingAnimals(false);
@@ -636,16 +659,17 @@ export default function LotsPage() {
     const upper = stepCode.toUpperCase();
     const lotObj = lots.find((l) => l.id === selectedLotId);
 
-    let nextCheckedCount = 0;
-    setStepChecks((prev) => {
-      const next = { ...prev };
-      next[animalId] = { ...(next[animalId] || {}), [upper]: checked };
-      if (upper === 'D7' || upper === 'D8' || upper === 'D9') {
-        next[animalId]['D9'] = checked;
-      }
-      nextCheckedCount = lotAnimals.filter((la) => Boolean(next[la.animal_id]?.[upper])).length;
-      return next;
-    });
+    // Fixar fase atual para não pular de aba automaticamente ao concluir a última matriz
+    if (!focusedStepCode) {
+      setFocusedStepCode(upper);
+    }
+
+    const nextMap: Record<string, Record<string, boolean>> = {
+      ...stepChecks,
+      [animalId]: applyStepKeys(stepChecks[animalId], upper, checked),
+    };
+    const nextCheckedCount = lotAnimals.filter((la) => Boolean(nextMap[la.animal_id]?.[upper])).length;
+    setStepChecks(nextMap);
 
     if (upper === 'DG' || upper === 'DG1') {
       const baseIaDate = lotObj?.ia_planned_date || getTodayDateString();
@@ -676,7 +700,7 @@ export default function LotsPage() {
     loadLots();
   };
 
-  // Marcar ou desmarcar todas as matrizes do lote em uma etapa (ex: ao clicar em Manejar ou no check do cabeçalho/IA/DG)
+  // Marcar ou desmarcar todas as matrizes do lote em uma etapa (ex: checkbox do cabeçalho da coluna)
   const handleToggleAllStepCheck = async (stepCode: string, forceChecked?: boolean) => {
     if (!selectedLotId || lotAnimals.length === 0) return;
     const upper = stepCode.toUpperCase();
@@ -685,16 +709,11 @@ export default function LotsPage() {
     const currentlyAllChecked = lotAnimals.every((la) => Boolean(stepChecks[la.animal_id]?.[upper]));
     const targetChecked = forceChecked !== undefined ? forceChecked : !currentlyAllChecked;
 
-    setStepChecks((prev) => {
-      const next = { ...prev };
-      for (const aId of allAnimalIds) {
-        next[aId] = { ...(next[aId] || {}), [upper]: targetChecked };
-        if (upper === 'D7' || upper === 'D8' || upper === 'D9') {
-          next[aId]['D9'] = targetChecked;
-        }
-      }
-      return next;
-    });
+    const nextMap: Record<string, Record<string, boolean>> = { ...stepChecks };
+    for (const aId of allAnimalIds) {
+      nextMap[aId] = applyStepKeys(nextMap[aId], upper, targetChecked);
+    }
+    setStepChecks(nextMap);
 
     if (upper === 'DG' || upper === 'DG1') {
       const baseIaDate = lotObj?.ia_planned_date || getTodayDateString();
@@ -711,7 +730,7 @@ export default function LotsPage() {
     showToast(
       targetChecked
         ? `Todas as ${lotAnimals.length} matrizes marcadas na etapa ${upper}!`
-        : `Etapa ${upper} desmarcada para as matrizes.`
+        : `Etapa ${upper} desmarcada para todas as matrizes.`
     );
 
     await toggleLotAnimalStepCheck({
@@ -795,12 +814,28 @@ export default function LotsPage() {
     }
   }
 
-  // Entrada Rápida de Matriz no Tronco (Curral - 1 animal por vez)
+  // Entrada Rápida de Matriz no Tronco / Leitura Direta por Brinco na Fase Ativa
   const handleQuickChuteAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedLotId || !quickTagInput.trim() || isAddingQuickTag) return;
 
     const cleanTag = quickTagInput.trim();
+
+    // Se a matriz já está no lote, marca imediatamente sua passagem na Fase Ativa do Manejo!
+    const existingInLot = lotAnimals.find(
+      (la) => (la.animals?.tag_number || '').trim().toLowerCase() === cleanTag.toLowerCase()
+    );
+    if (existingInLot) {
+      const targetPhase = activePhaseCode || 'D0';
+      await handleToggleAnimalStepCheck(existingInLot.animal_id, targetPhase, true);
+      setQuickTagInput('');
+      showToast(`✓ Matriz Brinco ${existingInLot.animals?.tag_number || cleanTag} marcada como MANEJADA na fase ${targetPhase}!`);
+      setTimeout(() => {
+        quickInputRef.current?.focus();
+      }, 50);
+      return;
+    }
+
     setIsAddingQuickTag(true);
 
     const currentLot = lots.find((l) => l.id === selectedLotId);
@@ -833,24 +868,26 @@ export default function LotsPage() {
         showToast(`Matriz ${cleanTag} cadastrada e adicionada ao lote com sucesso!`);
       }
 
-      // Se marcou para registrar D0 automaticamente
+      // Se marcou para registrar automaticamente na etapa D0 (ou fase ativa)
       if (quickAutoD0 && res.animalId) {
         const targetAnimalId = res.animalId;
+        const targetPhase = activePhaseCode || 'D0';
         const currentAnimalsCount = lotAnimals.length + 1;
-        const currentD0Count = lotAnimals.filter((la) => Boolean(stepChecks[la.animal_id]?.['D0'])).length + 1;
+        const currentPhaseCount =
+          lotAnimals.filter((la) => Boolean(stepChecks[la.animal_id]?.[targetPhase])).length + 1;
 
         setStepChecks((prev) => ({
           ...prev,
-          [targetAnimalId]: { ...(prev[targetAnimalId] || {}), D0: true },
+          [targetAnimalId]: applyStepKeys(prev[targetAnimalId], targetPhase, true),
         }));
 
-        toggleLotAnimalStepCheck({
+        await toggleLotAnimalStepCheck({
           lotId: selectedLotId,
-          stepCode: 'D0',
+          stepCode: targetPhase,
           animalIds: [targetAnimalId],
           checked: true,
           totalAnimalsInLot: currentAnimalsCount,
-          checkedCountInStep: currentD0Count,
+          checkedCountInStep: currentPhaseCount,
           executionDate: getTodayDateString(),
           responsibleName: currentLot?.responsible_name || null,
         });
@@ -1131,6 +1168,59 @@ export default function LotsPage() {
       );
     });
   }, [lotAnimals, lotAnimalSearch]);
+
+  const selectedLotProgress = useMemo(() => {
+    if (!selectedLot) return null;
+    return computeLotProgress(selectedLot, managementEvents, protocols);
+  }, [selectedLot, managementEvents, protocols]);
+
+  const selectedLotStepCodes = useMemo(() => {
+    if (!selectedLotProgress || selectedLotProgress.steps.length === 0) {
+      return ['D0', 'D9', 'IA', 'DG'];
+    }
+    return selectedLotProgress.steps.map((s) => s.code.toUpperCase());
+  }, [selectedLotProgress]);
+
+  const activePhaseCode = useMemo(() => {
+    if (focusedStepCode && selectedLotStepCodes.includes(focusedStepCode.toUpperCase())) {
+      return focusedStepCode.toUpperCase();
+    }
+    if (selectedLotProgress && selectedLotProgress.steps.length > 0) {
+      const todayStep = selectedLotProgress.steps.find((s) => s.isToday);
+      if (todayStep) return todayStep.code.toUpperCase();
+
+      const firstIncomplete = selectedLotStepCodes.find(
+        (code) => lotAnimals.length > 0 && lotAnimals.some((la) => !stepChecks[la.animal_id]?.[code])
+      );
+      if (firstIncomplete) return firstIncomplete;
+    }
+    return selectedLotStepCodes[0] || 'D0';
+  }, [focusedStepCode, selectedLotStepCodes, selectedLotProgress, lotAnimals, stepChecks]);
+
+  const activePhaseStats = useMemo(() => {
+    const total = lotAnimals.length;
+    const done = lotAnimals.filter((la) => Boolean(stepChecks[la.animal_id]?.[activePhaseCode])).length;
+    const pending = Math.max(0, total - done);
+    const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+    return { total, done, pending, percent };
+  }, [lotAnimals, stepChecks, activePhaseCode]);
+
+  const displayedLotAnimals = useMemo(() => {
+    let list = filteredLotAnimals;
+    if (phaseStatusFilter === 'done') {
+      list = list.filter((la) => Boolean(stepChecks[la.animal_id]?.[activePhaseCode]));
+    } else if (phaseStatusFilter === 'pending') {
+      list = list.filter((la) => !stepChecks[la.animal_id]?.[activePhaseCode]);
+    }
+    if (pendingFirstSort) {
+      list = list.slice().sort((a, b) => {
+        const aDone = Boolean(stepChecks[a.animal_id]?.[activePhaseCode]) ? 1 : 0;
+        const bDone = Boolean(stepChecks[b.animal_id]?.[activePhaseCode]) ? 1 : 0;
+        return aDone - bDone;
+      });
+    }
+    return list;
+  }, [filteredLotAnimals, phaseStatusFilter, pendingFirstSort, stepChecks, activePhaseCode]);
 
   // Prévia de etapas e validação de segurança para o modal de alteração de protocolo
   const completedStepCodesForEditingLot = useMemo(() => {
@@ -1760,12 +1850,12 @@ export default function LotsPage() {
                                 <span className="block text-[10px] text-slate-400 font-mono">
                                   {step.formattedDate}
                                 </span>
-                                {/* Botão Rápido na Etapa: "Manejar" marca todas nas etapas D0/D9; em IA e DG exibe Check direto */}
+                                {/* Botão Rápido na Etapa: abre o manejo coletivo sem marcar matrizes automaticamente */}
                                 {step.code !== 'IA' && step.code !== 'DG' ? (
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      handleToggleAllStepCheck(step.code, true);
+                                      setFocusedStepCode(step.code.toUpperCase());
                                       handleOpenBatchManagement(step.code);
                                     }}
                                     className={`text-[9px] font-black px-1.5 py-0.5 rounded-md border transition-all cursor-pointer inline-flex items-center gap-0.5 ${
@@ -1775,7 +1865,7 @@ export default function LotsPage() {
                                         ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20 hover:bg-emerald-500/25'
                                         : 'bg-slate-800/80 text-slate-400 border-slate-700 hover:text-slate-200 hover:bg-slate-800'
                                     }`}
-                                    title={`Marcar todas as matrizes e manejar ${step.code}`}
+                                    title={`Abrir manejo coletivo de ${step.code}`}
                                   >
                                     <Sparkles className="w-2.5 h-2.5 text-amber-400" />
                                     Manejar
@@ -1950,53 +2040,197 @@ export default function LotsPage() {
                 </div>
               </div>
 
-              {/* Barra de Entrada Rápida de Matriz no Curral (1 por vez) */}
-              <div className="bg-slate-900/90 border border-slate-800 hover:border-emerald-500/40 rounded-2xl p-3 sm:p-4 shadow-lg transition-all">
-                <form onSubmit={handleQuickChuteAdd} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex-1 flex items-center gap-2">
-                    <div className="relative flex-1 max-w-md">
-                      <Tag className="w-4 h-4 text-emerald-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                      <input
-                        ref={quickInputRef}
-                        type="text"
-                        value={quickTagInput}
-                        onChange={(e) => setQuickTagInput(e.target.value)}
-                        placeholder="Brinco da matriz (ex: 2045) e tecle ENTER..."
-                        disabled={isAddingQuickTag}
-                        className="w-full bg-slate-950 border border-slate-700/80 rounded-xl pl-9 pr-3 py-2 text-xs sm:text-sm text-white placeholder-slate-500 font-mono focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all"
-                      />
+              {/* Barra de Entrada / Marcação Rápida de Matriz no Curral */}
+              {(() => {
+                const typedTag = quickTagInput.trim().toLowerCase();
+                const matchesExisting =
+                  typedTag.length > 0 &&
+                  lotAnimals.some((la) => (la.animals?.tag_number || '').trim().toLowerCase() === typedTag);
+
+                return (
+                  <div className="bg-slate-900/90 border border-slate-800 hover:border-emerald-500/40 rounded-2xl p-3 sm:p-4 shadow-lg transition-all">
+                    <form onSubmit={handleQuickChuteAdd} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex-1 flex items-center gap-2">
+                        <div className="relative flex-1 max-w-md">
+                          <Tag className="w-4 h-4 text-emerald-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                          <input
+                            ref={quickInputRef}
+                            type="text"
+                            value={quickTagInput}
+                            onChange={(e) => setQuickTagInput(e.target.value)}
+                            placeholder={`Brinco p/ marcar na fase ${activePhaseCode} ou adicionar nova (ENTER)...`}
+                            disabled={isAddingQuickTag}
+                            className="w-full bg-slate-950 border border-slate-700/80 rounded-xl pl-9 pr-3 py-2 text-xs sm:text-sm text-white placeholder-slate-500 font-mono focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all"
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={isAddingQuickTag || !quickTagInput.trim()}
+                          className={`disabled:opacity-40 font-black px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md cursor-pointer whitespace-nowrap ${
+                            matchesExisting
+                              ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 glow-emerald'
+                              : 'bg-emerald-600 hover:bg-emerald-500 text-slate-950 glow-emerald'
+                          }`}
+                          title={
+                            matchesExisting
+                              ? `Marcar matriz como MANEJADA na fase ${activePhaseCode}`
+                              : 'Adicionar matriz ao lote (ou tecle Enter)'
+                          }
+                        >
+                          {isAddingQuickTag ? (
+                            <>
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                              <span>Processando...</span>
+                            </>
+                          ) : matchesExisting ? (
+                            <>
+                              <Check className="w-4 h-4 stroke-3" />
+                              <span>Marcar {activePhaseCode}</span>
+                            </>
+                          ) : (
+                            <>
+                              <Plus className="w-4 h-4 stroke-3" />
+                              <span>Adicionar</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      <label className="flex items-center gap-2 text-xs text-slate-300 font-medium cursor-pointer select-none px-1">
+                        <input
+                          type="checkbox"
+                          checked={quickAutoD0}
+                          onChange={(e) => setQuickAutoD0(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-600 bg-slate-950 text-emerald-500 focus:ring-emerald-500 cursor-pointer accent-emerald-500"
+                        />
+                        <span>
+                          Ao inserir nova, marcar <strong className="text-emerald-400">{activePhaseCode}</strong> auto
+                        </span>
+                      </label>
+                    </form>
+                  </div>
+                );
+              })()}
+
+              {/* Painel de Fase Ativa do Manejo & Destaque Visual (Concluídas vs. Pendentes) */}
+              {lotAnimals.length > 0 && (
+                <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-3.5 sm:p-4 space-y-3 shadow-md">
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                    {/* Seletor de Fase em Foco */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mr-1">
+                        Fase em foco:
+                      </span>
+                      {selectedLotStepCodes.map((code) => {
+                        const isActive = code === activePhaseCode;
+                        const stepDoneCount = lotAnimals.filter((la) => Boolean(stepChecks[la.animal_id]?.[code])).length;
+                        const isStepToday = selectedLotProgress?.steps.some(
+                          (s) => s.code.toUpperCase() === code && s.isToday
+                        );
+                        return (
+                          <button
+                            key={code}
+                            type="button"
+                            onClick={() => setFocusedStepCode(code)}
+                            className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 border ${
+                              isActive
+                                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400 shadow-xs'
+                                : 'bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-600 hover:text-slate-200'
+                            }`}
+                          >
+                            <span>{code}</span>
+                            {isStepToday && (
+                              <span className="px-1 py-0.2 rounded bg-amber-400/20 text-amber-300 text-[9px] font-black">
+                                HOJE
+                              </span>
+                            )}
+                            <span className="font-mono text-[10px] opacity-85">
+                              {stepDoneCount}/{lotAnimals.length}
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
-                    <button
-                      type="submit"
-                      disabled={isAddingQuickTag || !quickTagInput.trim()}
-                      className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-slate-950 font-black px-4 py-2 rounded-xl text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-md glow-emerald cursor-pointer whitespace-nowrap"
-                      title="Adicionar matriz ao lote (ou tecle Enter)"
-                    >
-                      {isAddingQuickTag ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                          <span>Adicionando...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Plus className="w-4 h-4 stroke-3" />
-                          <span>Adicionar</span>
-                        </>
-                      )}
-                    </button>
+
+                    {/* Placar Resumo + Barra de Progresso */}
+                    <div className="flex items-center gap-3">
+                      <div className="text-xs font-semibold text-slate-300 flex items-center gap-2">
+                        <span className="text-emerald-400 font-bold">
+                          {activePhaseStats.done} manejadas
+                        </span>
+                        <span className="text-slate-600">•</span>
+                        <span className="text-amber-400 font-bold">
+                          {activePhaseStats.pending} pendentes
+                        </span>
+                        <span className="font-mono text-xs text-slate-400">
+                          ({activePhaseStats.percent}%)
+                        </span>
+                      </div>
+                      <div className="w-24 sm:w-32 h-2 bg-slate-800 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-linear-to-r from-emerald-500 to-teal-400 transition-all duration-300"
+                          style={{ width: `${activePhaseStats.percent}%` }}
+                        />
+                      </div>
+                    </div>
                   </div>
 
-                  <label className="flex items-center gap-2 text-xs text-slate-300 font-medium cursor-pointer select-none px-1">
-                    <input
-                      type="checkbox"
-                      checked={quickAutoD0}
-                      onChange={(e) => setQuickAutoD0(e.target.checked)}
-                      className="w-4 h-4 rounded border-slate-600 bg-slate-950 text-emerald-500 focus:ring-emerald-500 cursor-pointer accent-emerald-500"
-                    />
-                    <span>Marcar <strong className="text-emerald-400">D0 (Implante)</strong> automaticamente</span>
-                  </label>
-                </form>
-              </div>
+                  {/* Filtros Rápidos: Todas / Pendentes / Já Manejadas + Agrupar Pendentes no Topo */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => setPhaseStatusFilter('all')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                          phaseStatusFilter === 'all'
+                            ? 'bg-slate-800 text-white border-slate-600'
+                            : 'bg-slate-900/70 text-slate-400 border-slate-800 hover:text-slate-200'
+                        }`}
+                      >
+                        Todas ({activePhaseStats.total})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPhaseStatusFilter('pending')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border inline-flex items-center gap-1.5 ${
+                          phaseStatusFilter === 'pending'
+                            ? 'bg-amber-500/20 text-amber-300 border-amber-400/60'
+                            : 'bg-slate-900/70 text-slate-400 border-slate-800 hover:text-amber-300'
+                        }`}
+                      >
+                        <Clock className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Pendentes em {activePhaseCode} ({activePhaseStats.pending})</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPhaseStatusFilter('done')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border inline-flex items-center gap-1.5 ${
+                          phaseStatusFilter === 'done'
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/60'
+                            : 'bg-slate-900/70 text-slate-400 border-slate-800 hover:text-emerald-300'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Já Manejadas em {activePhaseCode} ({activePhaseStats.done})</span>
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setPendingFirstSort((prev) => !prev)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border inline-flex items-center gap-1.5 self-start sm:self-auto ${
+                        pendingFirstSort
+                          ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
+                          : 'bg-slate-900/70 text-slate-400 border-slate-800 hover:text-slate-200'
+                      }`}
+                      title="Colocar matrizes pendentes no topo da tabela para facilitar a conferência no curral"
+                    >
+                      <ArrowDownAZ className="w-3.5 h-3.5" />
+                      <span>{pendingFirstSort ? 'Pendentes no Topo ✓' : 'Agrupar Pendentes no Topo'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {loadingAnimals ? (
                 <div className="flex items-center gap-2 py-8 justify-center text-slate-400">
@@ -2015,23 +2249,20 @@ export default function LotsPage() {
                 </div>
               ) : (
                 (() => {
-                  const modalProgressForTable = computeLotProgress(selectedLot, managementEvents, protocols);
-                  const stepColumns =
-                    modalProgressForTable.steps.length > 0
-                      ? modalProgressForTable.steps.map((s) => s.code.toUpperCase())
-                      : ['D0', 'D9', 'IA', 'DG'];
+                  const stepColumns = selectedLotStepCodes;
 
                   return (
                     <div className="overflow-x-auto rounded-xl border border-slate-800">
                       <table className="w-full text-left text-xs text-slate-300">
                         <thead className="bg-slate-950 text-slate-400 uppercase tracking-wider text-[10px]">
                           <tr>
-                            <th className="p-3">Brinco</th>
+                            <th className="p-3">Brinco / Status na Fase ({activePhaseCode})</th>
                             <th className="p-3">Categoria</th>
                             {stepColumns.map((stepCode) => {
                               const allStepChecked =
                                 lotAnimals.length > 0 &&
                                 lotAnimals.every((la) => Boolean(stepChecks[la.animal_id]?.[stepCode]));
+                              const isActiveCol = stepCode === activePhaseCode;
                               const accentClass =
                                 stepCode === 'D0'
                                   ? 'accent-sky-500 text-sky-400'
@@ -2042,7 +2273,12 @@ export default function LotsPage() {
                                   : 'accent-amber-500 text-amber-400';
 
                               return (
-                                <th key={stepCode} className="p-2.5 text-center bg-slate-900/70 border-x border-slate-800/70">
+                                <th
+                                  key={stepCode}
+                                  className={`p-2.5 text-center border-x border-slate-800/70 ${
+                                    isActiveCol ? 'bg-emerald-950/40 border-t-2 border-t-emerald-400' : 'bg-slate-900/70'
+                                  }`}
+                                >
                                   <label
                                     className="inline-flex flex-col items-center gap-1 cursor-pointer select-none"
                                     title={`Marcar/desmarcar etapa ${stepCode} para todas as matrizes`}
@@ -2071,56 +2307,100 @@ export default function LotsPage() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800/80 bg-slate-900/60 font-mono">
-                          {filteredLotAnimals.length === 0 ? (
+                          {displayedLotAnimals.length === 0 ? (
                             <tr>
                               <td colSpan={stepColumns.length + 10} className="p-8 text-center text-slate-400 font-sans">
-                                Nenhuma matriz encontrada com o termo &quot;{lotAnimalSearch}&quot;.
+                                {lotAnimalSearch.trim()
+                                  ? `Nenhuma matriz encontrada com o termo "${lotAnimalSearch}".`
+                                  : phaseStatusFilter === 'pending'
+                                  ? `Todas as matrizes já passaram pela fase ${activePhaseCode}!`
+                                  : `Nenhuma matriz concluída na fase ${activePhaseCode} ainda.`}
                               </td>
                             </tr>
                           ) : (
-                            filteredLotAnimals.map((la) => (
-                              <tr key={la.id} className="hover:bg-slate-800/50 transition-colors">
+                            displayedLotAnimals.map((la) => {
+                              const isDoneInActivePhase = Boolean(stepChecks[la.animal_id]?.[activePhaseCode]);
+                              return (
+                              <tr
+                                key={la.id}
+                                className={`transition-colors border-l-4 ${
+                                  isDoneInActivePhase
+                                    ? 'bg-emerald-950/35 hover:bg-emerald-900/40 border-l-emerald-400'
+                                    : 'bg-slate-900/75 hover:bg-slate-800/60 border-l-amber-500/70'
+                                }`}
+                              >
                               <td className="p-3">
-                                <div className="flex items-center gap-1.5">
+                                <div className="flex items-center gap-2 flex-wrap">
                                   <button
                                     type="button"
                                     onClick={() => handleOpenAnimalManagement(la.animal_id, la.animals?.tag_number || '')}
                                     className="font-bold text-emerald-400 hover:text-emerald-300 font-sans inline-flex items-center gap-1.5 cursor-pointer text-left group"
                                     title="Abrir manejo reprodutivo desta matriz diretamente"
                                   >
-                                    <span className="px-2 py-0.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 group-hover:bg-emerald-500/20 group-hover:border-emerald-500/40 group-hover:text-emerald-200 transition-all font-mono font-black text-xs">
+                                    <span
+                                      className={`px-2 py-0.5 rounded-lg border transition-all font-mono font-black text-xs ${
+                                        isDoneInActivePhase
+                                          ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-200'
+                                          : 'bg-slate-800/90 border-slate-700 text-white group-hover:border-emerald-500/40'
+                                      }`}
+                                    >
                                       {la.animals?.tag_number}
                                     </span>
                                     <Syringe className="w-3.5 h-3.5 text-emerald-400/70 group-hover:text-emerald-300 transition-colors" />
                                   </button>
+
+                                  {isDoneInActivePhase ? (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold font-sans whitespace-nowrap">
+                                      <CheckCircle2 className="w-3 h-3" />
+                                      Manejada {activePhaseCode}
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/35 text-[10px] font-bold font-sans whitespace-nowrap">
+                                      <Clock className="w-3 h-3" />
+                                      Pendente {activePhaseCode}
+                                    </span>
+                                  )}
                                 </div>
                               </td>
                               <td className="p-3 font-sans">{la.animals?.animal_categories?.name ?? '-'}</td>
                               {stepColumns.map((stepCode) => {
                                 const isChecked = Boolean(stepChecks[la.animal_id]?.[stepCode]);
-                                const accentClass =
-                                  stepCode === 'D0'
-                                    ? 'accent-sky-500'
-                                    : stepCode === 'IA'
-                                    ? 'accent-emerald-500'
-                                    : stepCode === 'DG' || stepCode === 'DG1'
-                                    ? 'accent-purple-500'
-                                    : 'accent-amber-500';
+                                const isActiveCol = stepCode === activePhaseCode;
 
                                 return (
                                   <td
                                     key={stepCode}
-                                    className="p-2.5 text-center bg-slate-950/30 border-x border-slate-800/50"
+                                    className={`p-2 text-center border-x border-slate-800/50 ${
+                                      isActiveCol ? 'bg-slate-950/60' : 'bg-slate-950/30'
+                                    }`}
                                   >
-                                    <input
-                                      type="checkbox"
-                                      checked={isChecked}
-                                      onChange={(e) =>
-                                        handleToggleAnimalStepCheck(la.animal_id, stepCode, e.target.checked)
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleToggleAnimalStepCheck(la.animal_id, stepCode, !isChecked)
                                       }
-                                      className={`w-4 h-4 rounded border-slate-600 bg-slate-900 cursor-pointer ${accentClass}`}
-                                      title={`Dar check na etapa ${stepCode} para a matriz ${la.animals?.tag_number || ''}`}
-                                    />
+                                      title={
+                                        isChecked
+                                          ? `Matriz ${la.animals?.tag_number || ''} já concluída em ${stepCode}. Clique para desmarcar.`
+                                          : `Marcar matriz ${la.animals?.tag_number || ''} como manejada em ${stepCode}`
+                                      }
+                                      className={`px-2.5 py-1 rounded-lg text-[11px] font-sans transition-all cursor-pointer inline-flex items-center justify-center gap-1 touch-manipulation ${
+                                        isChecked
+                                          ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black shadow-xs'
+                                          : isActiveCol
+                                          ? 'bg-amber-500/15 hover:bg-emerald-500 hover:text-slate-950 text-amber-300 border border-amber-500/40 font-bold'
+                                          : 'bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700 font-semibold'
+                                      }`}
+                                    >
+                                      {isChecked ? (
+                                        <>
+                                          <Check className="w-3 h-3 stroke-3" />
+                                          <span>Feito</span>
+                                        </>
+                                      ) : (
+                                        <span>Marcar</span>
+                                      )}
+                                    </button>
                                   </td>
                                 );
                               })}
@@ -2200,7 +2480,9 @@ export default function LotsPage() {
                                 </div>
                               </td>
                             </tr>
-                          )))}
+                              );
+                            })
+                          )}
                         </tbody>
                       </table>
                     </div>
@@ -3053,6 +3335,8 @@ export default function LotsPage() {
             if (selectedLotId) {
               const updated = await getLotAnimals(selectedLotId, true);
               setLotAnimals(updated);
+              const refreshedChecks = await getLotAnimalStepChecks(selectedLotId, updated);
+              setStepChecks(refreshedChecks);
               loadLots();
             }
           }}
@@ -3068,16 +3352,19 @@ export default function LotsPage() {
           isOpen={batchModalOpen}
           onClose={() => setBatchModalOpen(false)}
           onSuccess={async () => {
-            showToast(`Manejo coletivo (${batchModalStep}) gravado com sucesso para todas as matrizes do lote "${selectedLot.code}"!`);
+            showToast(`Manejo coletivo (${batchModalStep}) gravado com sucesso para o lote "${selectedLot.code}"!`);
             await loadLots();
             if (selectedLotId) {
               const updated = await getLotAnimals(selectedLotId, true);
               setLotAnimals(updated);
+              const refreshedChecks = await getLotAnimalStepChecks(selectedLotId, updated);
+              setStepChecks(refreshedChecks);
             }
           }}
           lot={selectedLot}
           lotAnimals={lotAnimals}
           initialStepCode={batchModalStep}
+          stepChecks={stepChecks}
         />
       )}
 

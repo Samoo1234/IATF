@@ -41,6 +41,7 @@ interface BatchLotManagementModalProps {
   lot: LotStat;
   lotAnimals: LotAnimal[];
   initialStepCode?: 'D0' | 'D7' | 'D8' | 'D9' | 'IA' | 'DG';
+  stepChecks?: Record<string, Record<string, boolean>>;
 }
 
 type ManagementTab = 'D0' | 'D9' | 'IA' | 'DG';
@@ -52,6 +53,7 @@ export default function BatchLotManagementModal({
   lot,
   lotAnimals,
   initialStepCode = 'D9',
+  stepChecks,
 }: BatchLotManagementModalProps) {
   // Normalize initial tab
   const getNormalizedTab = (code?: string): ManagementTab => {
@@ -97,6 +99,7 @@ export default function BatchLotManagementModal({
   const [d0Notes, setD0Notes] = useState('');
   const [d0SelectedIds, setD0SelectedIds] = useState<string[]>([]);
   const [d0SearchQuery, setD0SearchQuery] = useState('');
+  const [d0FilterTab, setD0FilterTab] = useState<'all' | 'pending' | 'done'>('all');
 
   // ----------------------------------------------------
   // D9 State
@@ -107,6 +110,7 @@ export default function BatchLotManagementModal({
   const [d9SelectedIds, setD9SelectedIds] = useState<string[]>([]);
   const [d9DeviceLossIds, setD9DeviceLossIds] = useState<string[]>([]);
   const [d9SearchQuery, setD9SearchQuery] = useState('');
+  const [d9FilterTab, setD9FilterTab] = useState<'all' | 'pending' | 'done'>('all');
 
   // ----------------------------------------------------
   // IA State
@@ -171,12 +175,14 @@ export default function BatchLotManagementModal({
     setD0Responsible(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
     setD0SelectedIds(lotAnimals.map((la) => la.animal_id));
     setD0SearchQuery('');
+    setD0FilterTab('all');
 
     setD9Date(getTodayDateString());
     setD9Responsible(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
     setD9SelectedIds(lotAnimals.map((la) => la.animal_id));
     setD9DeviceLossIds([]);
     setD9SearchQuery('');
+    setD9FilterTab('all');
 
     setIaDate(lot.ia_planned_date || getTodayDateString());
     setIaInseminator(lot.responsible_name || 'MV. DR. SAMOEL DUARTE');
@@ -281,29 +287,89 @@ export default function BatchLotManagementModal({
     );
   };
 
-  // Linhas filtradas pela busca rápida de matrizes no D0
-  const filteredD0Animals = useMemo(() => {
-    if (!d0SearchQuery.trim()) return lotAnimals;
-    const q = d0SearchQuery.trim().toLowerCase();
-    return lotAnimals.filter((la) => {
-      const tag = (la.animals?.tag_number || '').toLowerCase();
-      const cat = (la.animals?.animal_categories?.name || '').toLowerCase();
-      const breed = (la.animals?.breeds?.name || '').toLowerCase();
-      return tag.includes(q) || cat.includes(q) || breed.includes(q);
-    });
-  }, [lotAnimals, d0SearchQuery]);
+  const checkAnimalDoneInPhase = (animalId: string, phase: 'D0' | 'D9'): boolean => {
+    const checks = stepChecks?.[animalId];
+    if (!checks) return false;
+    if (phase === 'D0') return Boolean(checks['D0']);
+    return Boolean(checks['D9'] || checks['D8']);
+  };
 
-  // Linhas filtradas pela busca rápida de matrizes no D9
-  const filteredD9Animals = useMemo(() => {
-    if (!d9SearchQuery.trim()) return lotAnimals;
-    const q = d9SearchQuery.trim().toLowerCase();
-    return lotAnimals.filter((la) => {
+  const computePhaseFilterStats = (phase: 'D0' | 'D9') => {
+    const total = lotAnimals.length;
+    const done = lotAnimals.filter((la) => checkAnimalDoneInPhase(la.animal_id, phase)).length;
+    return { total, done, pending: Math.max(0, total - done) };
+  };
+
+  const applyPhaseFilterAndSearch = (
+    phase: 'D0' | 'D9',
+    filterTab: 'all' | 'pending' | 'done',
+    query: string
+  ) => {
+    let list = lotAnimals;
+    if (filterTab === 'done') {
+      list = list.filter((la) => checkAnimalDoneInPhase(la.animal_id, phase));
+    } else if (filterTab === 'pending') {
+      list = list.filter((la) => !checkAnimalDoneInPhase(la.animal_id, phase));
+    }
+    if (!query.trim()) return list;
+    const q = query.trim().toLowerCase();
+    return list.filter((la) => {
       const tag = (la.animals?.tag_number || '').toLowerCase();
       const cat = (la.animals?.animal_categories?.name || '').toLowerCase();
       const breed = (la.animals?.breeds?.name || '').toLowerCase();
       return tag.includes(q) || cat.includes(q) || breed.includes(q);
     });
-  }, [lotAnimals, d9SearchQuery]);
+  };
+
+  const d0PhaseStats = computePhaseFilterStats('D0');
+  const d9PhaseStats = computePhaseFilterStats('D9');
+  const filteredD0Animals = applyPhaseFilterAndSearch('D0', d0FilterTab, d0SearchQuery);
+  const filteredD9Animals = applyPhaseFilterAndSearch('D9', d9FilterTab, d9SearchQuery);
+
+  const renderPhaseFilterBar = (
+    filterTab: 'all' | 'pending' | 'done',
+    setFilterTab: (tab: 'all' | 'pending' | 'done') => void,
+    stats: { total: number; done: number; pending: number },
+    phaseLabel: string
+  ) => (
+    <div className="flex items-center gap-2 flex-wrap">
+      <button
+        type="button"
+        onClick={() => setFilterTab('all')}
+        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer border ${
+          filterTab === 'all'
+            ? 'bg-slate-800 text-white border-slate-600'
+            : 'bg-slate-900/70 text-slate-400 border-slate-800 hover:text-slate-200'
+        }`}
+      >
+        Todas ({stats.total})
+      </button>
+      <button
+        type="button"
+        onClick={() => setFilterTab('pending')}
+        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer border inline-flex items-center gap-1 ${
+          filterTab === 'pending'
+            ? 'bg-amber-500/20 text-amber-300 border-amber-400/60'
+            : 'bg-slate-900/70 text-slate-400 border-slate-800 hover:text-amber-300'
+        }`}
+      >
+        <Clock className="w-3 h-3 text-amber-400" />
+        <span>Pendentes {phaseLabel} ({stats.pending})</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => setFilterTab('done')}
+        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer border inline-flex items-center gap-1 ${
+          filterTab === 'done'
+            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/60'
+            : 'bg-slate-900/70 text-slate-400 border-slate-800 hover:text-emerald-300'
+        }`}
+      >
+        <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+        <span>Já Manejadas {phaseLabel} ({stats.done})</span>
+      </button>
+    </div>
+  );
 
   // Linhas filtradas pela aba de status (Todas / Pendentes / Inseminadas / Puladas) e busca rápida
   const filteredIaRows = useMemo(() => {
@@ -883,6 +949,9 @@ export default function BatchLotManagementModal({
                   </div>
                 </div>
 
+                {/* Filtros de Status da Fase D0 */}
+                {renderPhaseFilterBar(d0FilterTab, setD0FilterTab, d0PhaseStats, 'no D0')}
+
                 {/* Barra de Busca de Matrizes no D0 */}
                 <div className="relative">
                   <Search className="w-4 h-4 text-sky-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -937,12 +1006,15 @@ export default function BatchLotManagementModal({
                       {filteredD0Animals.length === 0 ? (
                         <tr>
                           <td colSpan={4} className="p-4 text-center text-slate-400 font-sans">
-                            Nenhuma matriz encontrada com o termo &quot;{d0SearchQuery}&quot;.
+                            {d0SearchQuery
+                              ? `Nenhuma matriz encontrada com o termo "${d0SearchQuery}".`
+                              : 'Nenhuma matriz neste filtro.'}
                           </td>
                         </tr>
                       ) : (
                         filteredD0Animals.map((la) => {
                           const isChecked = d0SelectedIds.includes(la.animal_id);
+                          const alreadyDone = checkAnimalDoneInPhase(la.animal_id, 'D0');
                           return (
                             <tr
                               key={la.id}
@@ -953,7 +1025,11 @@ export default function BatchLotManagementModal({
                                     : [...prev, la.animal_id]
                                 )
                               }
-                              className={`hover:bg-slate-900 transition-colors cursor-pointer ${!isChecked ? 'opacity-45 bg-slate-950/80' : ''}`}
+                              className={`hover:bg-slate-900 transition-colors cursor-pointer border-l-4 ${
+                                alreadyDone
+                                  ? 'border-l-emerald-400 bg-emerald-950/25'
+                                  : 'border-l-amber-500/60'
+                              } ${!isChecked ? 'opacity-45 bg-slate-950/80' : ''}`}
                             >
                               <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
                                 <input
@@ -972,7 +1048,22 @@ export default function BatchLotManagementModal({
                                   className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-sky-500 focus:ring-sky-500 cursor-pointer accent-sky-500"
                                 />
                               </td>
-                              <td className="p-3 font-bold text-white font-mono">{la.animals?.tag_number || 'S/N'}</td>
+                              <td className="p-3">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-bold text-white font-mono">{la.animals?.tag_number || 'S/N'}</span>
+                                  {alreadyDone ? (
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold font-sans">
+                                      <CheckCircle2 className="w-3 h-3" />
+                                      Já concluída no D0
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/35 text-[10px] font-bold font-sans">
+                                      <Clock className="w-3 h-3" />
+                                      Pendente no D0
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
                               <td className="p-3 font-sans text-slate-400">{la.animals?.animal_categories?.name || 'Matriz'}</td>
                               <td className="p-3 text-center font-sans">
                                 {isChecked ? (
@@ -1069,6 +1160,9 @@ export default function BatchLotManagementModal({
                   </div>
                 </div>
 
+                {/* Filtros de Status da Retirada (D8/D9) */}
+                {renderPhaseFilterBar(d9FilterTab, setD9FilterTab, d9PhaseStats, 'na Retirada')}
+
                 {/* Barra de Busca de Matrizes no D9 */}
                 <div className="relative">
                   <Search className="w-4 h-4 text-amber-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -1124,17 +1218,24 @@ export default function BatchLotManagementModal({
                       {filteredD9Animals.length === 0 ? (
                         <tr>
                           <td colSpan={5} className="p-4 text-center text-slate-400 font-sans">
-                            Nenhuma matriz encontrada com o termo &quot;{d9SearchQuery}&quot;.
+                            {d9SearchQuery
+                              ? `Nenhuma matriz encontrada com o termo "${d9SearchQuery}".`
+                              : 'Nenhuma matriz neste filtro.'}
                           </td>
                         </tr>
                       ) : (
                         filteredD9Animals.map((la) => {
                           const isChecked = d9SelectedIds.includes(la.animal_id);
                           const hasLoss = d9DeviceLossIds.includes(la.animal_id);
+                          const alreadyDone = checkAnimalDoneInPhase(la.animal_id, 'D9');
                           return (
                             <tr
                               key={la.id}
-                              className={`hover:bg-slate-900 transition-colors ${!isChecked ? 'opacity-45 bg-slate-950/80' : ''}`}
+                              className={`hover:bg-slate-900 transition-colors border-l-4 ${
+                                alreadyDone
+                                  ? 'border-l-emerald-400 bg-emerald-950/25'
+                                  : 'border-l-amber-500/60'
+                              } ${!isChecked ? 'opacity-45 bg-slate-950/80' : ''}`}
                             >
                               <td className="p-3 text-center">
                                 <input
@@ -1153,7 +1254,22 @@ export default function BatchLotManagementModal({
                                   className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-amber-500 focus:ring-amber-500 cursor-pointer accent-amber-500"
                                 />
                               </td>
-                              <td className="p-3 font-bold text-white font-mono">{la.animals?.tag_number || 'S/N'}</td>
+                              <td className="p-3">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-bold text-white font-mono">{la.animals?.tag_number || 'S/N'}</span>
+                                  {alreadyDone ? (
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold font-sans">
+                                      <CheckCircle2 className="w-3 h-3" />
+                                      Já concluída na Retirada
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/35 text-[10px] font-bold font-sans">
+                                      <Clock className="w-3 h-3" />
+                                      Pendente
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
                               <td className="p-3 font-sans text-slate-400">{la.animals?.animal_categories?.name || 'Matriz'}</td>
                               <td className="p-3 text-center font-sans">
                                 {!isChecked ? (
