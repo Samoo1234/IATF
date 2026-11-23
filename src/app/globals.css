@@ -187,3 +187,105 @@ html:not(.dark) * {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+
+/* ==========================================================================
+   PRINT / PDF STYLESHEET
+   ========================================================================== */
+@media print {
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-family: Arial, sans-serif !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+
+  /* Oculta tudo que não for o relatório de campo */
+  header, aside, nav, #app-header, #app-sidebar, [class*="print:hidden"],
+  .print-hidden-all {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Oculta o header 'Relatórios & Indicadores Reprodutivos', cards de KPI e abas */
+  main > div > div:first-child,
+  main > div > div:nth-child(2),
+  main > div > div:nth-child(3),
+  main > div > div:nth-child(4),
+  main > div > div:nth-child(5) > div:first-child {
+    display: none !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Remove margens e padding do main */
+  main {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    position: static !important;
+  }
+
+  /* Mostra somente o container de impressão da Ficha no topo da página */
+  #printable-ficha-final {
+    display: block !important;
+    visibility: visible !important;
+    position: static !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    page-break-before: avoid !important;
+    break-before: avoid !important;
+  }
+
+  @page {
+    margin: 8mm;
+    size: portrait;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+}
+
+/* Ficha Relatório Final - Forçar fundo branco e texto preto estrito independente do tema */
+#printable-ficha-final {
+  background-color: #ffffff !important;
+  color: #000000 !important;
+}
+
+#printable-ficha-final * {
+  color: inherit;
+}
+
+#printable-ficha-final table,
+#printable-ficha-final th,
+#printable-ficha-final td,
+#printable-ficha-final div {
+  border-color: #000000 !important;
+}
+
+#printable-ficha-final table {
+  background-color: #ffffff !important;
+}
+
+#printable-ficha-final tr {
+  background-color: #ffffff !important;
+  color: #000000 !important;
+}
+
+#printable-ficha-final th {
+  background-color: #f1f5f9 !important;
+  color: #000000 !important;
+}

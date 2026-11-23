@@ -10185,3 +10185,41 @@ export async function toggleLotAnimalStepCheck(params: {
     return { success: true };
   }
 }
+
+
+export async function getCurrentUserRoleAndTenant(): Promise<{
+  role: string | null;
+  orgName: string | null;
+  userEmail: string | null;
+  isMasterCria: boolean;
+}> {
+  try {
+    const supabase = createClient();
+    const { data: { session } } = await supabase.auth.getSession();
+    const user = session?.user;
+    if (!user) {
+      return { role: null, orgName: null, userEmail: null, isMasterCria: false };
+    }
+    const email = user.email || '';
+    const orgMeta = await getOrgMetadata();
+    const orgName = orgMeta?.name || '';
+
+    const { data: member } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('user_id', user.id)
+      .limit(1)
+      .maybeSingle();
+
+    const role = member?.role || null;
+    const isMasterCria =
+      (role ? role.toLowerCase() === 'mastercriareproducao' : false) ||
+      email.toLowerCase().includes('mastercriareproducao') ||
+      orgName.toLowerCase().includes('mastercriareproducao');
+
+    return { role, orgName, userEmail: email, isMasterCria };
+  } catch (e) {
+    console.warn('getCurrentUserRoleAndTenant error:', e);
+    return { role: null, orgName: null, userEmail: null, isMasterCria: false };
+  }
+}

@@ -44,14 +44,15 @@ import {
   Cell 
 } from 'recharts';
 import * as XLSX from 'xlsx';
+import FichaRelatorioFinalView from '@/components/FichaRelatorioFinalView';
 
-type ReportTab = 'lote_categoria' | 'comparativo_categoria' | 'lotes_geral' | 'semen';
+type ReportTab = 'ficha_final' | 'lote_categoria' | 'comparativo_categoria' | 'lotes_geral' | 'semen';
 
 export default function ReportsPage() {
   const { farms, activeFarmId } = useActiveFarm();
   const { seasons, activeSeasonId, activeSeason } = useActiveSeason();
 
-  const [activeTab, setActiveTab] = useState<ReportTab>('lote_categoria');
+  const [activeTab, setActiveTab] = useState<ReportTab>('ficha_final');
   const [loading, setLoading] = useState(true);
 
   // Filtros de seleção
@@ -322,16 +323,16 @@ export default function ReportsPage() {
   return (
     <div className="space-y-6 pb-12">
       {/* 1. Header do Módulo de Relatórios */}
-      <div className="glass-card bg-slate-900/90 p-5 rounded-2xl border border-slate-800 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 print:border-none print:p-0">
+      <div className="glass-card bg-slate-900/90 p-5 rounded-2xl border border-slate-800 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 print:hidden">
         <div>
           <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center font-black shadow-inner print:hidden">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center font-black shadow-inner">
               <FileText className="w-5 h-5" />
             </div>
             <div>
               <h1 className="text-xl font-bold text-white flex items-center gap-2">
                 Relatórios & Indicadores Reprodutivos
-                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 print:hidden">
+                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                   IATF Master
                 </span>
               </h1>
@@ -343,7 +344,7 @@ export default function ReportsPage() {
         </div>
 
         {/* Botões de Ação: Excel e Imprimir / PDF */}
-        <div className="flex items-center gap-2.5 print:hidden self-start md:self-auto">
+        <div className="flex items-center gap-2.5 self-start md:self-auto">
           <button
             onClick={handleExportExcel}
             className="bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-semibold px-3.5 py-2 rounded-xl border border-slate-700 text-xs flex items-center gap-2 transition-all cursor-pointer shadow-md"
@@ -439,7 +440,7 @@ export default function ReportsPage() {
       </div>
 
       {/* 3. Cards de KPIs e Destaques Zootécnicos */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 print:hidden">
         {/* Matrizes Sincronizadas */}
         <div className="glass-card bg-slate-900/90 p-4 rounded-2xl border border-slate-800 space-y-1">
           <div className="flex items-center justify-between text-slate-400 text-[10px] uppercase font-bold tracking-wider">
@@ -510,9 +511,10 @@ export default function ReportsPage() {
       {/* 4. Abas de Navegação */}
       <div className="flex space-x-2 border-b border-slate-800 pb-2 print:hidden">
         {[
+          { id: 'ficha_final' as const, label: 'Ficha Relatório Final (DG / Campo)', icon: FileText },
           { id: 'lote_categoria' as const, label: 'Desempenho por Lote × Categoria', icon: Layers },
           { id: 'comparativo_categoria' as const, label: 'Comparativo por Categoria', icon: BarChart3 },
-          { id: 'lotes_geral' as const, label: `Visão Geral dos Lotes (${lots.length})`, icon: FileText },
+          { id: 'lotes_geral' as const, label: `Visão Geral dos Lotes (${lots.length})`, icon: Layers },
           { id: 'semen' as const, label: `Estoque de Sêmen & Touros (${semenBatches.length})`, icon: Syringe },
         ].map(({ id, label, icon: Icon }) => (
           <button
@@ -531,11 +533,12 @@ export default function ReportsPage() {
       </div>
 
       {/* 5. Conteúdo Principal das Abas */}
-      <div className="glass-card p-6 rounded-2xl border border-slate-800 space-y-5">
+      <div className="glass-card p-6 rounded-2xl border border-slate-800 space-y-5 print:p-0 print:border-none print:shadow-none print:bg-transparent print:m-0">
         {/* Cabeçalho de Relatório Oficial para Impressão */}
-        <div className="border-b border-slate-800 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="border-b border-slate-800 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2 print:hidden">
           <div>
             <h2 className="text-base font-extrabold text-white uppercase tracking-wider">
+              {activeTab === 'ficha_final' && 'Ficha de Relatório Final de Campo (DG / Diagnóstico de Gestação)'}
               {activeTab === 'lote_categoria' && 'Relatório Analítico de Concepção por Lote e Categoria Zootécnica'}
               {activeTab === 'comparativo_categoria' && 'Comparativo Consolidado de Desempenho por Categoria Animal'}
               {activeTab === 'lotes_geral' && 'Relatório Oficial Consolidado de Lotes de IATF'}
@@ -564,6 +567,15 @@ export default function ReportsPage() {
             {/* ======================================================== */}
             {/* ABA 1: LOTE X CATEGORIA ANIMAL (TABELA CRUZADA) */}
             {/* ======================================================== */}
+            {activeTab === 'ficha_final' && (
+              <FichaRelatorioFinalView
+                farms={farms}
+                activeFarmId={activeFarmId}
+                activeSeasonId={activeSeasonId}
+                lots={lots}
+              />
+            )}
+
             {activeTab === 'lote_categoria' && (
               <div className="space-y-4">
                 {groupedByLot.length === 0 ? (
@@ -902,7 +914,7 @@ export default function ReportsPage() {
         )}
 
         {/* 6. Assinatura e Rodapé Oficial para Laudo Técnico / Impressão */}
-        <div className="pt-8 pb-2 border-t border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-6 text-xs text-slate-400 print:mt-6">
+        <div className="pt-8 pb-2 border-t border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-6 text-xs text-slate-400 print:hidden">
           <div className="space-y-1 text-center sm:text-left">
             <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">
               Sistema IATF Master — Gestão Reprodutiva e Zootécnica de Alta Precisão
