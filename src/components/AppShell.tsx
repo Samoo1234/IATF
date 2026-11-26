@@ -48,7 +48,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       try {
         const { data: { session } } = await supabase.auth.getSession();
 
-        if (!session || !hasTabSession) {
+        if (!session) {
           if (!isOffline) {
             if (typeof window !== 'undefined') {
               sessionStorage.removeItem('iatf_tab_session');
@@ -58,9 +58,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             router.push('/login');
             return;
           }
-        }
-
-        if (session && typeof window !== 'undefined') {
+        } else if (typeof window !== 'undefined') {
+          sessionStorage.setItem('iatf_tab_session', 'active');
           localStorage.setItem('iatf_offline_session_active', 'true');
         }
       } catch (err) {
@@ -80,6 +79,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       mounted = false;
     };
   }, [pathname, router]);
+
+  // Sincronização de logout entre abas via BroadcastChannel
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('BroadcastChannel' in window)) return;
+    const bc = new BroadcastChannel('iatf_auth');
+    bc.onmessage = (event) => {
+      if (event.data?.type === 'LOGOUT') {
+        sessionStorage.removeItem('iatf_tab_session');
+        router.push('/login');
+      }
+    };
+    return () => bc.close();
+  }, [router]);
 
   // Efeito de transição rápida visual ao mudar de rota
   useEffect(() => {

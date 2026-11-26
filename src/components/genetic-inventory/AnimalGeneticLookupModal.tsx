@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import type { AnimalGeneticPosition, GeneticMaterialType } from '@/lib/types/genetic-inventory';
 import { Search, Dna, Package, X, RefreshCw, User, ShieldCheck } from 'lucide-react';
 import { searchAnimalGeneticPositions } from '@/lib/services/geneticInventoryService';
@@ -24,14 +24,14 @@ export default function AnimalGeneticLookupModal({
   const [results, setResults] = useState<AnimalGeneticPosition[]>([]);
   const [searched, setSearched] = useState(false);
 
-  const handleSearch = async () => {
+  const handleSearch = useCallback(async () => {
     if (!queryText.trim() || queryText.trim().length < 2) return;
     setLoading(true);
     setSearched(true);
     const list = await searchAnimalGeneticPositions(farmId, queryText.trim(), animalType);
     setResults(list);
     setLoading(false);
-  };
+  }, [farmId, queryText, animalType]);
 
   useEffect(() => {
     if (queryText.trim().length >= 2) {
@@ -43,7 +43,7 @@ export default function AnimalGeneticLookupModal({
       setResults([]);
       setSearched(false);
     }
-  }, [queryText, animalType]);
+  }, [queryText, animalType, handleSearch]);
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 overflow-y-auto">

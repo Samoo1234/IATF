@@ -8,7 +8,6 @@ import {
 } from 'lucide-react';
 import { 
   getTeamMembers, 
-  createTeamMemberDirect, 
   updateTeamMemberRole, 
   toggleTeamMemberStatus, 
   type TeamMember 
@@ -47,12 +46,20 @@ export default function TeamPage() {
     loadMembers();
   }, []);
 
-  // Gerador de senha forte aleatória
+  // Gerador criptográfico de senha forte aleatória
   const generatePassword = () => {
     const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%';
+    const randomValues = new Uint32Array(12);
+    if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+      window.crypto.getRandomValues(randomValues);
+    } else {
+      for (let i = 0; i < randomValues.length; i++) {
+        randomValues[i] = (Date.now() + i * 7919) >>> 0;
+      }
+    }
     let pass = '';
-    for (let i = 0; i < 10; i++) {
-      pass += chars.charAt(Math.floor(Math.random() * chars.length));
+    for (let i = 0; i < 12; i++) {
+      pass += chars.charAt(randomValues[i] % chars.length);
     }
     setPassword(pass);
     setShowPassword(true);
@@ -65,8 +72,8 @@ export default function TeamPage() {
       return;
     }
 
-    if (password.length < 6) {
-      setFeedback({ type: 'error', message: 'A senha deve conter pelo menos 6 caracteres.' });
+    if (password.length < 8) {
+      setFeedback({ type: 'error', message: 'A senha deve conter pelo menos 8 caracteres.' });
       return;
     }
 
@@ -74,21 +81,32 @@ export default function TeamPage() {
     setFeedback(null);
 
     try {
-      const res = await createTeamMemberDirect({
-        name: name.trim(),
-        email: email.trim(),
-        password,
-        role,
+      const response = await fetch('/api/team/members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: name.trim(),
+          email: email.trim(),
+          password,
+          role,
+        }),
       });
 
-      if (!res.success) {
+      const res = await response.json().catch(() => ({ success: false, error: 'Resposta inválida do servidor.' }));
+
+      if (!response.ok || !res.success) {
+        // Fallback controlado apenas se a rota ainda não tiver SERVICE_ROLE_KEY configurada em dev
+        if (response.status === 503) {
+          setFeedback({ type: 'error', message: res.error || 'Serviço administrativo indisponível no servidor.' });
+          return;
+        }
         setFeedback({ type: 'error', message: res.error || 'Erro ao cadastrar usuário.' });
         return;
       }
 
-      setFeedback({ 
-        type: 'success', 
-        message: `Usuário ${name} cadastrado com sucesso! As credenciais já estão prontas para login.` 
+      setFeedback({
+        type: 'success',
+        message: `Usuário ${name} cadastrado com sucesso! As credenciais já estão prontas para login.`,
       });
       setName('');
       setEmail('');
@@ -109,16 +127,40 @@ export default function TeamPage() {
 
   const handleToggleStatus = async (member: TeamMember) => {
     const newStatus = member.status === 'active' ? 'inactive' : 'active';
-    const success = await toggleTeamMemberStatus(member.id, newStatus);
-    if (success) {
+    const response = await fetch('/api/team/members', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memberId: member.id, status: newStatus }),
+    });
+    const res = await response.json().catch(() => ({ success: false }));
+    if (response.ok && res.success) {
       setMembers(prev => prev.map(m => m.id === member.id ? { ...m, status: newStatus } : m));
+    } else {
+      const fallbackOk = response.status === 503 ? await toggleTeamMemberStatus(member.id, newStatus) : false;
+      if (fallbackOk) {
+        setMembers(prev => prev.map(m => m.id === member.id ? { ...m, status: newStatus } : m));
+      } else if (res.error) {
+        setFeedback({ type: 'error', message: res.error });
+      }
     }
   };
 
   const handleChangeRole = async (memberId: string, newRole: string) => {
-    const success = await updateTeamMemberRole(memberId, newRole);
-    if (success) {
+    const response = await fetch('/api/team/members', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memberId, role: newRole }),
+    });
+    const res = await response.json().catch(() => ({ success: false }));
+    if (response.ok && res.success) {
       setMembers(prev => prev.map(m => m.id === memberId ? { ...m, role: newRole } : m));
+    } else {
+      const fallbackOk = response.status === 503 ? await updateTeamMemberRole(memberId, newRole) : false;
+      if (fallbackOk) {
+        setMembers(prev => prev.map(m => m.id === memberId ? { ...m, role: newRole } : m));
+      } else if (res.error) {
+        setFeedback({ type: 'error', message: res.error });
+      }
     }
   };
 

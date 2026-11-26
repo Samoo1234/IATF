@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { MASTER_CRIA_LOGO_BASE64 } from '@/components/masterCriaLogoBase64';
+import { getTodayDateString } from '@/lib/dateUtils';
 
 export interface ExportFichaParams {
   lotName: string;
@@ -134,7 +135,7 @@ export async function exportFichaRelatorioFinalExcel(params: ExportFichaParams) 
   ws.getRow(5).height = 22;
   ws.mergeCells('A5:R5');
   const r5Cell = ws.getCell('A5');
-  r5Cell.value = `Produtor:      ${params.produtor || 'RAMIRO ANTÔNIO DAVI'}                          - Propriedade: ${params.propriedade || 'FAZENDA SÃO LUCAS'}`;
+  r5Cell.value = `Produtor:      ${params.produtor || 'Não informado'}                          - Propriedade: ${params.propriedade || 'Não informada'}`;
   r5Cell.font = { name: 'Arial', size: 9, bold: true };
   r5Cell.alignment = { horizontal: 'center', vertical: 'middle' };
   applyRangeBorder(ws, 5, 1, 5, 18);
@@ -161,15 +162,13 @@ export async function exportFichaRelatorioFinalExcel(params: ExportFichaParams) 
 
   applyRangeBorder(ws, 6, 1, 6, 18);
 
-  // Linha 7: Observações
-  ws.getRow(7).height = 26;
-  ws.mergeCells('A7:E7');
+  // Linha 7: Observações (mesclada de A7:R7 com wrapText para nunca truncar texto longo)
+  ws.getRow(7).height = 28;
+  ws.mergeCells('A7:R7');
   const a7 = ws.getCell('A7');
   a7.value = `Observações: ${params.observacoes || ''}`;
   a7.font = { name: 'Arial', size: 9, bold: true };
-  a7.alignment = { horizontal: 'left', vertical: 'middle' };
-
-  ws.mergeCells('F7:R7');
+  a7.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
   applyRangeBorder(ws, 7, 1, 7, 18);
 
   // Linha 8: Linha vazia delimitadora (A8..R8)
@@ -337,7 +336,7 @@ export async function exportFichaRelatorioFinalExcel(params: ExportFichaParams) 
   const url = window.URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = `Ficha_Relatorio_Final_${params.lotName}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  anchor.download = `Ficha_Relatorio_Final_${params.lotName}_${getTodayDateString()}.xlsx`;
   document.body.appendChild(anchor);
   anchor.click();
   document.body.removeChild(anchor);

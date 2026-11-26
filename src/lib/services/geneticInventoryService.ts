@@ -17,7 +17,7 @@ import type {
   TransferPayload,
   AdjustmentPayload,
 } from '@/lib/types/genetic-inventory';
-import * as XLSX from 'xlsx';
+import { exportRowsToExcel } from '@/lib/excelUtils';
 import { getTodayDateString } from '@/lib/dateUtils';
 
 // ============================================================
@@ -1194,32 +1194,13 @@ export function exportInventoryToExcel(balances: InventoryBalance[], farmName = 
     };
   });
 
-  const worksheet = XLSX.utils.json_to_sheet(rows);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Inventário Genético');
-
-  // Larguras automáticas de coluna
-  worksheet['!cols'] = [
-    { wch: 15 },
-    { wch: 25 },
-    { wch: 15 },
-    { wch: 15 },
-    { wch: 16 },
-    { wch: 10 },
-    { wch: 22 },
-    { wch: 14 },
-    { wch: 20 },
-    { wch: 22 },
-    { wch: 12 },
-    { wch: 20 },
-    { wch: 16 },
-    { wch: 18 },
-    { wch: 22 },
-    { wch: 18 },
-  ];
-
   const dateStr = getTodayDateString();
-  XLSX.writeFile(workbook, `Inventario_Estoque_Genetico_${farmName.replace(/\s+/g, '_')}_${dateStr}.xlsx`);
+  void exportRowsToExcel(
+    rows,
+    'Inventário Genético',
+    `Inventario_Estoque_Genetico_${farmName.replace(/\s+/g, '_')}_${dateStr}.xlsx`,
+    [15, 25, 15, 15, 16, 10, 22, 14, 20, 22, 12, 20, 16, 18, 22, 18]
+  );
 }
 
 export function exportMovementsToExcel(movements: InventoryMovement[], farmName = 'Fazenda'): void {
@@ -1248,12 +1229,12 @@ export function exportMovementsToExcel(movements: InventoryMovement[], farmName 
     };
   });
 
-  const worksheet = XLSX.utils.json_to_sheet(rows);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Livro Razão de Movimentações');
-
   const dateStr = getTodayDateString();
-  XLSX.writeFile(workbook, `Movimentacoes_Estoque_Genetico_${farmName.replace(/\s+/g, '_')}_${dateStr}.xlsx`);
+  void exportRowsToExcel(
+    rows,
+    'Livro Razão Movimentações',
+    `Movimentacoes_Estoque_Genetico_${farmName.replace(/\s+/g, '_')}_${dateStr}.xlsx`
+  );
 }
 
 export async function getGeneticInventoryBalancesByFarm(forceRefresh = false): Promise<Record<string, number>> {

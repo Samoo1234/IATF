@@ -14,6 +14,11 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // Rotas de API fazem sua própria autenticação/autorização retornando JSON 401/403
+  if (pathname.startsWith('/api/')) {
+    return NextResponse.next();
+  }
+
   const isLoginPage = pathname === '/login' || pathname.startsWith('/login/');
   const isAuthCallback = pathname.startsWith('/auth');
 
@@ -22,14 +27,14 @@ export async function middleware(request: NextRequest) {
     (c) => c.name.startsWith('sb-') && c.name.includes('-auth-token')
   );
 
-  // Se não tem cookie do Supabase e tenta acessar rota protegida, redireciona instantaneamente (0ms)
+  // Se não tem cookie do Supabase e tenta acessar rota protegida, redireciona instantaneamente
   if (!hasAuthCookie && !isLoginPage && !isAuthCallback) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
     return NextResponse.redirect(url);
   }
 
-  // Se está na tela de login sem cookie, deixa passar imediatamente (0ms)
+  // Se está na tela de login sem cookie, deixa passar imediatamente
   if (!hasAuthCookie && isLoginPage) {
     return NextResponse.next();
   }
@@ -46,13 +51,22 @@ export async function middleware(request: NextRequest) {
         getAll() {
           return request.cookies.getAll();
         },
-        setAll(cookiesToSet: Array<{ name: string; value: string; options?: Parameters<typeof supabaseResponse.cookies.set>[2] }>) {
+        setAll(
+          cookiesToSet: Array<{
+            name: string;
+            value: string;
+            options?: Parameters<typeof supabaseResponse.cookies.set>[2];
+          }>
+        ) {
           cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
           supabaseResponse = NextResponse.next({
             request,
           });
           cookiesToSet.forEach(({ name, value, options }) => {
-            const isDeleting = options?.maxAge === 0 || (options?.maxAge !== undefined && options.maxAge <= 0) || !value;
+            const isDeleting =
+              options?.maxAge === 0 ||
+              (options?.maxAge !== undefined && options.maxAge <= 0) ||
+              !value;
             supabaseResponse.cookies.set(name, value, {
               ...options,
               ...(isDeleting ? { maxAge: 0 } : { maxAge: undefined }),
@@ -78,8 +92,36 @@ export async function middleware(request: NextRequest) {
     return redirectResponse;
   }
 
+  // Verificação server-side de status ativo e RBAC para rotas restritas
+  if (user && !isLoginPage && !isAuthCallback) {
+    try {
+      const { data: member } = await supabase
+        .from('organization_members')
+        .select('role, status')
+        .eq('user_id', user.id)
+        .limit(1)
+        .maybeSingle();
+
+      if (member && member.status === 'inactive') {
+        const url = request.nextUrl.clone();
+        url.pathname = '/login';
+        url.searchParams.set('error', 'inactive');
+        return NextResponse.redirect(url);
+      }
+
+      if (pathname.startsWith('/team') && member && member.role !== 'admin') {
+        const url = request.nextUrl.clone();
+        url.pathname = '/';
+        url.searchParams.set('error', 'forbidden');
+        return NextResponse.redirect(url);
+      }
+    } catch {
+      // Falha transitória de rede: não derruba navegação já autenticada
+    }
+  }
+
   // Redirecionar usuário já autenticado tentando acessar /login para a página inicial
-  if (user && isLoginPage) {
+  if (user && isLoginPage && request.nextUrl.searchParams.get('error') !== 'inactive') {
     const url = request.nextUrl.clone();
     url.pathname = '/';
     const redirectResponse = NextResponse.redirect(url);

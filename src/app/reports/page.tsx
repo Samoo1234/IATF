@@ -43,7 +43,7 @@ import {
   Tooltip, 
   Cell 
 } from 'recharts';
-import * as XLSX from 'xlsx';
+import { exportRowsToExcel } from '@/lib/excelUtils';
 import FichaRelatorioFinalView from '@/components/FichaRelatorioFinalView';
 
 type ReportTab = 'ficha_final' | 'lote_categoria' | 'comparativo_categoria' | 'lotes_geral' | 'semen';
@@ -237,13 +237,17 @@ export default function ReportsPage() {
 
   // Médico Veterinário responsável
   const defaultVet = veterinarians.find((v) => v.is_default) || veterinarians[0];
-  const vetDisplayName = defaultVet ? defaultVet.name : 'DR. SAMOEL DUARTE';
-  const vetCrmv = defaultVet?.crmv ? `CRMV: ${defaultVet.crmv}` : 'CRMV-SP 12345';
+  const vetDisplayName = defaultVet ? defaultVet.name : 'Responsável Técnico não cadastrado';
+  const vetCrmv = defaultVet?.crmv ? `CRMV: ${defaultVet.crmv}` : 'CRMV não informado';
 
-  // Exportar para Excel (.xlsx)
+  // Exportar para Excel (.xlsx) via ExcelJS
   const handleExportExcel = () => {
-    const wb = XLSX.utils.book_new();
     const dateStr = getTodayDateString();
+
+    if (activeTab === 'ficha_final') {
+      window.dispatchEvent(new CustomEvent('iatf_export_ficha_final'));
+      return;
+    }
 
     if (activeTab === 'lote_categoria') {
       const dataRows = filteredLotCatData.map((item) => ({
@@ -263,9 +267,7 @@ export default function ReportsPage() {
         'ECC Médio DG': item.avg_ecc_dg !== null ? item.avg_ecc_dg : '-',
       }));
 
-      const ws = XLSX.utils.json_to_sheet(dataRows);
-      XLSX.utils.book_append_sheet(wb, ws, 'Lote_x_Categoria');
-      XLSX.writeFile(wb, `Relatorio_IATF_Lote_Categoria_${dateStr}.xlsx`);
+      void exportRowsToExcel(dataRows, 'Lote_x_Categoria', `Relatorio_IATF_Lote_Categoria_${dateStr}.xlsx`);
     } else if (activeTab === 'comparativo_categoria') {
       const dataRows = catSummaryData.map((c) => ({
         'Categoria Animal': c.category_name,
@@ -278,9 +280,7 @@ export default function ReportsPage() {
         'Qtd. de Lotes Participantes': c.lots_count,
       }));
 
-      const ws = XLSX.utils.json_to_sheet(dataRows);
-      XLSX.utils.book_append_sheet(wb, ws, 'Resumo_Categorias');
-      XLSX.writeFile(wb, `Relatorio_IATF_Resumo_Categorias_${dateStr}.xlsx`);
+      void exportRowsToExcel(dataRows, 'Resumo_Categorias', `Relatorio_IATF_Resumo_Categorias_${dateStr}.xlsx`);
     } else if (activeTab === 'lotes_geral') {
       const dataRows = lots.map((l) => ({
         'Lote': l.code,
@@ -297,10 +297,8 @@ export default function ReportsPage() {
         'Status': l.status,
       }));
 
-      const ws = XLSX.utils.json_to_sheet(dataRows);
-      XLSX.utils.book_append_sheet(wb, ws, 'Lotes_Geral');
-      XLSX.writeFile(wb, `Relatorio_IATF_Lotes_Geral_${dateStr}.xlsx`);
-    } else {
+      void exportRowsToExcel(dataRows, 'Lotes_Geral', `Relatorio_IATF_Lotes_Geral_${dateStr}.xlsx`);
+    } else if (activeTab === 'semen') {
       const dataRows = semenBatches.map((b) => {
         const current = b.initial_quantity - b.used_quantity - b.lost_quantity;
         return {
@@ -314,9 +312,7 @@ export default function ReportsPage() {
         };
       });
 
-      const ws = XLSX.utils.json_to_sheet(dataRows);
-      XLSX.utils.book_append_sheet(wb, ws, 'Estoque_Semen');
-      XLSX.writeFile(wb, `Relatorio_IATF_Estoque_Semen_${dateStr}.xlsx`);
+      void exportRowsToExcel(dataRows, 'Estoque_Semen', `Relatorio_IATF_Estoque_Semen_${dateStr}.xlsx`);
     }
   };
 

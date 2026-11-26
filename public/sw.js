@@ -1,4 +1,4 @@
-const CACHE_NAME = 'iatf-pwa-v2';
+const CACHE_NAME = 'iatf-pwa-v3';
 
 const STATIC_PRECACHE = [
   '/',
@@ -39,8 +39,9 @@ self.addEventListener('fetch', (event) => {
   // Ignore chrome-extension and non-http schemes
   if (!url.protocol.startsWith('http')) return;
 
-  // Ignore Supabase and external API calls (handled by IndexedDB offline layer)
-  if (url.origin.includes('supabase.co') || url.pathname.startsWith('/api/')) {
+  // Ignore non-GET requests, Supabase and external API/auth calls (handled by IndexedDB offline layer)
+  if (request.method !== 'GET') return;
+  if (url.origin.includes('supabase.co') || url.pathname.startsWith('/api/') || url.pathname.startsWith('/auth/')) {
     return;
   }
 

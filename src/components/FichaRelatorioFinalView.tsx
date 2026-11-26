@@ -180,8 +180,8 @@ export default function FichaRelatorioFinalView({
 
     await exportFichaRelatorioFinalExcel({
       lotName,
-      produtor: produtor || 'RAMIRO ANTÔNIO DAVI',
-      propriedade: propriedade || 'FAZENDA SÃO LUCAS',
+      produtor: produtor || orgName || 'Não informado',
+      propriedade: propriedade || 'Não informada',
       dataFicha: dataFicha || '',
       horaInicio: horaInicio || '',
       horaTermino: horaTermino || '',
@@ -211,6 +211,17 @@ export default function FichaRelatorioFinalView({
       stats,
     });
   };
+
+  // Escuta evento do botão global "Exportar Excel" na página /reports
+  useEffect(() => {
+    const onExport = () => {
+      if (animals.length > 0) {
+        void handleExportXLSX();
+      }
+    };
+    window.addEventListener('iatf_export_ficha_final', onExport);
+    return () => window.removeEventListener('iatf_export_ficha_final', onExport);
+  });
 
   const currentLot = lots.find((l) => l.id === selectedLotId);
   const currentLotIaDate = currentLot?.ia_planned_date ? formatDate(currentLot.ia_planned_date) : '-';
@@ -371,6 +382,7 @@ export default function FichaRelatorioFinalView({
           {/* Logomarca condicional à esquerda (somente para role mastercriareproducao) */}
           {isMasterCria && (
             <div className="absolute left-0 top-0 flex items-center gap-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={MASTER_CRIA_LOGO_BASE64}
                 alt="Master Cria Reprodução Animal"
@@ -391,7 +403,7 @@ export default function FichaRelatorioFinalView({
         <div className="border border-black text-xs font-bold text-black mb-1">
           {/* Linha 5 da Planilha: Produtor e Propriedade */}
           <div className="px-3 py-1.5 border-b border-black text-center uppercase tracking-wide">
-            Produtor:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{produtor || 'RAMIRO ANTÔNIO DAVI'}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- Propriedade: {propriedade || 'FAZENDA SÃO LUCAS'}
+            Produtor:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{produtor || orgName || 'Não informado'}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- Propriedade: {propriedade || 'Não informada'}
           </div>
 
           {/* Linha 6 da Planilha: Data, Hora início e Hora término */}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Lock, Mail, ArrowRight, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react';
@@ -14,6 +14,15 @@ export default function LoginPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('error') === 'inactive') {
+      setErrorMsg('Sua conta está inativa nesta organização. Contate o administrador.');
+      createClient().auth.signOut().catch(() => {});
+    }
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -24,6 +33,9 @@ export default function LoginPage() {
 
     try {
       if (isSignUp) {
+        if (password.length < 8) {
+          throw new Error('A senha deve conter no mínimo 8 caracteres.');
+        }
         const { error } = await supabase.auth.signUp({
           email,
           password,

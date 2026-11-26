@@ -8632,7 +8632,10 @@ export async function executeBatchLotManagementD0(params: {
       const orgId = (lot?.organization_id as string) || (typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : '') || '';
 
       for (const animalId of params.animalIds) {
-        const mgmtId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'mgmt_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+        const mgmtId =
+          typeof crypto !== 'undefined' && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `mgmt_${Date.now()}_${animalId.slice(0, 8)}`;
         await syncEngine.recordOfflineManagementStart({
           id: mgmtId,
           organization_id: orgId,

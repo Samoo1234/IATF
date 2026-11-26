@@ -12,7 +12,7 @@ import {
   Dna, 
   Package 
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import { exportRowsToExcel } from '@/lib/excelUtils';
 import { getTodayDateString } from '@/lib/dateUtils';
 
 interface ReportsViewProps {
@@ -234,11 +234,8 @@ export default function ReportsView({
       });
     }
 
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, sheetName);
     const dateStr = getTodayDateString();
-    XLSX.writeFile(wb, `Relatorio_${sheetName.replace(/\s+/g, '_')}_${dateStr}.xlsx`);
+    void exportRowsToExcel(data, sheetName, `Relatorio_${sheetName.replace(/\s+/g, '_')}_${dateStr}.xlsx`);
   };
 
   return (

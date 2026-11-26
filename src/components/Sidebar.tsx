@@ -23,7 +23,8 @@ import {
   X,
   Users
 } from 'lucide-react';
-import { getOrgMetadata, type OrgMetadata } from '@/lib/db';
+import { getOrgMetadata, getCurrentUserRoleAndTenant, clearTenantCache, clearFarmsCache, type OrgMetadata } from '@/lib/db';
+import { offlineDb } from '@/lib/offline/offlineDb';
 import { createClient } from '@/lib/supabase/client';
 import { useActiveFarm } from '@/context/FarmContext';
 import ThemeToggle from '@/components/ThemeToggle';
@@ -83,6 +84,7 @@ export default function Sidebar({
   const router = useRouter();
   const [metadata, setMetadata] = useState<OrgMetadata | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string | null>(null);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
 
   const { activeFarm } = useActiveFarm();
@@ -91,14 +93,21 @@ export default function Sidebar({
     let mounted = true;
 
     async function loadData() {
-      const meta = await getOrgMetadata();
+      const [meta, roleInfo] = await Promise.all([
+        getOrgMetadata(),
+        getCurrentUserRoleAndTenant(),
+      ]);
       if (!mounted) return;
       setMetadata(meta);
-
-      const supabase = createClient();
-      const { data: { session } } = await supabase.auth.getSession();
-      if (mounted && session?.user) {
-        setUserEmail(session.user.email ?? null);
+      setUserRole(roleInfo.role);
+      if (roleInfo.userEmail) {
+        setUserEmail(roleInfo.userEmail);
+      } else {
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (mounted && session?.user) {
+          setUserEmail(session.user.email ?? null);
+        }
       }
     }
 
@@ -109,12 +118,28 @@ export default function Sidebar({
   }, []);
 
   const handleLogout = async () => {
-    if (typeof window !== 'undefined') {
-      sessionStorage.removeItem('iatf_tab_session');
+    try {
+      clearTenantCache();
+      clearFarmsCache();
+      await Promise.all(offlineDb.tables.map((t) => t.clear())).catch(() => {});
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('iatf_tab_session');
+        Object.keys(localStorage)
+          .filter((k) => k.startsWith('iatf_') && k !== 'iatf_theme' && k !== 'iatf_sidebar_collapsed')
+          .forEach((k) => localStorage.removeItem(k));
+        if ('BroadcastChannel' in window) {
+          const bc = new BroadcastChannel('iatf_auth');
+          bc.postMessage({ type: 'LOGOUT' });
+          bc.close();
+        }
+      }
+    } catch {
+      // Continua logout mesmo se limpeza local falhar
     }
     const supabase = createClient();
     await supabase.auth.signOut();
     setUserEmail(null);
+    setUserRole(null);
     setUserDropdownOpen(false);
     router.push('/login');
   };
@@ -192,7 +217,9 @@ export default function Sidebar({
             )}
 
             <div className="space-y-1">
-              {section.items.map((item) => {
+              {section.items
+                .filter((item) => item.href !== '/team' || !userRole || userRole === 'admin')
+                .map((item) => {
                 const Icon = item.icon;
                 const isActive = pathname === item.href;
 

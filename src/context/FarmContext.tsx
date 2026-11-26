@@ -63,6 +63,14 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     refreshFarms();
+    if (typeof window === 'undefined') return;
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'iatf_active_farm_id' && e.newValue && e.newValue !== 'all') {
+        setActiveFarmIdState(e.newValue);
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
   }, [refreshFarms]);
 
   const setActiveFarmId = useCallback((id: string) => {

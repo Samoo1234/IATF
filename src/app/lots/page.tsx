@@ -760,6 +760,7 @@ export default function LotsPage() {
         handleSelectLot(match.id);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lots]);
 
   // Abrir modal de novo lote já pré-preenchido de forma inteligente (velocidade de 1 clique)
@@ -770,7 +771,7 @@ export default function LotsPage() {
     const defaultVet = veterinarians.find((vet) => vet.is_default) || veterinarians[0];
     const defaultVetLabel = defaultVet
       ? (defaultVet.crmv ? `${defaultVet.name} (${defaultVet.crmv})` : defaultVet.name)
-      : 'MV. DR. SAMOEL DUARTE';
+      : '';
 
     setForm({
       code: suggestedCode,
