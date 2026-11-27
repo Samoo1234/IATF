@@ -646,10 +646,9 @@ export default function MovementWizard({
                           onChange={(e) => setInboundCryo(e.target.value as CryopreservationType)}
                           className="w-full bg-slate-900 border border-slate-700 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-emerald-500"
                         >
-                          <option value="vitrificacao">Vitrificação</option>
-                          <option value="congelamento_lento">Congelamento Lento</option>
-                          <option value="fresco">A Fresco</option>
-                          <option value="nao_aplicavel">Não especificado</option>
+                          <option value="DT">Transferência Direta (DT)</option>
+                          <option value="VT">Vitrificação (VT)</option>
+                          <option value="nao_aplicavel">Não Aplicável</option>
                         </select>
                       </div>
                     </div>

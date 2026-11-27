@@ -822,12 +822,14 @@ export default function LotsPage() {
 
     const cleanTag = quickTagInput.trim();
 
-    // Se a matriz já está no lote, marca imediatamente sua passagem na Fase Ativa do Manejo!
+    // Se a matriz já está no lote, marca imediatamente apenas etapas de implante (D0/D7/D8/D9) — nunca IA/DG sem touro ou exame
+    const safeQuickPhases = new Set(['D0', 'D7', 'D8', 'D9']);
+    const targetPhase = activePhaseCode && safeQuickPhases.has(activePhaseCode) ? activePhaseCode : 'D0';
+
     const existingInLot = lotAnimals.find(
       (la) => (la.animals?.tag_number || '').trim().toLowerCase() === cleanTag.toLowerCase()
     );
     if (existingInLot) {
-      const targetPhase = activePhaseCode || 'D0';
       await handleToggleAnimalStepCheck(existingInLot.animal_id, targetPhase, true);
       setQuickTagInput('');
       showToast(`✓ Matriz Brinco ${existingInLot.animals?.tag_number || cleanTag} marcada como MANEJADA na fase ${targetPhase}!`);
@@ -869,10 +871,9 @@ export default function LotsPage() {
         showToast(`Matriz ${cleanTag} cadastrada e adicionada ao lote com sucesso!`);
       }
 
-      // Se marcou para registrar automaticamente na etapa D0 (ou fase ativa)
+      // Se marcou para registrar automaticamente na etapa D0 (ou fase de implante ativa)
       if (quickAutoD0 && res.animalId) {
         const targetAnimalId = res.animalId;
-        const targetPhase = activePhaseCode || 'D0';
         const currentAnimalsCount = lotAnimals.length + 1;
         const currentPhaseCount =
           lotAnimals.filter((la) => Boolean(stepChecks[la.animal_id]?.[targetPhase])).length + 1;

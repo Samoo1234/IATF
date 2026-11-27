@@ -1,5 +1,5 @@
 -- ============================================================================
--- MIGRATION 013: INTEGRIDADE DE DADOS, FAZENDA PRINCIPAL E ESTORNO GENÉTICO
+-- MIGRATION 013: INTEGRIDADE DE DADOS, FAZENDA PRINCIPAL E ONBOARDING SEGURO
 -- ATENÇÃO: VALIDAR EM STAGING ANTES DE APLICAR EM PRODUÇÃO.
 -- ============================================================================
 
@@ -61,7 +61,12 @@ BEGIN
 END;
 $$;
 
--- 3. Tornar handle_new_user_onboarding idempotente para não conflitar com criação administrativa
+REVOKE EXECUTE ON FUNCTION public.freeze_farm(UUID, UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.freeze_farm(UUID, UUID) TO authenticated, service_role;
+REVOKE EXECUTE ON FUNCTION public.unfreeze_farm(UUID, UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.unfreeze_farm(UUID, UUID) TO authenticated, service_role;
+
+-- 3. Tornar handle_new_user_onboarding idempotente e respeitar skip_onboarding
 CREATE OR REPLACE FUNCTION public.handle_new_user_onboarding()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -72,7 +77,11 @@ DECLARE
   new_org_id UUID;
   user_name TEXT;
 BEGIN
-  -- Se o usuário já foi vinculado a uma organização (ex: criação via /api/team/members), não cria org duplicada
+  -- Se o usuário foi criado por fluxo administrativo (/api/team/members) ou já possui vínculo, não cria org duplicada
+  IF COALESCE((NEW.raw_user_meta_data->>'skip_onboarding')::boolean, false) = true THEN
+    RETURN NEW;
+  END IF;
+
   IF EXISTS (SELECT 1 FROM public.organization_members WHERE user_id = NEW.id) THEN
     RETURN NEW;
   END IF;
@@ -100,6 +109,37 @@ BEGIN
     true
   );
 
+  INSERT INTO public.reproductive_seasons (organization_id, name, start_date, end_date, status)
+  VALUES (
+    new_org_id,
+    'Estação ' || EXTRACT(YEAR FROM CURRENT_DATE)::text || '/' || (EXTRACT(YEAR FROM CURRENT_DATE) + 1)::text,
+    (EXTRACT(YEAR FROM CURRENT_DATE)::text || '-09-01')::date,
+    ((EXTRACT(YEAR FROM CURRENT_DATE) + 1)::text || '-04-30')::date,
+    'active'
+  );
+
+  INSERT INTO public.breeds (organization_id, name) VALUES
+    (new_org_id, 'Nelore'),
+    (new_org_id, 'Angus'),
+    (new_org_id, 'Brangus'),
+    (new_org_id, 'Braford'),
+    (new_org_id, 'Senepol');
+
+  INSERT INTO public.animal_categories (organization_id, name) VALUES
+    (new_org_id, 'Novilha'),
+    (new_org_id, 'Primípara'),
+    (new_org_id, 'Secundípara'),
+    (new_org_id, 'Multípara');
+
   RETURN NEW;
 END;
 $$;
+
+-- Garantir existência do trigger em auth.users (idempotente)
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW
+  EXECUTE FUNCTION public.handle_new_user_onboarding();
+
+REVOKE EXECUTE ON FUNCTION public.handle_new_user_onboarding() FROM PUBLIC, anon, authenticated;

@@ -72,10 +72,16 @@ export default function DashboardPage() {
 
   const selectedFarm = activeFarm;
 
+  // Filtra lotes pela estação reprodutiva ativa quando selecionada
+  const seasonLots = useMemo(() => {
+    if (!activeSeason?.id) return lots;
+    return lots.filter((l) => !l.season_id || l.season_id === activeSeason.id);
+  }, [lots, activeSeason]);
+
   // Compute stats for each farm using accurate farm_id and trimmed name
   const farmStats = useMemo(() => {
     return farms.map((farm) => {
-      const farmLotsList = lots.filter(
+      const farmLotsList = seasonLots.filter(
         (l) =>
           l.farm_id === farm.id ||
           (l.farm_name && l.farm_name.trim().toLowerCase() === farm.name.trim().toLowerCase())
@@ -114,7 +120,7 @@ export default function DashboardPage() {
         lots: farmLotsList,
       };
     });
-  }, [farms, lots, farmBalances]);
+  }, [farms, seasonLots, farmBalances]);
 
   // Total semen balance available across batches / inventory
   const totalSemenAvailable = useMemo(() => {
@@ -130,13 +136,13 @@ export default function DashboardPage() {
 
   // Filter lots based on selected viewScope
   const displayedLots = useMemo(() => {
-    if (viewScope === 'consolidated') return lots;
-    return lots.filter(
+    if (viewScope === 'consolidated') return seasonLots;
+    return seasonLots.filter(
       (l) =>
         l.farm_id === activeFarmId ||
         (selectedFarm && l.farm_name?.trim().toLowerCase() === selectedFarm.name.trim().toLowerCase())
     );
-  }, [lots, activeFarmId, selectedFarm, viewScope]);
+  }, [seasonLots, activeFarmId, selectedFarm, viewScope]);
 
   if (loading) {
     return (
@@ -563,7 +569,7 @@ export default function DashboardPage() {
                 Agenda de Manejos
               </Link>
               <button
-                onClick={() => handleSelectFarm('all')}
+                onClick={() => setViewScope('consolidated')}
                 className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white text-xs border border-slate-800 transition-colors cursor-pointer"
               >
                 Ver Todas

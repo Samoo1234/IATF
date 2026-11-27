@@ -205,8 +205,8 @@ export default function ReportsPage() {
     const totalEmpty = filteredLotCatData.reduce((s, i) => s + i.empty_qty, 0);
     const overallRate = totalInseminated > 0 ? (totalPregnant / totalInseminated) * 100 : 0;
 
-    // Estatísticas de Primíparas
-    const primiparaItems = lotCatData.filter((i) => i.category_name.toLowerCase().includes('primípara'));
+    // Estatísticas de Primíparas respeitando filtros globais
+    const primiparaItems = filteredLotCatData.filter((i) => i.category_name.toLowerCase().includes('primípara'));
     const primiparaInsem = primiparaItems.reduce((s, i) => s + i.inseminated_qty, 0);
     const primiparaPreg = primiparaItems.reduce((s, i) => s + i.pregnant_qty, 0);
     const primiparaRate = primiparaInsem > 0 ? (primiparaPreg / primiparaInsem) * 100 : 0;
@@ -233,7 +233,7 @@ export default function ReportsPage() {
       bestCatName,
       bestCatRate,
     };
-  }, [filteredLotCatData, lotCatData, catSummaryData]);
+  }, [filteredLotCatData, catSummaryData]);
 
   // Médico Veterinário responsável
   const defaultVet = veterinarians.find((v) => v.is_default) || veterinarians[0];

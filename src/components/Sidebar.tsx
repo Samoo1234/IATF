@@ -123,6 +123,10 @@ export default function Sidebar({
       clearFarmsCache();
       await Promise.all(offlineDb.tables.map((t) => t.clear())).catch(() => {});
       if (typeof window !== 'undefined') {
+        if ('caches' in window) {
+          const cacheKeys = await caches.keys().catch(() => []);
+          await Promise.all(cacheKeys.map((k) => caches.delete(k))).catch(() => {});
+        }
         sessionStorage.removeItem('iatf_tab_session');
         Object.keys(localStorage)
           .filter((k) => k.startsWith('iatf_') && k !== 'iatf_theme' && k !== 'iatf_sidebar_collapsed')

@@ -109,13 +109,12 @@ export default function FichaRelatorioFinalView({
     const porCategoria: Record<string, { total: number; prenhas: number }> = {};
 
     animals.forEach((a) => {
-      const isPrenha = 
-        a.pregnancy_status?.toLowerCase().includes('prenh') ||
-        a.pregnancy_status === 'PRENHA' ||
-        a.pregnancy_status === 'P';
+      const st = (a.pregnancy_status || '').toLowerCase();
+      const isPrenha = st.includes('prenh') || a.pregnancy_status === 'PRENHA' || a.pregnancy_status === 'P';
+      const isVazia = st.includes('vazi') || st === 'v';
 
       if (isPrenha) prenhas++;
-      else vazias++;
+      else if (isVazia) vazias++;
 
       const touroNome = a.bulls?.name || 'Não Informado';
       if (!porTouro[touroNome]) porTouro[touroNome] = { total: 0, prenhas: 0 };
@@ -128,7 +127,8 @@ export default function FichaRelatorioFinalView({
       if (isPrenha) porCategoria[catNome].prenhas++;
     });
 
-    const taxa = total > 0 ? (prenhas / total) * 100 : 0;
+    const diagnosticadas = prenhas + vazias;
+    const taxa = diagnosticadas > 0 ? (prenhas / diagnosticadas) * 100 : 0;
     return { total, prenhas, vazias, taxa, porTouro, porCategoria };
   }, [animals]);
 
@@ -190,10 +190,9 @@ export default function FichaRelatorioFinalView({
       iaPlannedDate: currentLotIaDate,
       dgPlannedDate: currentLotDgDate,
       animals: animals.map((a, index) => {
-        const isPrenha = 
-          a.pregnancy_status?.toLowerCase().includes('prenh') ||
-          a.pregnancy_status === 'PRENHA' ||
-          a.pregnancy_status === 'P';
+        const st = (a.pregnancy_status || '').toLowerCase();
+        const isPrenha = st.includes('prenh') || a.pregnancy_status === 'PRENHA' || a.pregnancy_status === 'P';
+        const isVazia = st.includes('vazi') || st === 'v';
 
         return {
           seq: index + 1,
@@ -203,7 +202,7 @@ export default function FichaRelatorioFinalView({
           bullName: a.bulls?.name || 'Rep. Touro',
           breed: a.animals?.breeds?.name || 'N.E',
           iaDate: currentLotIaDate,
-          diagnostico: isPrenha ? 'PRENHA' : 'Não Prenha ',
+          diagnostico: isPrenha ? 'PRENHA' : isVazia ? 'Não Prenha ' : 'Pendente',
           dgDate: currentLotDgDate,
           parturitionDate: isPrenha ? formatMonthParto(a.expected_parturition_date) : '',
         };
@@ -456,10 +455,9 @@ export default function FichaRelatorioFinalView({
             </thead>
             <tbody>
               {filteredAnimals.map((a, idx) => {
-                const isPrenha = 
-                  a.pregnancy_status?.toLowerCase().includes('prenh') ||
-                  a.pregnancy_status === 'PRENHA' ||
-                  a.pregnancy_status === 'P';
+                const st = (a.pregnancy_status || '').toLowerCase();
+                const isPrenha = st.includes('prenh') || a.pregnancy_status === 'PRENHA' || a.pregnancy_status === 'P';
+                const isVazia = st.includes('vazi') || st === 'v';
 
                 return (
                   <tr key={a.id || idx} className="border border-black">
@@ -485,7 +483,7 @@ export default function FichaRelatorioFinalView({
                       {currentLotIaDate}
                     </td>
                     <td className="border border-black py-1 px-2 text-center font-bold">
-                      {isPrenha ? 'PRENHA' : 'Não Prenha '}
+                      {isPrenha ? 'PRENHA' : isVazia ? 'Não Prenha ' : 'Pendente'}
                     </td>
                     <td className="border border-black py-1 px-2 text-center font-bold">
                       {currentLotDgDate}

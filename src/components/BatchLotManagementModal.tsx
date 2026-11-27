@@ -170,9 +170,20 @@ export default function BatchLotManagementModal({
     latestStepChecksRef.current = stepChecks;
   }, [stepChecks]);
 
-  // Load aux data and initialize forms
+  const initializedKeyRef = useRef<string | null>(null);
+
+  // Load aux data and initialize forms somente na abertura ou troca de lote
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      initializedKeyRef.current = null;
+      return;
+    }
+
+    const initKey = `${lot.id}:${initialStepCode || 'D0'}`;
+    if (initializedKeyRef.current === initKey) {
+      return;
+    }
+    initializedKeyRef.current = initKey;
 
     const initialStepChecks = latestStepChecksRef.current;
     setActiveTab(getNormalizedTab(initialStepCode));
@@ -275,9 +286,7 @@ export default function BatchLotManagementModal({
               (b as unknown as { bull_id?: string }).bull_id === firstBullId ||
               (b.bulls as Record<string, unknown> | null)?.id === firstBullId
           );
-          if (firstBatch) {
-            setIaDefaultBatchId(firstBatch.id);
-          }
+          setIaDefaultBatchId(firstBatch ? firstBatch.id : '');
         }
       } catch (err) {
         console.warn('Erro ao carregar auxiliares de IA:', err);
@@ -295,10 +304,17 @@ export default function BatchLotManagementModal({
     return semenBatches.filter(
       (b) =>
         (b as unknown as { bull_id?: string }).bull_id === iaDefaultBullId ||
-        (b.bulls as Record<string, unknown> | null)?.id === iaDefaultBullId ||
-        b.id === iaDefaultBatchId
+        (b.bulls as Record<string, unknown> | null)?.id === iaDefaultBullId
     );
-  }, [semenBatches, iaDefaultBullId, iaDefaultBatchId]);
+  }, [semenBatches, iaDefaultBullId]);
+
+  useEffect(() => {
+    if (!iaDefaultBullId) return;
+    if (iaDefaultBatchId && availableDefaultBatches.some((b) => b.id === iaDefaultBatchId)) {
+      return;
+    }
+    setIaDefaultBatchId(availableDefaultBatches[0]?.id || '');
+  }, [iaDefaultBullId, availableDefaultBatches, iaDefaultBatchId]);
 
   // Atualizar linha de IA pelo ID único do animal (blindado contra filtros e buscas)
   const updateIaRow = (animalId: string, updates: Partial<(typeof iaRows)[number]>) => {

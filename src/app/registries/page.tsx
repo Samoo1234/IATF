@@ -1315,7 +1315,7 @@ export default function RegistriesPage() {
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => handleOpenAnimalMgmt(a.id, a.tag_number)}
+                            onClick={() => handleOpenAnimalMgmt(a.id, a.tag_number, a.farm_id)}
                             className="font-bold text-emerald-400 hover:text-emerald-300 font-sans inline-flex items-center gap-1.5 cursor-pointer text-left group"
                             title="Abrir manejo reprodutivo desta matriz diretamente"
                           >
@@ -2444,7 +2444,7 @@ export default function RegistriesPage() {
                   <select
                     required
                     value={animalForm.farm_id}
-                    onChange={(e) => setAnimalForm((f) => ({ ...f, farm_id: e.target.value }))}
+                    onChange={(e) => setAnimalForm((f) => ({ ...f, farm_id: e.target.value, property_id: '' }))}
                     className="w-full bg-slate-950 border border-slate-700 text-white text-sm px-3 py-2.5 rounded-xl focus:outline-none focus:border-emerald-500"
                   >
                     <option value="">Selecione a fazenda...</option>

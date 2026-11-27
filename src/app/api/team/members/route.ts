@@ -87,12 +87,12 @@ export async function POST(request: Request) {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  // Cria novo usuário via Admin API sem sobrescrever contas existentes de terceiros
+  // Cria novo usuário via Admin API sem sobrescrever contas existentes e sem disparar onboarding duplicado
   const { data: created, error: createErr } = await admin.auth.admin.createUser({
     email,
     password,
     email_confirm: true,
-    user_metadata: { name, display_name: name },
+    user_metadata: { name, display_name: name, skip_onboarding: true },
   });
 
   if (createErr || !created?.user) {
@@ -116,6 +116,7 @@ export async function POST(request: Request) {
   );
 
   if (linkErr) {
+    await admin.auth.admin.deleteUser(created.user.id).catch(() => {});
     return NextResponse.json(
       { success: false, error: `Usuário criado, mas falhou ao vincular à equipe: ${linkErr.message}` },
       { status: 500 }
@@ -178,14 +179,20 @@ export async function PATCH(request: Request) {
     }
   }
 
-  const { error } = await auth.supabase
+  const { data: updatedMember, error } = await auth.supabase
     .from('organization_members')
     .update(updatePayload)
     .eq('id', body.memberId)
-    .eq('organization_id', auth.membership.organization_id);
+    .eq('organization_id', auth.membership.organization_id)
+    .select('id')
+    .maybeSingle();
 
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+
+  if (!updatedMember) {
+    return NextResponse.json({ success: false, error: 'Membro não encontrado nesta organização.' }, { status: 404 });
   }
 
   return NextResponse.json({ success: true });

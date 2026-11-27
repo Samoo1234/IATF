@@ -92,31 +92,38 @@ export async function middleware(request: NextRequest) {
     return redirectResponse;
   }
 
-  // Verificação server-side de status ativo e RBAC para rotas restritas
+  // Verificação server-side de status ativo e RBAC para rotas restritas (fail-closed para /team)
   if (user && !isLoginPage && !isAuthCallback) {
     try {
-      const { data: member } = await supabase
+      const { data: memberships } = await supabase
         .from('organization_members')
         .select('role, status')
         .eq('user_id', user.id)
-        .limit(1)
-        .maybeSingle();
+        .order('created_at', { ascending: true });
 
-      if (member && member.status === 'inactive') {
+      const activeMember = (memberships || []).find((m) => (m.status || 'active') === 'active');
+      const hasAnyMembership = (memberships || []).length > 0;
+
+      if (hasAnyMembership && !activeMember) {
         const url = request.nextUrl.clone();
         url.pathname = '/login';
         url.searchParams.set('error', 'inactive');
         return NextResponse.redirect(url);
       }
 
-      if (pathname.startsWith('/team') && member && member.role !== 'admin') {
+      if (pathname.startsWith('/team') && (!activeMember || activeMember.role !== 'admin')) {
         const url = request.nextUrl.clone();
         url.pathname = '/';
         url.searchParams.set('error', 'forbidden');
         return NextResponse.redirect(url);
       }
     } catch {
-      // Falha transitória de rede: não derruba navegação já autenticada
+      if (pathname.startsWith('/team')) {
+        const url = request.nextUrl.clone();
+        url.pathname = '/';
+        url.searchParams.set('error', 'forbidden');
+        return NextResponse.redirect(url);
+      }
     }
   }
 

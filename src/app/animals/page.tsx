@@ -554,6 +554,8 @@ export default function AnimalsPage() {
               <p className="text-slate-400 text-sm">Nenhuma matriz encontrada para &quot;{query}&quot;.</p>
               <button
                 onClick={() => {
+                  setEditingAnimalId(null);
+                  setModalError(null);
                   setAnimalForm((f) => ({ ...f, tag_number: query.trim() }));
                   setShowModal(true);
                 }}

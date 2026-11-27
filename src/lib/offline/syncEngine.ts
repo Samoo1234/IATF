@@ -157,7 +157,8 @@ class SyncEngine {
       (typeof payload.organization_id === 'string' ? payload.organization_id : undefined) ||
       (typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') || undefined : undefined);
 
-    if (finalOrgId && !payload.organization_id && table !== 'custom_rpc') {
+    const TABLES_WITHOUT_ORG_ID = new Set(['iatf_lot_animals', 'protocol_steps']);
+    if (finalOrgId && !payload.organization_id && table !== 'custom_rpc' && !TABLES_WITHOUT_ORG_ID.has(table)) {
       payload.organization_id = finalOrgId;
     }
 
@@ -216,6 +217,14 @@ class SyncEngine {
     let failed = 0;
 
     try {
+      // Recupera itens que ficaram presos em 'processing' por fechamento abrupto da aba
+      const stuckItems = await offlineDb.sync_queue.where('status').equals('processing').toArray();
+      for (const stuck of stuckItems) {
+        if (stuck.id !== undefined) {
+          await offlineDb.sync_queue.update(stuck.id, { status: 'pending' });
+        }
+      }
+
       const pendingItems = await offlineDb.sync_queue
         .where('status')
         .equals('pending')
@@ -230,6 +239,7 @@ class SyncEngine {
 
       const supabase = createClient();
       const currentOrgId = typeof window !== 'undefined' ? localStorage.getItem('iatf_current_org_id') : null;
+      const TABLES_WITHOUT_ORG_ID = new Set(['iatf_lot_animals', 'protocol_steps']);
 
       for (const item of pendingItems) {
         try {
@@ -237,15 +247,30 @@ class SyncEngine {
           await offlineDb.sync_queue.update(item.id!, { status: 'processing' });
 
           const payload = { ...item.payload };
-          if (!payload.organization_id && (item.organization_id || currentOrgId)) {
+          if (
+            !payload.organization_id &&
+            item.action !== 'custom_rpc' &&
+            !TABLES_WITHOUT_ORG_ID.has(item.table) &&
+            (item.organization_id || currentOrgId)
+          ) {
             payload.organization_id = item.organization_id || currentOrgId;
           }
 
-          if (item.action === 'insert' || item.action === 'update') {
-            // Upsert inteligente
+          if (item.action === 'insert') {
             const { error } = await supabase
               .from(item.table)
               .upsert(payload, { onConflict: 'id' });
+
+            if (error) throw error;
+          } else if (item.action === 'update') {
+            const targetId = item.record_id || (typeof payload.id === 'string' ? payload.id : undefined);
+            if (!targetId) throw new Error(`Update sem record_id para ${item.table}`);
+            const updatePayload = { ...payload };
+            delete updatePayload.id;
+            const { error } = await supabase
+              .from(item.table)
+              .update(updatePayload)
+              .eq('id', targetId);
 
             if (error) throw error;
           } else if (item.action === 'delete') {
@@ -269,14 +294,15 @@ class SyncEngine {
           failed++;
           const errorMessage = err instanceof Error ? err.message : String(err);
           this.lastError = errorMessage;
+          const nextRetries = (item.retry_count || 0) + 1;
 
           await offlineDb.sync_queue.update(item.id!, {
-            status: 'pending',
-            retry_count: (item.retry_count || 0) + 1,
+            status: nextRetries >= 5 ? 'failed' : 'pending',
+            retry_count: nextRetries,
             last_error: errorMessage,
           });
 
-          console.warn(`[SyncEngine] Erro ao sincronizar item ${item.id}:`, err);
+          console.warn(`[SyncEngine] Erro ao sincronizar item ${item.id} (tentativa ${nextRetries}):`, err);
         }
       }
 
@@ -628,9 +654,13 @@ class SyncEngine {
       }
     }
 
-    // 2. Dar baixa local de 1 dose do sêmen
+    // 2. Dar baixa local de 1 dose do sêmen e enfileirar baixa atômica no servidor
     if (data.semen_batch_id) {
       await this.decrementLocalSemenBatch(data.semen_batch_id, 1);
+      await this.enqueueMutation('custom_rpc', 'fn_increment_semen_batch_used', data.semen_batch_id, undefined, {
+        p_batch_id: data.semen_batch_id,
+        p_quantity: 1,
+      });
     }
 
     // 3. Atualizar status da matriz localmente
@@ -981,20 +1011,26 @@ class SyncEngine {
       }
     }
 
-    // Enfileira para sincronização
+    // Enfileira para sincronização com colunas reais de animal_managements
+    const baseDate = record.date || new Date().toISOString().slice(0, 10);
+    const isDG = record.step_code === 'DG' || Boolean(record.diagnosis_result);
+    const isIA = record.step_code === 'IA';
     await this.enqueueMutation('insert', 'animal_managements', record.id, record.farm_id, {
       id: record.id,
-      lot_id: record.lot_id,
+      lot_id: record.lot_id || null,
       animal_id: record.animal_id,
       farm_id: record.farm_id,
-      step_code: record.step_code,
-      date: record.date,
-      inseminator: record.inseminator,
-      bull_name: record.bull_name,
-      semen_batch_id: record.semen_batch_id,
-      doses_used: record.doses_used || 1,
-      diagnosis_result: record.diagnosis_result,
-      notes: record.notes,
+      start_date: baseDate,
+      d0_executed_at: record.step_code === 'D0' ? baseDate : null,
+      ia_executed_at: isIA ? baseDate : null,
+      dg_executed_at: isDG ? baseDate : null,
+      inseminator_name: record.inseminator || null,
+      semen_batch_id: record.semen_batch_id || null,
+      pregnancy_status: record.diagnosis_result || 'pendente',
+      ia_notes: isIA ? record.notes || null : null,
+      dg_notes: isDG ? record.notes || null : null,
+      notes: record.notes || null,
+      status: isDG ? 'concluido' : 'em_andamento',
       created_at: record.created_at || new Date().toISOString(),
     });
   }
@@ -1030,10 +1066,11 @@ class SyncEngine {
       }
     }
 
-    const { data: seasonsData } = await supabase
-      .from('reproductive_seasons')
-      .select('*')
-      .eq('farm_id', farmId);
+    const orgId = farmData?.organization_id;
+
+    let seasonsQuery = supabase.from('reproductive_seasons').select('*');
+    if (orgId) seasonsQuery = seasonsQuery.eq('organization_id', orgId);
+    const { data: seasonsData } = await seasonsQuery;
 
     if (seasonsData && seasonsData.length > 0) {
       await offlineDb.seasons.bulkPut(seasonsData as OfflineSeason[]);
@@ -1042,9 +1079,15 @@ class SyncEngine {
     // 1b. Raças, Categorias e Retiros/Propriedades da Fazenda
     updateProgress('Baixando raças, categorias e retiros...', 22);
     try {
+      let breedsQ = supabase.from('breeds').select('*');
+      let catsQ = supabase.from('animal_categories').select('*');
+      if (orgId) {
+        breedsQ = breedsQ.eq('organization_id', orgId);
+        catsQ = catsQ.eq('organization_id', orgId);
+      }
       const [breedsRes, catsRes, propsRes] = await Promise.all([
-        supabase.from('breeds').select('*'),
-        supabase.from('animal_categories').select('*'),
+        breedsQ,
+        catsQ,
         supabase.from('properties').select('*').eq('farm_id', farmId),
       ]);
 
@@ -1095,16 +1138,21 @@ class SyncEngine {
         downloadedLotAnimalsCount = lotAnimalsData.length;
         await offlineDb.lot_animals.bulkPut(lotAnimalsData as unknown as OfflineLotAnimal[]);
 
-        // Busca detalhes individuais dos animais
+        // Busca detalhes individuais dos animais em blocos de 200 e normaliza ear_tag
         const animalIds = Array.from(new Set(lotAnimalsData.map((la) => la.animal_id)));
-        if (animalIds.length > 0) {
+        for (let i = 0; i < animalIds.length; i += 200) {
+          const chunk = animalIds.slice(i, i + 200);
           const { data: animalsData } = await supabase
             .from('animals')
             .select('*')
-            .in('id', animalIds);
+            .in('id', chunk);
 
           if (animalsData && animalsData.length > 0) {
-            await offlineDb.animals.bulkPut(animalsData as OfflineAnimal[]);
+            const mappedAnimals = animalsData.map((a) => ({
+              ...a,
+              ear_tag: a.tag_number,
+            }));
+            await offlineDb.animals.bulkPut(mappedAnimals as OfflineAnimal[]);
           }
         }
       }

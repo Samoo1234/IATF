@@ -1,4 +1,4 @@
-const CACHE_NAME = 'iatf-pwa-v3';
+const CACHE_NAME = 'iatf-pwa-v4';
 
 const STATIC_PRECACHE = [
   '/',
@@ -45,12 +45,12 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Navigation requests (HTML pages): Network-First with Cache fallback
+  // Navigation requests (HTML pages): Network-First sem cachear respostas redirecionadas
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
         .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
+          if (networkResponse && networkResponse.status === 200 && !networkResponse.redirected) {
             const responseClone = networkResponse.clone();
             caches.open(CACHE_NAME).then((cache) => {
               cache.put(request, responseClone);

@@ -10,7 +10,7 @@ CREATE INDEX IF NOT EXISTS idx_iatf_lot_animals_semen_batch_id ON public.iatf_lo
 
 CREATE INDEX IF NOT EXISTS idx_animal_managements_animal_id ON public.animal_managements (animal_id);
 CREATE INDEX IF NOT EXISTS idx_animal_managements_lot_id ON public.animal_managements (lot_id);
-CREATE INDEX IF NOT EXISTS idx_animal_managements_org_date ON public.animal_managements (organization_id, execution_date DESC);
+CREATE INDEX IF NOT EXISTS idx_animal_managements_org_start_date ON public.animal_managements (organization_id, start_date DESC);
 
 CREATE INDEX IF NOT EXISTS idx_management_events_lot_id ON public.management_events (lot_id);
 CREATE INDEX IF NOT EXISTS idx_management_events_org_planned ON public.management_events (organization_id, planned_date);

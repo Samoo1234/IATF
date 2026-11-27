@@ -191,16 +191,12 @@ export default function ImportPage() {
       const [categories, breeds, properties] = await Promise.all([
         getAnimalCategories(),
         getBreeds(),
-        getProperties(),
+        getProperties(false, activeFarmId),
       ]);
 
       const catMap = new Map(categories.map((c) => [normalizeHeader(c.name), c.id]));
       const breedMap = new Map(breeds.map((b) => [normalizeHeader(b.name), b.id]));
-      const propMap = new Map(
-        properties
-          .filter((p) => !p.farm_id || p.farm_id === activeFarmId)
-          .map((p) => [normalizeHeader(p.name), p.id])
-      );
+      const propMap = new Map(properties.map((p) => [normalizeHeader(p.name), p.id]));
 
       let imported = 0;
       let skipped = 0;
@@ -211,16 +207,17 @@ export default function ImportPage() {
           const res = await createAnimal({
             farm_id: activeFarmId,
             tag_number: item.tagNumber,
-            category_id: catMap.get(normalizeHeader(item.categoryName)),
-            breed_id: breedMap.get(normalizeHeader(item.breedName)),
-            property_id: propMap.get(normalizeHeader(item.propertyName)),
-            reproductive_status: 'empty',
+            category_id: catMap.get(normalizeHeader(item.categoryName)) || undefined,
+            breed_id: breedMap.get(normalizeHeader(item.breedName)) || undefined,
+            property_id: propMap.get(normalizeHeader(item.propertyName)) || undefined,
+            reproductive_status: 'vazia',
           });
 
-          if (res) {
+          if (res.success) {
             imported++;
           } else {
             skipped++;
+            errors.push(`Linha ${item.rowNumber} (${item.tagNumber}): ${res.error || 'falha ao cadastrar'}`);
           }
         } catch (err) {
           skipped++;

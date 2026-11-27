@@ -149,11 +149,15 @@ export async function getCurrentOrgId(): Promise<string | null> {
     }
 
     if (!user) {
-      if (storedOrgId) {
+      if (isSystemOffline() && storedOrgId) {
         cachedOrgId = storedOrgId;
         cachedOrgIdTimestamp = now;
         return cachedOrgId;
       }
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('iatf_current_org_id');
+      }
+      cachedOrgId = null;
       return null;
     }
 
@@ -522,7 +526,7 @@ export async function getLotById(id: string, forceRefresh = false): Promise<LotS
   const orgId = await getCurrentOrgId();
   if (!orgId) return null;
 
-  const cacheKey = `lot_${id}`;
+  const cacheKey = `lots_by_id_${id}`;
   if (!forceRefresh) {
     const cached = getCached<LotStat>(cacheKey);
     if (cached) return cached;
@@ -1662,11 +1666,37 @@ export async function rescheduleManagementEvent(params: {
           }
           const mgmts = await offlineDb.animal_managements.where('lot_id').equals(lotId).toArray();
           for (const m of mgmts) {
+            const expectedPart =
+              m.pregnancy_status === 'prenha'
+                ? addDaysToDateString(newDate, 295)
+                : m.expected_parturition_date || null;
             await offlineDb.animal_managements.update(m.id, {
               ia_date: newDate,
               ia_executed_at: m.ia_executed_at ? newDate : null,
+              expected_parturition_date: expectedPart,
               updated_at: todayIso,
             });
+            await syncEngine.enqueueMutation('update', 'animal_managements', m.id, m.farm_id, {
+              id: m.id,
+              ia_date: newDate,
+              ia_executed_at: m.ia_executed_at ? newDate : null,
+              expected_parturition_date: expectedPart,
+              updated_at: todayIso,
+            });
+          }
+          if (lot) {
+            const lotAnimalsOffline = await offlineDb.lot_animals.where('lot_id').equals(lotId).toArray();
+            for (const la of lotAnimalsOffline) {
+              if (la.pregnancy_status === 'prenha') {
+                const newPart = addDaysToDateString(newDate, 295);
+                await offlineDb.lot_animals.update(la.id, { expected_parturition_date: newPart, updated_at: todayIso });
+                await syncEngine.enqueueMutation('update', 'iatf_lot_animals', la.id, lot.farm_id, {
+                  id: la.id,
+                  expected_parturition_date: newPart,
+                  updated_at: todayIso,
+                });
+              }
+            }
           }
         } else if (stepCode === 'DG' || stepCode === 'DG1' || stepCode === 'DG2') {
           if (lot) {
@@ -1684,6 +1714,12 @@ export async function rescheduleManagementEvent(params: {
               dg_executed_at: m.dg_executed_at ? newDate : null,
               updated_at: todayIso,
             });
+            await syncEngine.enqueueMutation('update', 'animal_managements', m.id, m.farm_id, {
+              id: m.id,
+              dg_date: newDate,
+              dg_executed_at: m.dg_executed_at ? newDate : null,
+              updated_at: todayIso,
+            });
           }
         } else if (stepCode === 'D9' || stepCode === 'D8') {
           const mgmts = await offlineDb.animal_managements.where('lot_id').equals(lotId).toArray();
@@ -1693,11 +1729,22 @@ export async function rescheduleManagementEvent(params: {
               d9_executed_at: m.d9_executed_at ? newDate : null,
               updated_at: todayIso,
             });
+            await syncEngine.enqueueMutation('update', 'animal_managements', m.id, m.farm_id, {
+              id: m.id,
+              d9_date: newDate,
+              d9_executed_at: m.d9_executed_at ? newDate : null,
+              updated_at: todayIso,
+            });
           }
         } else if (stepCode === 'D7') {
           const mgmts = await offlineDb.animal_managements.where('lot_id').equals(lotId).toArray();
           for (const m of mgmts) {
             await offlineDb.animal_managements.update(m.id, {
+              d7_date: newDate,
+              updated_at: todayIso,
+            });
+            await syncEngine.enqueueMutation('update', 'animal_managements', m.id, m.farm_id, {
+              id: m.id,
               d7_date: newDate,
               updated_at: todayIso,
             });
@@ -1756,6 +1803,10 @@ export async function rescheduleManagementEvent(params: {
               if (m.dg_executed_at) mgmtUpdate.dg_executed_at = addDaysToDateString(m.dg_executed_at, dayDelta);
             }
             await offlineDb.animal_managements.update(m.id, mgmtUpdate);
+            await syncEngine.enqueueMutation('update', 'animal_managements', m.id, m.farm_id, {
+              id: m.id,
+              ...mgmtUpdate,
+            });
           }
         }
       }
@@ -2022,10 +2073,11 @@ export interface SemenBatch {
   id: string;
   batch_number: string;
   supplier_central: string | null;
+  bull_id?: string;
   initial_quantity: number;
   used_quantity: number;
   lost_quantity: number;
-  bulls: { name: string; code: string | null } | null;
+  bulls: { id?: string; name: string; code: string | null } | null;
 }
 
 export async function getSemenBatches(forceRefresh = false): Promise<SemenBatch[]> {
@@ -2036,16 +2088,21 @@ export async function getSemenBatches(forceRefresh = false): Promise<SemenBatch[
       if (offlineBatches.length > 0) {
         return offlineBatches.map((b) => ({
           id: b.id,
+          bull_id: b.bull_id,
           batch_number: b.batch_number,
           supplier_central: b.supplier_central || null,
           initial_quantity: (b.initial_quantity as number) || 0,
           used_quantity: (b.used_quantity as number) || 0,
           lost_quantity: (b.lost_quantity as number) || 0,
-          bulls: (b.bulls as { name: string; code: string | null }) || null,
+          bulls: b.bulls
+            ? { id: b.bull_id, ...(b.bulls as { name: string; code: string | null }) }
+            : null,
         }));
       }
+      return [];
     } catch (e) {
       console.warn('Falha ao carregar sêmen offline:', e);
+      return [];
     }
   }
 
@@ -2056,12 +2113,15 @@ export async function getSemenBatches(forceRefresh = false): Promise<SemenBatch[
       if (offlineBatches.length > 0) {
         return offlineBatches.map((b) => ({
           id: b.id,
+          bull_id: b.bull_id,
           batch_number: b.batch_number,
           supplier_central: b.supplier_central || null,
           initial_quantity: (b.initial_quantity as number) || 0,
           used_quantity: (b.used_quantity as number) || 0,
           lost_quantity: (b.lost_quantity as number) || 0,
-          bulls: (b.bulls as { name: string; code: string | null }) || null,
+          bulls: b.bulls
+            ? { id: b.bull_id, ...(b.bulls as { name: string; code: string | null }) }
+            : null,
         }));
       }
     } catch {
@@ -4416,7 +4476,6 @@ async function createLotOffline(
       await syncEngine.enqueueMutation('insert', 'reproductive_seasons', targetSeasonId, farmId, {
         id: targetSeasonId,
         organization_id: orgId,
-        farm_id: farmId,
         name: seasonName,
         start_date: `${currentYear}-10-01`,
         end_date: `${currentYear + 1}-03-31`,
@@ -5599,20 +5658,8 @@ export async function freezeFarm(farmId: string): Promise<boolean> {
       syncEngine.markOffline();
       return freezeOffline();
     }
-    console.error('freezeFarm rpc error, attempting direct update:', error);
-    const { error: err2 } = await supabase
-      .from('farms')
-      .update({ status: 'frozen' })
-      .eq('id', farmId)
-      .eq('organization_id', orgId);
-    if (err2) {
-      if (isNetworkError(err2)) {
-        syncEngine.markOffline();
-        return freezeOffline();
-      }
-      console.error('freezeFarm direct update error:', err2);
-      return false;
-    }
+    console.error('freezeFarm rpc error:', error);
+    return false;
   }
   try {
     await offlineDb.farms.update(farmId, { status: 'frozen', updated_at: new Date().toISOString() });
@@ -5652,20 +5699,8 @@ export async function unfreezeFarm(farmId: string): Promise<boolean> {
       syncEngine.markOffline();
       return unfreezeOffline();
     }
-    console.error('unfreezeFarm rpc error, attempting direct update:', error);
-    const { error: err2 } = await supabase
-      .from('farms')
-      .update({ status: 'active' })
-      .eq('id', farmId)
-      .eq('organization_id', orgId);
-    if (err2) {
-      if (isNetworkError(err2)) {
-        syncEngine.markOffline();
-        return unfreezeOffline();
-      }
-      console.error('unfreezeFarm direct update error:', err2);
-      return false;
-    }
+    console.error('unfreezeFarm rpc error:', error);
+    return false;
   }
   try {
     await offlineDb.farms.update(farmId, { status: 'active', updated_at: new Date().toISOString() });
@@ -6841,25 +6876,11 @@ export async function getVeterinarians(forceRefresh = false): Promise<Veterinari
         }));
       }
     } catch {}
-    return [
-      {
-        id: 'default-vet',
-        name: 'MV. DR. SAMOEL DUARTE',
-        crmv: 'CRMV-MT',
-        is_default: true,
-      },
-    ];
+    return [];
   }
 
   const orgId = await getCurrentOrgId();
-  if (!orgId) return [
-    {
-      id: 'default-vet',
-      name: 'MV. DR. SAMOEL DUARTE',
-      crmv: 'CRMV-MT',
-      is_default: true,
-    },
-  ];
+  if (!orgId) return [];
 
   const cacheKey = `vets_${orgId}`;
   if (!forceRefresh) {
@@ -6878,7 +6899,7 @@ export async function getVeterinarians(forceRefresh = false): Promise<Veterinari
   if (error) {
     console.error('getVeterinarians error:', error);
     try {
-      const offlineVets = await offlineDb.veterinarians.toArray();
+      const offlineVets = await offlineDb.veterinarians.where('organization_id').equals(orgId).toArray();
       if (offlineVets.length > 0) {
         return offlineVets.map((v) => ({
           id: v.id,
@@ -6891,36 +6912,10 @@ export async function getVeterinarians(forceRefresh = false): Promise<Veterinari
         }));
       }
     } catch {}
-    return getCached<Veterinarian[]>(cacheKey) ?? [
-      {
-        id: 'default-vet',
-        name: 'MV. DR. SAMOEL DUARTE',
-        crmv: 'CRMV-MT',
-        is_default: true,
-      },
-    ];
+    return getCached<Veterinarian[]>(cacheKey) ?? [];
   }
 
-  let result = (data ?? []) as Veterinarian[];
-  if (result.length === 0) {
-    // Auto-create default veterinarian if table is completely empty
-    const { data: created } = await supabase
-      .from('veterinarians')
-      .insert({
-        organization_id: orgId,
-        name: 'MV. DR. SAMOEL DUARTE',
-        crmv: 'CRMV-MT 1234',
-        phone: '(65) 99999-0000',
-        email: 'samoel@iatfmaster.com.br',
-        is_default: true,
-      })
-      .select('*')
-      .single();
-
-    if (created) {
-      result = [created as Veterinarian];
-    }
-  }
+  const result = (data ?? []) as Veterinarian[];
 
   try {
     await offlineDb.veterinarians.bulkPut(
@@ -7764,9 +7759,9 @@ export async function deductGeneticInventoryForSemenBatch(params: {
       if (available <= 0) continue;
 
       const qtyToDeduct = Math.min(available, remainingToDeduct);
-      const idempotencyKey = `ia_usage_${params.referenceType}_${params.referenceId}_${bal.id}_${Date.now()}`;
+      const idempotencyKey = `ia_usage_${params.referenceType}_${params.referenceId}_${bal.id}`;
 
-      await supabase.rpc('fn_process_genetic_usage_iatf', {
+      const { error: rpcErr } = await supabase.rpc('fn_process_genetic_usage_iatf', {
         p_organization_id: orgId,
         p_farm_id: bal.farm_id,
         p_batch_id: bal.batch_id,
@@ -7782,7 +7777,17 @@ export async function deductGeneticInventoryForSemenBatch(params: {
         p_idempotency_key: idempotencyKey,
       });
 
+      if (rpcErr) {
+        console.error('fn_process_genetic_usage_iatf error:', rpcErr);
+        return false;
+      }
+
       remainingToDeduct -= qtyToDeduct;
+    }
+
+    if (remainingToDeduct > 0) {
+      console.warn('Saldo insuficiente no estoque criogênico para deduzir quantidade total:', remainingToDeduct);
+      return false;
     }
 
     invalidateCache('gen_metrics');
@@ -7827,6 +7832,13 @@ export async function executeStepIA(
 
   const supabase = createClient();
 
+  // 0. Ler partida anterior ANTES de atualizar para saber se precisa baixar estoque (RN-08)
+  const { data: existingMgmt } = await supabase
+    .from('animal_managements')
+    .select('semen_batch_id, farm_id')
+    .eq('id', managementId)
+    .maybeSingle();
+
   // 1. Atualizar o registro do manejo individual
   const { error: mgmtError } = await supabase
     .from('animal_managements')
@@ -7847,19 +7859,17 @@ export async function executeStepIA(
   }
 
   // 2. Atualizar o status da fêmea para 'inseminada'
-  await supabase
+  const { error: animalErr } = await supabase
     .from('animals')
     .update({ reproductive_status: 'inseminada', updated_at: new Date().toISOString() })
     .eq('id', data.animal_id);
 
+  if (animalErr) {
+    console.warn('executeStepIA animals update error:', animalErr);
+  }
+
   // 3. Dar baixa automática de 1 dose do sêmen selecionado (RN-08) se ainda não foi baixada
   if (data.semen_batch_id) {
-    const { data: existingMgmt } = await supabase
-      .from('animal_managements')
-      .select('semen_batch_id')
-      .eq('id', managementId)
-      .maybeSingle();
-
     const isNewBatch = !existingMgmt?.semen_batch_id || existingMgmt.semen_batch_id !== data.semen_batch_id;
 
     if (isNewBatch) {
@@ -7871,7 +7881,7 @@ export async function executeStepIA(
 
       if (batch) {
         // 3.1 Atualização legada
-        await supabase
+        const { error: batchUpdateErr } = await supabase
           .from('semen_batches')
           .update({
             used_quantity: (batch.used_quantity || 0) + 1,
@@ -7879,12 +7889,17 @@ export async function executeStepIA(
           })
           .eq('id', data.semen_batch_id);
 
+        if (batchUpdateErr) {
+          console.error('executeStepIA semen_batches update error:', batchUpdateErr);
+        }
+
         // 3.2 Integração com o novo módulo de Estoque Genético Criogênico
         await deductGeneticInventoryForSemenBatch({
           semenBatchId: data.semen_batch_id,
           quantity: 1,
           referenceType: 'animal_managements',
           referenceId: managementId,
+          preferredFarmId: existingMgmt?.farm_id || undefined,
           inseminatorName: data.inseminator_name,
           notes: `Baixa automática IA da matriz em animal_managements`,
         });
@@ -7947,8 +7962,8 @@ export async function executeStepDG(
     }
   }
 
-  // 1. Atualizar registro do manejo
-  const { error: mgmtError } = await supabase
+  // 1. Atualizar registro do manejo e obter lot_id vinculado
+  const { data: updatedMgmt, error: mgmtError } = await supabase
     .from('animal_managements')
     .update({
       dg_executed_at: data.executed_at,
@@ -7959,7 +7974,9 @@ export async function executeStepDG(
       status: 'concluido',
       updated_at: new Date().toISOString(),
     })
-    .eq('id', managementId);
+    .eq('id', managementId)
+    .select('lot_id')
+    .maybeSingle();
 
   if (mgmtError) {
     console.error('executeStepDG error:', mgmtError);
@@ -7976,16 +7993,19 @@ export async function executeStepDG(
     })
     .eq('id', data.animal_id);
 
-  // 3. Sincronizar status do animal no lote (se participante de lote)
-  await supabase
-    .from('iatf_lot_animals')
-    .update({
-      pregnancy_status: data.pregnancy_status,
-      ecc_dg: data.ecc_dg !== undefined && data.ecc_dg !== null ? Number(data.ecc_dg) : null,
-      expected_parturition_date: expectedParturition,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('animal_id', data.animal_id);
+  // 3. Sincronizar status do animal apenas no lote deste manejo (evita sobrescrever lotes anteriores)
+  if (updatedMgmt?.lot_id) {
+    await supabase
+      .from('iatf_lot_animals')
+      .update({
+        pregnancy_status: data.pregnancy_status,
+        ecc_dg: data.ecc_dg !== undefined && data.ecc_dg !== null ? Number(data.ecc_dg) : null,
+        expected_parturition_date: expectedParturition,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('lot_id', updatedMgmt.lot_id)
+      .eq('animal_id', data.animal_id);
+  }
 
   invalidateCache('animal_managements');
   invalidateCache('animals');
@@ -8153,16 +8173,19 @@ export async function recordDirectDG(params: {
     })
     .eq('id', params.animal_id);
 
-  // 5. Atualizar iatf_lot_animals se participante de lote
-  await supabase
-    .from('iatf_lot_animals')
-    .update({
-      pregnancy_status: params.pregnancy_status,
-      ecc_dg: params.ecc_dg !== undefined && params.ecc_dg !== null ? Number(params.ecc_dg) : null,
-      expected_parturition_date: expectedParturition,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('animal_id', params.animal_id);
+  // 5. Atualizar iatf_lot_animals apenas se um lot_id específico foi informado
+  if (params.lot_id) {
+    await supabase
+      .from('iatf_lot_animals')
+      .update({
+        pregnancy_status: params.pregnancy_status,
+        ecc_dg: params.ecc_dg !== undefined && params.ecc_dg !== null ? Number(params.ecc_dg) : null,
+        expected_parturition_date: expectedParturition,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('lot_id', params.lot_id)
+      .eq('animal_id', params.animal_id);
+  }
 
   invalidateCache('animal_managements');
   invalidateCache('animals');
@@ -8323,7 +8346,8 @@ export async function getLotCategoryReports(
         tag_number,
         animal_categories (id, name)
       )
-    `);
+    `)
+    .eq('iatf_lots.organization_id', orgId);
 
   if (farmId && farmId !== 'all') {
     query = query.eq('iatf_lots.farm_id', farmId);
@@ -8391,7 +8415,12 @@ export async function getLotCategoryReports(
     const entry = groupMap.get(groupKey)!;
     entry.stat.total_females += 1;
 
-    const isInseminated = !!(item.bull_id || item.semen_batch_id || item.inseminator_name || item.pregnancy_status);
+    const isInseminated = !!(
+      item.bull_id ||
+      item.semen_batch_id ||
+      item.inseminator_name ||
+      (item.pregnancy_status && item.pregnancy_status !== 'pendente')
+    );
     if (isInseminated) {
       entry.stat.inseminated_qty += 1;
     }
@@ -8541,40 +8570,6 @@ export async function getTeamMembers(): Promise<TeamMember[]> {
     return [];
   }
   return (data || []) as TeamMember[];
-}
-
-export async function createTeamMemberDirect(input: {
-  name: string;
-  email: string;
-  password: string;
-  role: string;
-}): Promise<{ success: boolean; error?: string; user_id?: string }> {
-  const orgId = await getCurrentOrgId();
-  if (!orgId) return { success: false, error: 'Organização ativa não encontrada' };
-
-  const supabase = createClient();
-  const { data, error } = await supabase.rpc('create_team_member_user', {
-    p_org_id: orgId,
-    p_name: input.name,
-    p_email: input.email,
-    p_password: input.password,
-    p_role: input.role,
-  });
-
-  if (error) {
-    console.error('createTeamMemberDirect error:', error);
-    return { success: false, error: error.message };
-  }
-
-  if (data && typeof data === 'object') {
-    const res = data as { success: boolean; error?: string; user_id?: string };
-    if (!res.success) {
-      return { success: false, error: res.error || 'Erro ao cadastrar usuário' };
-    }
-    return { success: true, user_id: res.user_id };
-  }
-
-  return { success: true };
 }
 
 export async function updateTeamMemberRole(memberId: string, role: string): Promise<boolean> {
@@ -8773,7 +8768,7 @@ export async function executeBatchLotManagementD0(params: {
 
   // 3. Atualizar manejos existentes em massa em uma única chamada
   if (existingMgmtIds.length > 0) {
-    await supabase
+    const { error: updMgmtErr } = await supabase
       .from('animal_managements')
       .update({
         start_date: params.executionDate,
@@ -8787,6 +8782,9 @@ export async function executeBatchLotManagementD0(params: {
         updated_at: todayIso,
       })
       .in('id', existingMgmtIds);
+    if (updMgmtErr) {
+      return { success: false, count: 0, error: updMgmtErr.message };
+    }
   }
 
   // 4. Inserir novos manejos em lote em uma única chamada
@@ -8822,10 +8820,13 @@ export async function executeBatchLotManagementD0(params: {
       updated_at: todayIso,
     }));
 
-    await supabase.from('animal_managements').insert(newRows);
+    const { error: insMgmtErr } = await supabase.from('animal_managements').insert(newRows);
+    if (insMgmtErr) {
+      return { success: false, count: 0, error: insMgmtErr.message };
+    }
   }
 
-  await supabase
+  const { error: evErr } = await supabase
     .from('management_events')
     .update({
       status: 'concluido',
@@ -8836,6 +8837,10 @@ export async function executeBatchLotManagementD0(params: {
     })
     .eq('lot_id', params.lotId)
     .eq('step_code', 'D0');
+
+  if (evErr) {
+    return { success: false, count: 0, error: evErr.message };
+  }
 
   if (lot.status === 'planejado') {
     await supabase
@@ -8976,7 +8981,7 @@ export async function executeBatchLotManagementD9(params: {
 
   // 2. Atualizar manejos normais em lote (1 query!)
   if (normalMgmtIds.length > 0) {
-    await supabase
+    const { error: normErr } = await supabase
       .from('animal_managements')
       .update({
         d9_executed_at: params.executionDate,
@@ -8987,11 +8992,12 @@ export async function executeBatchLotManagementD9(params: {
         updated_at: todayIso,
       })
       .in('id', normalMgmtIds);
+    if (normErr) return { success: false, count: 0, error: normErr.message };
   }
 
   // 3. Atualizar manejos com perda de implante em lote (1 query!)
   if (lossMgmtIds.length > 0) {
-    await supabase
+    const { error: lossErr } = await supabase
       .from('animal_managements')
       .update({
         d9_executed_at: params.executionDate,
@@ -9002,28 +9008,32 @@ export async function executeBatchLotManagementD9(params: {
         updated_at: todayIso,
       })
       .in('id', lossMgmtIds);
+    if (lossErr) return { success: false, count: 0, error: lossErr.message };
   }
 
   // 4. Atualizar status reprodutivo das matrizes com perda para 'vazia' em lote (1 query!)
   if (lossAnimalIds.length > 0) {
-    await supabase
+    const { error: aniLossErr } = await supabase
       .from('animals')
       .update({ reproductive_status: 'vazia', updated_at: todayIso })
       .in('id', lossAnimalIds);
+    if (aniLossErr) return { success: false, count: 0, error: aniLossErr.message };
   }
 
-  await supabase
+  const { error: evD9Err } = await supabase
     .from('management_events')
     .update({
       status: 'concluido',
       execution_date: params.executionDate,
-      animals_worked_count: Math.max(0, total - lossIds.size),
-      losses_count: lossIds.size,
+      animals_worked_count: Math.max(0, total - lossAnimalIds.length),
+      losses_count: lossAnimalIds.length,
       responsible_name: params.responsibleName || null,
       updated_at: todayIso,
     })
     .eq('lot_id', params.lotId)
     .eq('step_code', stepCode);
+
+  if (evD9Err) return { success: false, count: 0, error: evD9Err.message };
 
   const workedAnimalIds = lotAnimals.filter((la) => !lossIds.has(la.animal_id)).map((la) => la.animal_id);
   saveLocalLotStepChecks(params.lotId, stepCode, workedAnimalIds, true);

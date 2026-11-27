@@ -3,9 +3,13 @@
 -- ATENÇÃO: VALIDAR EM STAGING ANTES DE APLICAR EM PRODUÇÃO.
 -- ============================================================================
 
--- 1. Revogar execução anônima/pública de funções SECURITY DEFINER críticas
-REVOKE EXECUTE ON FUNCTION public.create_team_member_user(UUID, VARCHAR, VARCHAR, VARCHAR, VARCHAR) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.create_team_member_user(UUID, VARCHAR, VARCHAR, VARCHAR, VARCHAR) TO service_role;
+-- 1. Remover RPC legada insegura create_team_member_user (substituída por /api/team/members)
+DROP FUNCTION IF EXISTS public.create_team_member_user(UUID, VARCHAR, VARCHAR, VARCHAR, VARCHAR);
+
+-- Revogar privilégios da role anon em tabelas, views, sequências e funções
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM anon;
 
 DO $$
 DECLARE
@@ -21,11 +25,12 @@ BEGIN
     -- Fixar search_path imutável em todas as funções SECURITY DEFINER do schema public
     EXECUTE format('ALTER FUNCTION %s SET search_path = public, pg_temp', fn.sig);
     -- Revogar execução de anon em funções SECURITY DEFINER
-    EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM anon', fn.sig);
+    EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC, anon', fn.sig);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO authenticated, service_role', fn.sig);
   END LOOP;
 END $$;
 
--- 2. Função auxiliar segura de pertencimento ativo à organização (com InitPlan)
+-- 2. Funções auxiliares seguras de pertencimento ativo à organização (com InitPlan)
 CREATE OR REPLACE FUNCTION public.get_user_org_ids()
 RETURNS SETOF UUID
 LANGUAGE sql
@@ -56,6 +61,11 @@ AS $$
   );
 $$;
 
+REVOKE EXECUTE ON FUNCTION public.get_user_org_ids() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_user_org_ids() TO authenticated, service_role;
+REVOKE EXECUTE ON FUNCTION public.is_org_admin(UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_org_admin(UUID) TO authenticated, service_role;
+
 -- 3. Remover políticas permissivas de desenvolvimento (USING (true) / WITH CHECK (true))
 DO $$
 DECLARE
@@ -76,11 +86,27 @@ BEGIN
   END LOOP;
 END $$;
 
--- 4. Blindar organization_members contra escalação de privilégio e cross-tenant
+-- 4. Blindar organizations e organization_members contra escalação de privilégio e cross-tenant
+ALTER TABLE public.organizations ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_organizations ON public.organizations;
+DROP POLICY IF EXISTS org_select_member ON public.organizations;
+CREATE POLICY org_select_member ON public.organizations
+  FOR SELECT TO authenticated
+  USING (id IN (SELECT public.get_user_org_ids()));
+
+DROP POLICY IF EXISTS org_update_admin ON public.organizations;
+CREATE POLICY org_update_admin ON public.organizations
+  FOR UPDATE TO authenticated
+  USING (public.is_org_admin(id))
+  WITH CHECK (public.is_org_admin(id));
+
 ALTER TABLE public.organization_members ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_org_members ON public.organization_members;
 DROP POLICY IF EXISTS org_members_select ON public.organization_members;
 DROP POLICY IF EXISTS org_members_admin_write ON public.organization_members;
+DROP POLICY IF EXISTS org_members_admin_insert ON public.organization_members;
+DROP POLICY IF EXISTS org_members_admin_update ON public.organization_members;
+DROP POLICY IF EXISTS org_members_admin_delete ON public.organization_members;
 
 CREATE POLICY org_members_select ON public.organization_members
   FOR SELECT TO authenticated
@@ -102,16 +128,18 @@ CREATE POLICY org_members_admin_delete ON public.organization_members
   FOR DELETE TO authenticated
   USING (public.is_org_admin(organization_id));
 
--- 5. Garantir RLS multi-tenant estrito em todas as tabelas com organization_id
+-- 5. Garantir RLS multi-tenant estrito em todas as tabelas com organization_id (nomes reais)
 DO $$
 DECLARE
   tbl TEXT;
   tables_with_org TEXT[] := ARRAY[
     'farms', 'reproductive_seasons', 'properties', 'breeds', 'animal_categories',
     'bulls', 'protocols', 'animals', 'iatf_lots', 'management_events',
-    'semen_batches', 'veterinarians', 'animal_managements',
-    'genetic_tanks', 'genetic_canisters', 'genetic_clients',
-    'genetic_inventory_items', 'genetic_movements', 'genetic_receipts'
+    'semen_batches', 'veterinarians', 'animal_managements', 'input_losses',
+    'genetic_centers', 'genetic_clients', 'semen_tanks', 'semen_tank_canisters',
+    'tank_nitrogen_measurements', 'genetic_materials', 'genetic_material_batches',
+    'genetic_inventory_movements', 'genetic_inventory_balances',
+    'genetic_withdrawal_receipts', 'genetic_audit_logs'
   ];
 BEGIN
   FOREACH tbl IN ARRAY tables_with_org LOOP
@@ -131,7 +159,48 @@ BEGIN
   END LOOP;
 END $$;
 
--- 6. Converter views para security_invoker = true (elimina security_definer_view)
+-- 6. Tabelas filhas sem organization_id direto (iatf_lot_animals e protocol_steps)
+ALTER TABLE public.iatf_lot_animals ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_iatf_lot_animals ON public.iatf_lot_animals;
+DROP POLICY IF EXISTS tenant_isolation_iatf_lot_animals ON public.iatf_lot_animals;
+CREATE POLICY tenant_isolation_iatf_lot_animals ON public.iatf_lot_animals
+  FOR ALL TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.iatf_lots l
+      WHERE l.id = lot_id
+        AND l.organization_id IN (SELECT public.get_user_org_ids())
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.iatf_lots l
+      WHERE l.id = lot_id
+        AND l.organization_id IN (SELECT public.get_user_org_ids())
+    )
+  );
+
+ALTER TABLE public.protocol_steps ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_protocol_steps ON public.protocol_steps;
+DROP POLICY IF EXISTS tenant_isolation_protocol_steps ON public.protocol_steps;
+CREATE POLICY tenant_isolation_protocol_steps ON public.protocol_steps
+  FOR ALL TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.protocols p
+      WHERE p.id = protocol_id
+        AND p.organization_id IN (SELECT public.get_user_org_ids())
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.protocols p
+      WHERE p.id = protocol_id
+        AND p.organization_id IN (SELECT public.get_user_org_ids())
+    )
+  );
+
+-- 7. Converter views para security_invoker = true (elimina security_definer_view)
 DO $$
 DECLARE
   v RECORD;

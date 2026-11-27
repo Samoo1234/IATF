@@ -264,13 +264,30 @@ async function validateMainFarmSemenLock(
   farmId: string
 ): Promise<{ allowed: boolean; mainFarmName?: string; error?: string }> {
   try {
-    const { data: mainFarm } = await supabase
+    let { data: mainFarm, error: mainErr } = await supabase
       .from('farms')
       .select('id, name')
       .eq('organization_id', orgId)
-      .ilike('name', '%principal%')
+      .eq('is_main_farm', true)
       .limit(1)
       .maybeSingle();
+
+    if (mainErr) {
+      ({ data: mainFarm, error: mainErr } = await supabase
+        .from('farms')
+        .select('id, name')
+        .eq('organization_id', orgId)
+        .ilike('name', '%principal%')
+        .limit(1)
+        .maybeSingle());
+    }
+
+    if (mainErr) {
+      return {
+        allowed: false,
+        error: 'Não foi possível validar a fazenda principal de estoque genético.',
+      };
+    }
 
     if (mainFarm && mainFarm.id !== farmId) {
       return {
@@ -281,6 +298,10 @@ async function validateMainFarmSemenLock(
     }
   } catch (err) {
     console.error('Error validating main farm semen lock:', err);
+    return {
+      allowed: false,
+      error: 'Erro ao validar permissão de estoque genético na fazenda.',
+    };
   }
 
   return { allowed: true };
@@ -349,7 +370,11 @@ export async function createTank(
       active: true,
     }));
 
-    await supabase.from('semen_tank_canisters').insert(canisterRecords);
+    const { error: canErr } = await supabase.from('semen_tank_canisters').insert(canisterRecords);
+    if (canErr) {
+      await supabase.from('semen_tanks').delete().eq('id', data.id);
+      return { success: false, error: `Falha ao criar canecas do botijão: ${canErr.message}` };
+    }
   }
 
   invalidateCache(`tanks_${farmId}`);
@@ -724,6 +749,7 @@ export async function processInbound(
       .single();
 
     if (batchErr || !newBatch) {
+      await supabase.from('genetic_materials').delete().eq('id', newMat.id);
       console.error('Error creating batch in inbound:', batchErr);
       return { success: false, error: batchErr?.message || 'Erro ao criar lote.' };
     }
@@ -758,7 +784,7 @@ export async function processInbound(
 
   // 4. Sincronizar com semen_batches para retrocompatibilidade
   if (payload.sireId && payload.materialType === 'SEMEN') {
-    await supabase.from('semen_batches').insert({
+    const { error: legacyErr } = await supabase.from('semen_batches').insert({
       organization_id: orgId,
       bull_id: payload.sireId,
       batch_number: payload.batchNumber,
@@ -767,6 +793,9 @@ export async function processInbound(
       used_quantity: 0,
       lost_quantity: 0,
     });
+    if (legacyErr) {
+      console.warn('Erro ao espelhar entrada em semen_batches:', legacyErr.message);
+    }
   }
 
   invalidateCache();
